@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.0
+
+- Replaced the placeholder JSON root page with a live status dashboard at `/` (the Ingress entry-point)
+- Dashboard auto-refreshes every 5 s and shows:
+  - Supervisor's view of the add-on (state, version, latest, update flag, boot, watchdog, ingress)
+  - Service health for core (this page) and MCP (probed via `127.0.0.1:8100/health`)
+  - Thread network counters (nodes/links/issues/data age) — scaffold values until ingestion lands
+  - Tail of the rotating add-on log (`/data/thread-observability/addon.log`)
+  - Quick links to JSON endpoints
+- New aggregator endpoints:
+  - `GET /v1/dev/status` — single JSON payload powering the dashboard
+  - `GET /v1/dev/mcp-health` — in-container probe of the MCP service
+- Existing JSON `{service: core, ...}` response moved from `/` to `/api`
+
 ## 0.3.2
 
 - Switched s6-rc.d `run` script shebangs to `#!/command/with-contenv bash` so container env vars (notably `SUPERVISOR_TOKEN`) are inherited by the supervised processes
