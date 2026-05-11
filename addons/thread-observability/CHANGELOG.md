@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Switched s6-rc.d `run` script shebangs to `#!/command/with-contenv bash` so container env vars (notably `SUPERVISOR_TOKEN`) are inherited by the supervised processes
+- Fixes Supervisor-backed MCP tools (`ha_get_addon_state`, `ha_get_addon_logs`, etc.) that previously returned "SUPERVISOR_TOKEN not set"
+
 ## 0.3.1
 
 - Publish ports 8099 (core API) and 8100 (MCP) to the HA host so VS Code's MCP client can reach them from the LAN

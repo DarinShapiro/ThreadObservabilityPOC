@@ -1,2 +1,2 @@
-#!/bin/bash
+#!/command/with-contenv bash
 exec python3 -m thread_observability.main --service mcp
