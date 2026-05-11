@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5
+
+- Implemented MCP JSON-RPC 2.0 protocol endpoint at POST /mcp (VS Code MCP client compatible)
+- Added get_recent_logs tool for live log access from IDE
+- Added .vscode/mcp.json wired to HA instance at 192.168.68.90:8100
+- Reads from /data/thread-observability/addon.log with /run/uncaught-logs/current fallback
+
 ## 0.1.4
 
 - Removed cont-init.d entirely to eliminate legacy-cont-init and legacy-services shims
