@@ -374,6 +374,15 @@ TOOL_DEFS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "discover_thread_devices",
+        "description": (
+            "Query Home Assistant's device registry for Thread/Zigbee devices and "
+            "correlate IEEE addresses with extracted EUI64 nodes. Auto-populates "
+            "friendly_name and device_id for matching nodes. Returns match summary."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -585,6 +594,12 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             }
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "nodes": []}
+    if name == "discover_thread_devices":
+        try:
+            from ..pipeline import device_discovery
+            return await device_discovery.discover_and_sync()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "matched": 0, "updated": 0}
 
     raise ValueError(f"Unknown tool: {name}")
 
@@ -600,7 +615,7 @@ def create_mcp_app() -> FastAPI:
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"service": "mcp", "name": "thread-observability", "version": "0.9.3"}
+        return {"service": "mcp", "name": "thread-observability", "version": "0.9.5"}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -643,7 +658,7 @@ def create_mcp_app() -> FastAPI:
             return ok({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "thread-observability", "version": "0.9.3"},
+                "serverInfo": {"name": "thread-observability", "version": "0.9.5"},
             })
 
         if method == "notifications/initialized":

@@ -273,6 +273,41 @@ class SQLiteStore:
             )
             return cur.rowcount > 0
 
+    def set_node_metadata(
+        self,
+        eui64: str,
+        friendly_name: str | None = None,
+        device_id: str | None = None,
+        area: str | None = None,
+        role: str | None = None,
+    ) -> bool:
+        """Update multiple metadata fields for a node. Returns True if any field changed."""
+        updates: list[tuple[str, Any]] = []
+        params: list[Any] = []
+        
+        if friendly_name is not None:
+            updates.append("friendly_name = ?")
+            params.append(friendly_name)
+        if device_id is not None:
+            updates.append("device_id = ?")
+            params.append(device_id)
+        if area is not None:
+            updates.append("area = ?")
+            params.append(area)
+        if role is not None:
+            updates.append("role = ?")
+            params.append(role)
+        
+        if not updates:
+            return False
+        
+        params.append(eui64)
+        query = f"UPDATE nodes SET {', '.join(updates)} WHERE eui64 = ?"
+        
+        with self._tx() as conn:
+            cur = conn.execute(query, params)
+            return cur.rowcount > 0
+
     # -- stats ---------------------------------------------------------
 
     def stats(self) -> dict[str, Any]:
