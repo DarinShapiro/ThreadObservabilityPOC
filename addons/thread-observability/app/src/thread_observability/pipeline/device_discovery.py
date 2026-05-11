@@ -9,34 +9,19 @@ friendly names and device IDs automatically.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from pathlib import Path
 from typing import Any
-
-import httpx
 
 from ..storage.sqlite_store import SQLiteStore, get_store
 
 log = logging.getLogger(__name__)
 
-SUPERVISOR_URL = os.getenv("SUPERVISOR_URL", "http://supervisor")
-SUPERVISOR_TOKEN_ENV = "SUPERVISOR_TOKEN"
-DEFAULT_TIMEOUT = 10.0
-HA_REST_URL = os.getenv("HA_REST_URL", "http://localhost:8123")  # Direct HA REST API
-
-
-def _token() -> str:
-    token = os.getenv(SUPERVISOR_TOKEN_ENV)
-    if not token:
-        raise RuntimeError(f"{SUPERVISOR_TOKEN_ENV} not set; running outside Supervisor?")
-    return token
-
-
-def _headers() -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {_token()}",
-        "Accept": "application/json",
-    }
+# HA config directory - typically /config in the addon environment
+HA_CONFIG_DIR = Path(os.getenv("HA_CONFIG_DIR", "/config"))
+DEVICE_REGISTRY_PATH = HA_CONFIG_DIR / ".storage" / "core.device_registry"
 
 
 def _normalize_ieee(ieee_str: str) -> str:
@@ -56,55 +41,131 @@ def _normalize_ieee(ieee_str: str) -> str:
 
 
 async def fetch_device_registry() -> list[dict[str, Any]]:
-    """Fetch the device registry from Home Assistant.
+    """Fetch Thread device/node info from OTBR REST API.
     
-    Tries multiple endpoints:
-    1. /api/core/config/device_registry/list (HA 2024.x+)
-    2. /config/device_registry/list (Supervisor routing)
-    3. /api/config/entities (fallback to entity registry)
+    The OTBR addon exposes a /api/topology endpoint that returns information
+    about all Thread nodes in the network, including their extended addresses (EUI64).
+    This is more reliable than trying to access HA's device registry via API,
+    since Thread node topology comes directly from the OTBR border router itself.
+    
+    Returns a list of dicts with 'extendedAddress' (EUI64) and other node info.
     """
-    endpoints = [
-        f"{SUPERVISOR_URL}/api/core/config/device_registry/list",
-        f"{SUPERVISOR_URL}/config/device_registry/list",
-        f"{SUPERVISOR_URL}/api/config/entities",
+    import httpx
+    
+    # OTBR API URL - typically accessible via http://otbr:8080/api
+    # or http://supervisor:9203/addon/core_openthread_border_router/api (via supervisor)
+    otbr_endpoints = [
+        "http://supervisor:9203/addon/core_openthread_border_router/api/topology",  # Via Supervisor
+        "http://otbr:8080/api/topology",  # Direct if accessible
     ]
     
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            for endpoint in endpoints:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for endpoint in otbr_endpoints:
                 try:
-                    resp = await client.get(endpoint, headers=_headers())
+                    resp = await client.get(
+                        endpoint,
+                        headers={"Accept": "application/json"},
+                    )
                     if resp.status_code == 200:
-                        payload = resp.json()
-                        log.debug("Device registry fetch succeeded at %s", endpoint)
-                        # The response is typically {"devices": [...]} or a list directly
-                        if isinstance(payload, dict):
-                            devices = payload.get("devices", [])
-                        else:
-                            devices = payload if isinstance(payload, list) else []
-                        return devices
+                        data = resp.json()
+                        log.debug(
+                            "Thread topology fetched from %s",
+                            endpoint,
+                        )
+                        # Convert OTBR topology response to thread device list
+                        if isinstance(data, dict):
+                            topology = data.get("topology", {})
+                            nodes = topology.get("nodes", [])
+                            return [
+                                {
+                                    "extendedAddress": node.get("extendedAddress"),
+                                    "rloc": node.get("rloc"),
+                                    "role": node.get("role"),
+                                }
+                                for node in nodes
+                                if node.get("extendedAddress")
+                            ]
                 except Exception as exc:
-                    log.debug("Endpoint %s failed: %s", endpoint, exc)
+                    log.debug("OTBR endpoint %s failed: %s", endpoint, exc)
                     continue
-        log.warning("All device registry endpoints failed")
+        
+        log.warning("All OTBR endpoints failed; attempting device registry fallback")
+        return _fallback_device_registry()
+    except Exception as exc:
+        log.warning("Failed to fetch Thread topology: %s", exc)
+        return _fallback_device_registry()
+
+
+def _fallback_device_registry() -> list[dict[str, Any]]:
+    """Fallback: read device registry from .storage JSON file.
+    
+    If OTBR API is unavailable, read directly from HA's device registry file.
+    """
+    try:
+        if not DEVICE_REGISTRY_PATH.exists():
+            log.warning(
+                "Device registry file not found at %s; ensure HA config dir is mounted",
+                DEVICE_REGISTRY_PATH,
+            )
+            return []
+        
+        with open(DEVICE_REGISTRY_PATH, "r") as f:
+            data = json.load(f)
+        
+        # The file structure is {"version": 1, "key": "...", "data": {"devices": [...]}}
+        devices = data.get("data", {}).get("devices", [])
+        log.debug(
+            "Device registry loaded from %s: %d devices",
+            DEVICE_REGISTRY_PATH,
+            len(devices),
+        )
+        return devices
+    except FileNotFoundError:
+        log.warning("Device registry file not found at %s", DEVICE_REGISTRY_PATH)
+        return []
+    except json.JSONDecodeError as exc:
+        log.warning("Failed to parse device registry JSON: %s", exc)
         return []
     except Exception as exc:
-        log.warning("Failed to fetch device registry: %s", exc)
+        log.warning("Failed to fetch device registry fallback: %s", exc)
         return []
 
 
 def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Extract Thread devices from registry, keyed by normalized IEEE address.
+    """Extract Thread devices from OTBR topology or device registry.
 
-    Returns a dict mapping EUI64 → {device_id, name, manufacturer, model, ...}
+    Returns a dict mapping EUI64 → {role, rloc, ...}
+    
+    Handles two formats:
+    1. OTBR topology nodes: {"extendedAddress": "...", "rloc": ..., "role": ...}
+    2. Device registry devices: {"connections": [["thread", "..."], ...], ...}
     """
     out: dict[str, dict[str, Any]] = {}
+    
     for dev in devices:
-        # Look for connections that contain Thread/IEEE address info
+        # Check if this is an OTBR topology node (has extendedAddress)
+        if "extendedAddress" in dev:
+            ext_addr = dev.get("extendedAddress")
+            if ext_addr:
+                try:
+                    eui = _normalize_ieee(str(ext_addr))
+                    out[eui] = {
+                        "role": dev.get("role"),
+                        "rloc": dev.get("rloc"),
+                    }
+                    log.debug(
+                        "Found Thread node from OTBR: eui=%s role=%s",
+                        eui,
+                        dev.get("role"),
+                    )
+                except Exception as exc:
+                    log.debug("Failed to parse OTBR node %s: %s", ext_addr, exc)
+        
+        # Otherwise, check if this is a device registry device (has connections)
         connections = dev.get("connections", [])
         for conn_type, conn_id in connections:
             # Thread devices typically use "thread" or "zigbee" connection types
-            # and have IEEE addresses; some integrations also use "ieee802154"
             if conn_type in ("thread", "zigbee", "ieee802154"):
                 try:
                     eui = _normalize_ieee(str(conn_id))
@@ -118,12 +179,13 @@ def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str
                         "primary_config_entry": dev.get("primary_config_entry"),
                     }
                     log.debug(
-                        "Found Thread device: eui=%s name=%s",
+                        "Found Thread device from registry: eui=%s name=%s",
                         eui,
                         dev.get("name_by_user") or dev.get("name"),
                     )
                 except Exception as exc:
                     log.debug("Failed to parse connection %s: %s", conn_id, exc)
+    
     return out
 
 
