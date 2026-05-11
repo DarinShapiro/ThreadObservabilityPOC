@@ -18,7 +18,7 @@ from ..config import get_config
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
-ADDON_VERSION = "0.6.0"
+ADDON_VERSION = "0.6.1"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 

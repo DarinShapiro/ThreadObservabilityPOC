@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- `ha_update_addon` now resolves the addon slug from `/addons/self/info` and calls `POST /store/addons/{slug}/update`. The `/addons/self/update` alias returns 404 on current Supervisor versions; this restores full dev-loop automation.
+
 ## 0.6.0 — Phase 1: storage + config foundation
 
 - **SQLite store** (`storage/sqlite_store.py`) with migration-versioned schema:

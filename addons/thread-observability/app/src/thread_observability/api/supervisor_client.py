@@ -141,8 +141,17 @@ async def update_addon() -> dict[str, Any]:
 
     Equivalent to clicking "Update" in the HA UI. Supervisor will pull the
     new image (or rebuild from source for local repos) and restart.
+
+    Supervisor's ``/addons/self/update`` alias is unreliable across versions;
+    the canonical path is ``/store/addons/{slug}/update``. We look up the
+    full slug from ``/addons/self/info`` first so the caller doesn't need
+    to know it.
     """
-    return await _post("/addons/self/update")
+    info = await _get_json("/addons/self/info")
+    slug = info.get("slug")
+    if not slug:
+        raise RuntimeError("could not determine addon slug from /addons/self/info")
+    return await _post(f"/store/addons/{slug}/update")
 
 
 async def set_auto_update(enabled: bool) -> dict[str, Any]:
