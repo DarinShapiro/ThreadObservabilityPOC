@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0
+
+- Added Supervisor-backed MCP tools to close the VS Code dev loop:
+  - `ha_get_addon_state` — install state, current/latest version, ingress URL, raw info
+  - `ha_get_addon_logs` — tail the Supervisor container log (captures s6/startup output)
+  - `ha_get_supervisor_logs` — tail the Supervisor's own log (permissions, port conflicts, etc.)
+  - `ha_restart_addon` — fast restart without rebuild
+  - `ha_rebuild_addon` — rebuild from repo source then restart (post-push deploy)
+- New `supervisor_client.py` thin async wrapper around `http://supervisor` with bearer auth via `SUPERVISOR_TOKEN`
+- Made MCP tool dispatch async; JSON-RPC `tools/call` now returns JSON-serialised content
+- Added `httpx` dependency
+
 ## 0.2.0
 
 - Switched base image from `ghcr.io/home-assistant/{arch}-base:3.20` to `ghcr.io/hassio-addons/base:20.1.1`

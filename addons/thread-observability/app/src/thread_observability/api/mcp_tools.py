@@ -11,6 +11,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from . import supervisor_client
+
 MCP_PROTOCOL_VERSION = "2024-11-05"
 LOG_PATH = Path(os.getenv("THREAD_OBS_LOG_FILE", "/data/thread-observability/addon.log"))
 LOG_TAIL_LINES = 200
@@ -62,7 +64,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
     },
     {
         "name": "get_recent_logs",
-        "description": "Return recent add-on log lines for live troubleshooting.",
+        "description": "Return recent add-on log lines from the add-on's internal file logger.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -75,12 +77,76 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "ha_get_addon_state",
+        "description": (
+            "Return Supervisor's view of this add-on: install state, current version, "
+            "latest available version, boot/watchdog flags, ingress URL, and raw info. "
+            "Use this from VS Code to verify a deploy without opening the HA UI."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ha_get_addon_logs",
+        "description": (
+            "Return the tail of the Supervisor container log for this add-on. "
+            "Captures s6-overlay/startup output that the in-process Python logger misses. "
+            "Use this to diagnose crash loops or boot failures."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lines": {
+                    "type": "integer",
+                    "description": "Lines to return (default 200, max 1000).",
+                    "default": 200,
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ha_get_supervisor_logs",
+        "description": (
+            "Return the tail of the Home Assistant Supervisor's own log. "
+            "Useful for diagnosing why Supervisor rejected or killed the add-on "
+            "(permissions, port conflicts, AppArmor, image pull failures)."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "lines": {
+                    "type": "integer",
+                    "description": "Lines to return (default 200, max 1000).",
+                    "default": 200,
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "ha_restart_addon",
+        "description": (
+            "Ask Supervisor to restart this add-on (fast; no image rebuild). "
+            "Use after config or option changes to verify behaviour without a full deploy."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ha_rebuild_addon",
+        "description": (
+            "Ask Supervisor to rebuild this add-on from its repository source, then restart. "
+            "Use after pushing a new commit so VS Code can complete the change\u2192deploy\u2192observe "
+            "loop without manual uninstall/reinstall."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
 
 
-def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool and return its result payload."""
     if name == "get_network_topology":
         return {"nodes": [], "links": [], "note": "ingestion not yet implemented"}
@@ -97,6 +163,40 @@ def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         n = min(int(arguments.get("lines", 100)), LOG_TAIL_LINES)
         lines = _tail_log(n)
         return {"lines": lines, "count": len(lines), "source": str(LOG_PATH)}
+
+    # ---- Supervisor-backed dev-loop tools ---------------------------------
+    if name == "ha_get_addon_state":
+        try:
+            return await supervisor_client.get_addon_info()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "hint": "Supervisor unreachable; running outside HA?"}
+    if name == "ha_get_addon_logs":
+        n = max(1, min(int(arguments.get("lines", 200)), 1000))
+        try:
+            lines = await supervisor_client.get_addon_logs(n)
+            return {"lines": lines, "count": len(lines), "source": "supervisor:/addons/self/logs"}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ha_get_supervisor_logs":
+        n = max(1, min(int(arguments.get("lines", 200)), 1000))
+        try:
+            lines = await supervisor_client.get_supervisor_logs(n)
+            return {"lines": lines, "count": len(lines), "source": "supervisor:/supervisor/logs"}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ha_restart_addon":
+        try:
+            res = await supervisor_client.restart_addon()
+            return {"action": "restart", "result": res, "requested_at": _utc_now()}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ha_rebuild_addon":
+        try:
+            res = await supervisor_client.rebuild_addon()
+            return {"action": "rebuild", "result": res, "requested_at": _utc_now()}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -122,10 +222,10 @@ def create_mcp_app() -> FastAPI:
         return {"tools": TOOL_DEFS, "count": len(TOOL_DEFS)}
 
     @app.post("/mcp/call/{tool_name}")
-    def call_tool_rest(tool_name: str, request: ToolCallRequest) -> dict[str, object]:
+    async def call_tool_rest(tool_name: str, request: ToolCallRequest) -> dict[str, object]:
         if tool_name not in _TOOL_MAP:
             raise HTTPException(status_code=404, detail=f"Unknown tool: {tool_name}")
-        result = _dispatch_tool(tool_name, request.arguments)
+        result = await _dispatch_tool(tool_name, request.arguments)
         return {"tool": tool_name, "result": result, "called_at": _utc_now()}
 
     # ── MCP JSON-RPC 2.0 endpoint (VS Code MCP client) ───────────────────────
@@ -168,8 +268,9 @@ def create_mcp_app() -> FastAPI:
             arguments = params.get("arguments", {})
             if tool_name not in _TOOL_MAP:
                 return err(-32602, f"Unknown tool: {tool_name}")
-            result = _dispatch_tool(tool_name, arguments)
-            return ok({"content": [{"type": "text", "text": str(result)}]})
+            result = await _dispatch_tool(tool_name, arguments)
+            import json as _json
+            return ok({"content": [{"type": "text", "text": _json.dumps(result, default=str)}]})
 
         return err(-32601, f"Method not found: {method}")
 
