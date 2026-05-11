@@ -15,7 +15,9 @@ WORKDIR /opt/thread-observability
 COPY app/ /opt/thread-observability/app/
 COPY rootfs/ /
 
-RUN pip3 install --no-cache-dir --upgrade pip && \
+RUN find /etc/cont-init.d /etc/services.d -type f -exec sed -i 's/\r$//' {} \; && \
+    chmod 755 /etc/cont-init.d/00-init.sh /etc/services.d/core/run /etc/services.d/mcp/run && \
+    pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir /opt/thread-observability/app
 
 # s6-overlay is provided by Home Assistant base images.
