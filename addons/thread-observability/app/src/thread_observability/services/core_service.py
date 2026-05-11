@@ -7,10 +7,13 @@ import os
 import uvicorn
 
 from thread_observability.api.http_api import create_core_app
+from thread_observability.logging_setup import configure_logging
 
 
 def run_core_service() -> None:
     """Start core ingestion/enrichment/scheduler API service."""
+    log_level = os.getenv("THREAD_OBS_LOG_LEVEL", "info")
+    configure_logging("core", log_level)
     port = int(os.getenv("THREAD_OBS_CORE_PORT", "8099"))
     app = create_core_app()
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level=log_level)

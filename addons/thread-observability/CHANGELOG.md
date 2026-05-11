@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.6
+
+- Added rotating file logger to /data/thread-observability/addon.log (2 MB, 2 backups)
+- Both core and MCP services now log to stdout + file on startup
+- get_recent_logs MCP tool now has live data to read
+- Log level controlled via THREAD_OBS_LOG_LEVEL env var (default: info)
+
 ## 0.1.5
 
 - Implemented MCP JSON-RPC 2.0 protocol endpoint at POST /mcp (VS Code MCP client compatible)
