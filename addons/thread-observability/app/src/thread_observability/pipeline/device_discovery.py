@@ -23,6 +23,18 @@ log = logging.getLogger(__name__)
 HA_CONFIG_DIR = Path(os.getenv("HA_CONFIG_DIR", "/config"))
 DEVICE_REGISTRY_PATH = HA_CONFIG_DIR / ".storage" / "core.device_registry"
 
+# Matter server stores per-node operational data; we use it to bridge
+# Matter node_id (present in HA device registry as an identifier) to the
+# Thread EUI64 we extract from OTBR. Paths vary by HA version; we try several.
+MATTER_STORAGE_CANDIDATES = [
+    HA_CONFIG_DIR / "matter_server" / "server.json",
+    HA_CONFIG_DIR / "matter_server" / "server_storage.json",
+    HA_CONFIG_DIR / ".storage" / "core.matter_server",
+]
+
+# Thread-only connection types (we intentionally do NOT include zigbee here).
+_THREAD_CONN_TYPES = ("thread", "ieee802154")
+
 
 def _normalize_ieee(ieee_str: str) -> str:
     """Normalize IEEE address to 16-char lowercase hex (EUI64 format).
@@ -38,6 +50,109 @@ def _normalize_ieee(ieee_str: str) -> str:
     # Remove colons/dashes
     ieee_str = ieee_str.replace(":", "").replace("-", "")
     return ieee_str.lower().zfill(16)[-16:]
+
+
+def _extract_matter_node_id(value: str) -> str | None:
+    """Extract a Matter node id from a device-registry identifier value.
+
+    HA Matter devices typically expose identifiers like:
+      ["matter", "<fabric_id>-<node_id>"]
+      ["matter", "<fabric_id>-<node_id>-<endpoint_id>"]
+      ["matter", "<node_id>"]
+    We treat the node_id as the segment after the first '-'. If only one
+    segment is present, we use it directly. Result is returned as a string
+    so it can be used as a dict key consistently.
+    """
+    if not value:
+        return None
+    parts = value.split("-")
+    if len(parts) >= 2:
+        candidate = parts[1]
+    else:
+        candidate = parts[0]
+    candidate = candidate.strip()
+    return candidate or None
+
+
+def _load_matter_node_bridge() -> dict[str, str]:
+    """Load a Matter node_id -> Thread EUI64 mapping from matter-server storage.
+
+    Matter server persists per-node operational data including the device's
+    Thread/IPv6 addresses. We parse known storage locations defensively; any
+    parse failure returns an empty mapping (callers degrade gracefully).
+    """
+    bridge: dict[str, str] = {}
+    for path in MATTER_STORAGE_CANDIDATES:
+        try:
+            if not path.exists():
+                continue
+            with open(path, "r") as f:
+                data = json.load(f)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Matter storage %s unreadable: %s", path, exc)
+            continue
+        nodes_blob = data.get("nodes") if isinstance(data, dict) else None
+        if not isinstance(nodes_blob, dict):
+            # HA core storage wraps payload under data.* sometimes
+            nodes_blob = (
+                (data.get("data") or {}).get("nodes")
+                if isinstance(data, dict)
+                else None
+            )
+        if not isinstance(nodes_blob, dict):
+            continue
+        for node_id, node in nodes_blob.items():
+            if not isinstance(node, dict):
+                continue
+            # Try common spots for an EUI64 / extended address.
+            ext = (
+                node.get("extended_address")
+                or node.get("extendedAddress")
+                or (node.get("thread") or {}).get("extended_address")
+                or (node.get("network") or {}).get("extended_address")
+            )
+            if ext:
+                try:
+                    bridge[str(node_id)] = _normalize_ieee(str(ext))
+                    continue
+                except Exception:  # noqa: BLE001
+                    pass
+            # Fallback: derive EUI64 from an operational mesh-local IPv6 IID.
+            addrs = (
+                node.get("ip_addresses")
+                or node.get("addresses")
+                or (node.get("thread") or {}).get("addresses")
+                or []
+            )
+            if isinstance(addrs, list):
+                for addr in addrs:
+                    eui = _eui64_from_ipv6(str(addr))
+                    if eui:
+                        bridge[str(node_id)] = eui
+                        break
+        if bridge:
+            log.debug(
+                "Loaded Matter bridge from %s (%d entries)",
+                path, len(bridge),
+            )
+            break
+    return bridge
+
+
+def _eui64_from_ipv6(addr: str) -> str | None:
+    """Derive a 16-hex EUI64 from a Thread mesh IPv6 address if possible."""
+    if not addr or ":" not in addr:
+        return None
+    parts = addr.split(":")
+    if len(parts) < 4:
+        return None
+    last4 = parts[-4:]
+    if not all(0 < len(p) <= 4 and all(c in "0123456789abcdefABCDEF" for c in p) for p in last4):
+        return None
+    try:
+        return _normalize_ieee("".join(p.zfill(4) for p in last4))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 async def fetch_device_registry() -> list[dict[str, Any]]:
@@ -101,27 +216,67 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
     except Exception as exc:
         log.warning("Failed to fetch OTBR topology: %s", exc)
     
-    # Now fetch device registry to get friendly names and metadata
+    # Now fetch device registry to get friendly names and metadata.
+    # Thread-only: we no longer match zigbee connections.
     reg_devices = _fallback_device_registry()
     registry_by_eui: dict[str, dict[str, Any]] = {}
+    registry_by_matter_node: dict[str, dict[str, Any]] = {}
     for dev in reg_devices:
+        dev_meta = {
+            "device_id": dev.get("id"),
+            "name": dev.get("name"),
+            "name_by_user": dev.get("name_by_user"),
+            "manufacturer": dev.get("manufacturer"),
+            "model": dev.get("model"),
+            "area_id": dev.get("area_id"),
+            "primary_config_entry": dev.get("primary_config_entry"),
+        }
+        # Primary path: direct Thread connection on the device.
         connections = dev.get("connections", [])
+        matched_thread_conn = False
         for conn_type, conn_id in connections:
-            if conn_type in ("thread", "zigbee", "ieee802154"):
+            if conn_type in _THREAD_CONN_TYPES:
                 try:
                     eui = _normalize_ieee(str(conn_id))
-                    registry_by_eui[eui] = {
-                        "device_id": dev.get("id"),
-                        "name": dev.get("name"),
-                        "name_by_user": dev.get("name_by_user"),
-                        "manufacturer": dev.get("manufacturer"),
-                        "model": dev.get("model"),
-                        "area_id": dev.get("area_id"),
-                        "primary_config_entry": dev.get("primary_config_entry"),
-                    }
+                    registry_by_eui[eui] = dict(dev_meta)
+                    matched_thread_conn = True
                     break  # Use first Thread connection found
                 except Exception as exc:
                     log.debug("Failed to parse connection %s: %s", conn_id, exc)
+        # Secondary path: Matter identifier on the device (we bridge to EUI64 later).
+        if not matched_thread_conn:
+            for ident in dev.get("identifiers", []) or []:
+                # identifiers entries look like ["matter", "<fabric_id>-<node_id>-<endpoint_id>"]
+                try:
+                    domain, value = ident[0], ident[1]
+                except (IndexError, TypeError):
+                    continue
+                if domain != "matter" or not value:
+                    continue
+                node_id = _extract_matter_node_id(str(value))
+                if node_id is None:
+                    continue
+                registry_by_matter_node[node_id] = dict(dev_meta)
+                log.debug(
+                    "Found Matter-only registry device: node_id=%s name=%s",
+                    node_id, dev.get("name_by_user") or dev.get("name"),
+                )
+    if registry_by_matter_node:
+        # Bridge Matter node_id -> EUI64 using matter-server storage.
+        bridge = _load_matter_node_bridge()
+        for node_id, meta in registry_by_matter_node.items():
+            eui = bridge.get(node_id)
+            if eui:
+                registry_by_eui.setdefault(eui, meta)
+                log.debug(
+                    "Bridged Matter node_id=%s -> eui=%s name=%s",
+                    node_id, eui, meta.get("name_by_user") or meta.get("name"),
+                )
+            else:
+                log.debug(
+                    "No EUI64 bridge for Matter node_id=%s (matter-server storage missing)",
+                    node_id,
+                )
     
     if registry_by_eui:
         log.debug("Loaded device registry with %d Thread devices", len(registry_by_eui))
@@ -212,8 +367,8 @@ def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str
         # Otherwise, check if this is a device registry device (has connections)
         connections = dev.get("connections", [])
         for conn_type, conn_id in connections:
-            # Thread devices typically use "thread" or "zigbee" connection types
-            if conn_type in ("thread", "zigbee", "ieee802154"):
+            # Thread-only: do not match zigbee.
+            if conn_type in _THREAD_CONN_TYPES:
                 try:
                     eui = _normalize_ieee(str(conn_id))
                     out[eui] = {
