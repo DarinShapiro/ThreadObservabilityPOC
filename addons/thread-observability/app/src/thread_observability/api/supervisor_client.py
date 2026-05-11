@@ -194,30 +194,46 @@ async def update_addon() -> dict[str, Any]:
             "latest": latest,
         }
 
-    try:
-        return await _post(f"/store/addons/{slug}/update")
-    except httpx.RequestError as exc:
-        return {
-            "status": "accepted",
-            "action": "update",
-            "performed": True,
-            "note": "request interrupted after dispatch; expected for self update",
-            "error": exc.__class__.__name__,
-        }
-    except httpx.HTTPStatusError as exc:
-        # Supervisor can race from update_available=true -> false and return 403.
-        if exc.response is not None and exc.response.status_code == 403:
-            refreshed = await _get_json("/addons/self/info")
-            if not refreshed.get("update_available"):
-                return {
-                    "status": "ok",
-                    "action": "update",
-                    "performed": False,
-                    "reason": "no_update_available",
-                    "current": refreshed.get("version"),
-                    "latest": refreshed.get("version_latest"),
-                }
-        raise
+    endpoint_errors: list[tuple[str, int | None, str]] = []
+    for endpoint in ("/addons/self/update", f"/store/addons/{slug}/update"):
+        try:
+            return await _post(endpoint)
+        except httpx.RequestError as exc:
+            return {
+                "status": "accepted",
+                "action": "update",
+                "performed": True,
+                "note": "request interrupted after dispatch; expected for self update",
+                "error": exc.__class__.__name__,
+                "endpoint": endpoint,
+            }
+        except httpx.HTTPStatusError as exc:
+            code = exc.response.status_code if exc.response is not None else None
+            endpoint_errors.append((endpoint, code, str(exc)))
+            # 403 can mean either no update available anymore (race) or permission on this path.
+            if code == 403:
+                refreshed = await _get_json("/addons/self/info")
+                if not refreshed.get("update_available"):
+                    return {
+                        "status": "ok",
+                        "action": "update",
+                        "performed": False,
+                        "reason": "no_update_available",
+                        "current": refreshed.get("version"),
+                        "latest": refreshed.get("version_latest"),
+                    }
+            # Try next endpoint for permission/path-related status codes.
+            if code in {401, 403, 404, 405}:
+                continue
+            raise
+
+    # If both endpoints failed, return a clear aggregated error.
+    raise RuntimeError(
+        "update dispatch failed on all known endpoints: "
+        + "; ".join(
+            f"{ep} status={code} err={msg}" for ep, code, msg in endpoint_errors
+        )
+    )
 
 
 async def set_auto_update(enabled: bool) -> dict[str, Any]:

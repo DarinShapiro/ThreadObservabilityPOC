@@ -116,3 +116,35 @@ def test_update_addon_accepts_disconnect(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result["status"] == "accepted"
     assert result["action"] == "update"
     assert result["performed"] is True
+
+
+def test_update_addon_falls_back_between_endpoints(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    async def fake_reload_store() -> dict[str, str]:
+        return {"status": "ok"}
+
+    async def fake_get_json(path: str) -> dict[str, object]:
+        assert path == "/addons/self/info"
+        return {
+            "slug": "9e5048e8_thread-observability",
+            "version": "0.9.1",
+            "version_latest": "0.9.2",
+            "update_available": True,
+        }
+
+    async def fake_post(path: str, json_body: dict[str, object] | None = None) -> dict[str, object]:
+        calls.append(path)
+        request = httpx.Request("POST", f"http://supervisor{path}")
+        if path == "/addons/self/update":
+            response = httpx.Response(403, request=request)
+            raise httpx.HTTPStatusError("forbidden", request=request, response=response)
+        return {"status": "ok", "data": {"endpoint": path}}
+
+    monkeypatch.setattr(sc, "reload_store", fake_reload_store)
+    monkeypatch.setattr(sc, "_get_json", fake_get_json)
+    monkeypatch.setattr(sc, "_post", fake_post)
+
+    result = asyncio.run(sc.update_addon())
+    assert calls == ["/addons/self/update", "/store/addons/9e5048e8_thread-observability/update"]
+    assert result["status"] == "ok"

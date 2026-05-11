@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.3 — update path compatibility fallback
+
+- `ha_update_addon` now attempts both Supervisor update endpoints in order:
+  - `/addons/self/update`
+  - `/store/addons/{slug}/update`
+- Added fallback logic for path/permission differences across Supervisor versions (401/403/404/405 on one path now retries the other).
+- Preserved existing no-update behavior (`performed: false`, `reason: no_update_available`) and expected self-update disconnect handling (`status: accepted`).
+- Added regression test coverage for endpoint fallback behavior in `tests/test_supervisor_client.py`.
+
 ## 0.9.2 — dev-loop hardening for update/rebuild/restart
 
 - Hardened lifecycle MCP operations in `supervisor_client.py`:
