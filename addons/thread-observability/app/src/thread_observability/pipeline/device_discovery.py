@@ -240,6 +240,10 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
                     break
 
         # Fallback path: General Diagnostics NetworkInterfaces -> Thread iface HW addr.
+        # python-matter-server represents struct fields by their Matter
+        # attribute IDs as string keys:
+        #   "0"=Name, "1"=IsOperational, "4"=HardwareAddress (octet string,
+        #   base64-encoded), "7"=Type (4 == Thread).
         if not eui:
             for key, value in attrs.items():
                 if not key.endswith("/51/0"):
@@ -255,8 +259,21 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
                 for iface in value:
                     if not isinstance(iface, dict):
                         continue
+                    iface_type = iface.get("7", iface.get("Type"))
+                    iface_name = iface.get("0", iface.get("Name", ""))
+                    # Accept Thread by interface type (4) or name hint.
+                    is_thread = (
+                        iface_type == 4
+                        or (isinstance(iface_name, str) and (
+                            "thread" in iface_name.lower()
+                            or "ieee802154" in iface_name.lower()
+                        ))
+                    )
+                    if not is_thread:
+                        continue
                     hw = (
-                        iface.get("HardwareAddress")
+                        iface.get("4")
+                        or iface.get("HardwareAddress")
                         or iface.get("hardwareAddress")
                         or iface.get("hardware_address")
                     )

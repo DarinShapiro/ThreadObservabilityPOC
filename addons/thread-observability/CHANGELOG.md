@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.11 — Use Matter spec field IDs for NetworkInterfaces parsing
+
+- python-matter-server keys struct fields by Matter attribute ID strings (e.g. "4" for HardwareAddress, "7" for InterfaceType). Replace name-based lookup with the spec-compliant integer keys; filter to Thread interfaces only (Type==4 or Name contains thread/ieee802154)
+- Confirmed live: NetworkInterfaces[0]="ieee802154", [4]=base64 8-byte HardwareAddress
+
 ## 0.9.10 — Thread Network Diagnostics ExtAddress as primary EUI64 source
 
 - Prefer Matter Thread Network Diagnostics ExtAddress attribute (cluster 0x35 / attribute 0x0F) as primary EUI64 source
