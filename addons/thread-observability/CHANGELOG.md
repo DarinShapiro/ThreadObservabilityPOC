@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.12 — Diagnose node_id key mismatch between registry and matter-server
+
+- 0.9.11 successfully extracted 16/17 EUI64s from matter-server but merged 0 into the discovery map
+- Add INFO logs showing the first 10 node_id keys on both sides (registry parse vs matter-server) so we can see the actual format mismatch
+
 ## 0.9.11 — Use Matter spec field IDs for NetworkInterfaces parsing
 
 - python-matter-server keys struct fields by Matter attribute ID strings (e.g. "4" for HardwareAddress, "7" for InterfaceType). Replace name-based lookup with the spec-compliant integer keys; filter to Thread interfaces only (Type==4 or Name contains thread/ieee802154)

@@ -428,19 +428,23 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
         )
         bridge = await _load_matter_node_bridge_async()
         log.info("discover: matter bridge returned %d entries", len(bridge))
+        # Diagnostic: log the two key sets so we can see ID format mismatches.
+        reg_keys = sorted(registry_by_matter_node.keys())[:10]
+        bridge_keys = sorted(bridge.keys())[:10]
+        log.info(
+            "discover: registry_node_id_sample=%s bridge_node_id_sample=%s",
+            reg_keys, bridge_keys,
+        )
+        merged_count = 0
         for node_id, meta in registry_by_matter_node.items():
             eui = bridge.get(node_id)
             if eui:
                 registry_by_eui.setdefault(eui, meta)
-                log.debug(
-                    "Bridged Matter node_id=%s -> eui=%s name=%s",
-                    node_id, eui, meta.get("name_by_user") or meta.get("name"),
-                )
-            else:
-                log.debug(
-                    "No EUI64 bridge for Matter node_id=%s (matter-server storage missing)",
-                    node_id,
-                )
+                merged_count += 1
+        log.info(
+            "discover: matter bridge merged %d registry devices into EUI64 map",
+            merged_count,
+        )
     
     if registry_by_eui:
         log.info(
