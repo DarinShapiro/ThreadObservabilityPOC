@@ -1,0 +1,16 @@
+configuration:
+  log_level:
+    name: Log level
+    description: Logging verbosity for the add-on services.
+  timezone:
+    name: Timezone
+    description: Timezone used by scheduler and logs.
+  retention:
+    name: Retention policy
+    description: Full-resolution and sampled archive retention settings.
+  ai:
+    name: AI settings
+    description: Optional model provider configuration.
+  scheduler:
+    name: Internal scheduler
+    description: Cadence for platform maintenance jobs.

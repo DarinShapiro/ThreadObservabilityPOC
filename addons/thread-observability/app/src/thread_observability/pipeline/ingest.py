@@ -1,0 +1,1 @@
+"""Ingestion stage placeholder."""

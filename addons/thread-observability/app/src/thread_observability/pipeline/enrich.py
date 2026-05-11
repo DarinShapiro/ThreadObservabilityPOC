@@ -1,0 +1,1 @@
+"""Enrichment stage placeholder."""

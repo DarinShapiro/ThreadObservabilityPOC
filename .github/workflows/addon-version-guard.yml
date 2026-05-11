@@ -1,0 +1,49 @@
+name: Add-on Version Guard
+
+on:
+  pull_request:
+    paths:
+      - addons/thread-observability/**
+
+jobs:
+  require-version-bump:
+    name: Require version bump on add-on changes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version bump
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.sha }}"
+          TARGET="addons/thread-observability/config.yaml"
+
+          if ! git diff --name-only "$BASE_SHA" "$HEAD_SHA" -- addons/thread-observability | grep -q .; then
+            echo "No add-on changes detected."
+            exit 0
+          fi
+
+          BASE_VERSION=$(git show "$BASE_SHA:$TARGET" | sed -n 's/^version:[[:space:]]*//p' | head -n1)
+          HEAD_VERSION=$(sed -n 's/^version:[[:space:]]*//p' "$TARGET" | head -n1)
+
+          echo "Base version: $BASE_VERSION"
+          echo "Head version: $HEAD_VERSION"
+
+          if [ -z "$BASE_VERSION" ] || [ -z "$HEAD_VERSION" ]; then
+            echo "Unable to parse add-on version from config.yaml"
+            exit 1
+          fi
+
+          if [ "$BASE_VERSION" = "$HEAD_VERSION" ]; then
+            echo "Add-on files changed but version did not bump."
+            echo "Please increment addons/thread-observability/config.yaml version."
+            exit 1
+          fi
+
+          echo "Version bump check passed."
