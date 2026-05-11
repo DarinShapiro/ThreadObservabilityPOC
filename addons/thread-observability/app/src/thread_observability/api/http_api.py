@@ -15,10 +15,14 @@ from fastapi.responses import HTMLResponse
 
 from . import supervisor_client
 from ..config import get_config
+from ..health import build_health_snapshot
+from ..pipeline import reasoner as reasoner_mod
+from ..pipeline import seed as seed_mod
+from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
-ADDON_VERSION = "0.6.1"
+ADDON_VERSION = "0.7.0"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 
@@ -97,19 +101,35 @@ DASHBOARD_HTML = """<!doctype html>
     </div>
 
     <div class="card">
-      <h2>Thread Network</h2>
+      <div class="row"><h2>Thread Network</h2><span id="net-pill" class="pill warn">loading</span></div>
       <dl class="kv">
         <dt>nodes</dt><dd id="n-nodes">&mdash;</dd>
         <dt>links</dt><dd id="n-links">&mdash;</dd>
+        <dt>healthy / stale / offline</dt><dd id="n-status">&mdash;</dd>
         <dt>active issues</dt><dd id="n-issues">&mdash;</dd>
         <dt>data age</dt><dd id="n-age">&mdash;</dd>
       </dl>
-      <div class="muted" style="margin-top:.5rem">Ingestion not yet implemented &mdash; values populate when collectors come online.</div>
+      <div class="muted" style="margin-top:.5rem" id="net-hint">Awaiting events. Use “Seed demo” to populate.</div>
+    </div>
+
+    <div class="card">
+      <div class="row"><h2>Active Issues</h2><span id="iss-pill" class="pill ok">0</span></div>
+      <div id="issues-list" class="muted">none</div>
     </div>
 
     <div class="card">
       <div class="row"><h2>Storage</h2><span id="store-pill" class="pill warn">loading</span></div>
       <dl class="kv" id="store-kv"></dl>
+    </div>
+
+    <div class="card wide">
+      <h2>Dev Actions</h2>
+      <div class="links">
+        <button onclick="doPost('v1/dev/seed')">Seed demo topology</button>
+        <button onclick="doPost('v1/reasoner/run')">Run reasoner</button>
+        <button onclick="refresh()">Refresh now</button>
+      </div>
+      <pre id="action-out" class="muted" style="margin-top:.5rem;max-height:120px">(no action run yet)</pre>
     </div>
 
     <div class="card wide">
@@ -144,6 +164,19 @@ async function fetchJSON(u) {
   return r.json();
 }
 function setPill(el, kind, text) { el.className = 'pill ' + kind; el.textContent = text; }
+async function doPost(url) {
+  const out = document.getElementById('action-out');
+  out.textContent = 'POST ' + url + ' …';
+  out.className = '';
+  try {
+    const r = await fetch(url, {method:'POST', cache:'no-store'});
+    const j = await r.json();
+    out.textContent = JSON.stringify(j, null, 2);
+  } catch (e) {
+    out.textContent = 'Error: ' + e.message;
+  }
+  refresh();
+}
 function fmtKV(parent, obj) {
   parent.innerHTML = '';
   for (const [k,v] of Object.entries(obj)) {
@@ -186,11 +219,43 @@ async function refresh() {
     }
 
     const h = s.health || {}, t = s.topology || {}, i = s.issues || {};
+    const sum = h.summary || {};
     document.getElementById('n-nodes').textContent = (t.nodes || []).length;
     document.getElementById('n-links').textContent = (t.links || []).length;
+    document.getElementById('n-status').textContent =
+      (sum.healthy_nodes ?? 0) + ' / ' + (sum.stale_nodes ?? 0) + ' / ' + (sum.offline_nodes ?? 0);
     document.getElementById('n-issues').textContent = i.count ?? (i.issues || []).length;
     document.getElementById('n-age').textContent =
-      h.data_age_seconds === null || h.data_age_seconds === undefined ? '—' : (h.data_age_seconds + ' s');
+      h.data_age_seconds === null || h.data_age_seconds === undefined
+        ? '—' : (Math.round(h.data_age_seconds) + ' s');
+    const overall = (h.status || 'unknown');
+    setPill(document.getElementById('net-pill'),
+            overall === 'ok' ? 'ok' : (overall === 'critical' ? 'err' : 'warn'),
+            overall);
+    if ((t.nodes || []).length > 0) {
+      document.getElementById('net-hint').textContent =
+        'computed at ' + (t.computed_at || '—') + ' (freshness ' + (t.freshness_minutes ?? '?') + ' min)';
+    }
+
+    const issues = (i.issues || []);
+    const issBox = document.getElementById('issues-list');
+    const issPill = document.getElementById('iss-pill');
+    if (issues.length === 0) {
+      issPill.className = 'pill ok'; issPill.textContent = '0';
+      issBox.className = 'muted'; issBox.textContent = 'none';
+    } else {
+      const crit = issues.filter(x => x.severity === 'crit').length;
+      issPill.className = 'pill ' + (crit ? 'err' : 'warn');
+      issPill.textContent = issues.length + (crit ? ' (' + crit + ' crit)' : '');
+      issBox.className = '';
+      issBox.innerHTML = issues.slice(0, 8).map(function(x) {
+        const sev = '<span class="pill ' + (x.severity === 'crit' ? 'err' : 'warn') + '">'
+                    + x.severity + '</span>';
+        const eui = x.eui64 ? ' <code>' + x.eui64 + '</code>' : '';
+        return '<div style="margin:.25rem 0">' + sev + ' <b>' + x.kind + '</b>' + eui
+               + ' <span class="muted">#' + x.id + ' &middot; ' + x.opened_at + '</span></div>';
+      }).join('');
+    }
 
     document.getElementById('logs').textContent =
       (s.recent_logs || []).join('\\n') || '(no log entries yet)';
@@ -243,21 +308,41 @@ def create_core_app() -> FastAPI:
 
     @app.get("/v1/health/snapshot")
     def health_snapshot() -> dict[str, object]:
-        return {
-            "snapshot_id": "scaffold-snapshot",
-            "computed_at": _utc_now(),
-            "data_age_seconds": None,
-            "summary": {"healthy_nodes": 0, "degraded_nodes": 0, "offline_nodes": 0},
-            "active_issues": [],
-        }
+        try:
+            return build_health_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "computed_at": _utc_now()}
 
     @app.get("/v1/issues/active")
     def list_active_issues() -> dict[str, object]:
-        return {"count": 0, "issues": [], "computed_at": _utc_now()}
+        try:
+            issues = get_store().list_active_issues()
+            return {"count": len(issues), "issues": issues, "computed_at": _utc_now()}
+        except Exception as exc:  # noqa: BLE001
+            return {"count": 0, "issues": [], "error": str(exc), "computed_at": _utc_now()}
 
     @app.get("/v1/topology")
     def topology_snapshot() -> dict[str, object]:
-        return {"nodes": [], "links": [], "computed_at": _utc_now()}
+        try:
+            return topology_mod.build_topology()
+        except Exception as exc:  # noqa: BLE001
+            return {"nodes": [], "links": [], "error": str(exc), "computed_at": _utc_now()}
+
+    @app.post("/v1/reasoner/run")
+    def reasoner_run() -> dict[str, object]:
+        try:
+            return reasoner_mod.run_reasoner()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.post("/v1/dev/seed")
+    def dev_seed() -> dict[str, object]:
+        try:
+            seeded = seed_mod.seed_demo_topology()
+            reasoned = reasoner_mod.run_reasoner()
+            return {"seeded": seeded, "reasoner": reasoned}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     @app.get("/v1/dev/status")
     async def dev_status() -> dict[str, object]:

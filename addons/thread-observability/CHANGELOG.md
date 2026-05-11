@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.7.0 — Phase 2 (part 1): topology engine + deterministic reasoner
+
+- **Topology graph engine** (`pipeline/topology.py`): builds node/link snapshot from the SQLite event log; infers current parent edges from the latest `attach` / `parent_change` event per node within a configurable freshness window; surfaces last RSSI/LQI per node.
+- **Deterministic reasoner** (`pipeline/reasoner.py`) with three v1 rules:
+  - `parent_churn` (warn) — ≥3 `parent_change` events in 30 min
+  - `attach_failures` (warn) — ≥2 `attach_failed` events in 15 min
+  - `offline_node` (crit) — no events for ≥30 min since first seen
+  - Auto-closes managed issues whose triggering condition no longer holds.
+- **Issues table API**: `open_issue` (deduped on `kind`+`eui64`), `close_issue`, `list_active_issues`.
+- **Health snapshot** (`health.py`): consolidated view (healthy/stale/offline counts, active issue counts by severity, data age, overall status).
+- **Real endpoints**: `/v1/topology`, `/v1/issues/active`, `/v1/health/snapshot` now return live data. New `POST /v1/reasoner/run` and `POST /v1/dev/seed`.
+- **MCP tools wired to real data**: `get_network_topology` (with `freshness_minutes`), `list_active_issues`, `get_health_snapshot`. New: `run_reasoner`, `close_issue`, `seed_demo_topology` (21 tools total).
+- **Dashboard**: Thread Network card shows real node/link counts, healthy/stale/offline split, overall status pill, data age; new **Active Issues** card lists open issues with severity pills; new **Dev Actions** panel with Seed demo / Run reasoner / Refresh buttons.
+- **Test suite**: 17 pytest cases covering migrations, event insertion/query, issue dedup/close, topology builder (empty, basic links, parent_change wins, stale-window cutoff), reasoner rules (no-op, churn, attach-fail open/close, offline detection), and health classification. Run with `pip install -e .[test] && pytest tests`.
+
 ## 0.6.1
 
 - `ha_update_addon` now resolves the addon slug from `/addons/self/info` and calls `POST /store/addons/{slug}/update`. The `/addons/self/update` alias returns 404 on current Supervisor versions; this restores full dev-loop automation.

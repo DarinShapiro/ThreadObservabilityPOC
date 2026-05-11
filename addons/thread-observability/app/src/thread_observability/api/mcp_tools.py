@@ -13,6 +13,10 @@ from pydantic import BaseModel, Field
 
 from . import supervisor_client
 from ..config import get_config
+from ..health import build_health_snapshot as _build_health_snapshot
+from ..pipeline import reasoner as reasoner_mod
+from ..pipeline import topology as topology_mod
+from ..pipeline import seed as seed_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -52,18 +56,69 @@ class ToolCallRequest(BaseModel):
 TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "get_network_topology",
-        "description": "Return current Thread network topology snapshot (nodes and links).",
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
+        "description": (
+            "Return current Thread network topology snapshot (nodes and links) "
+            "computed deterministically from the SQLite event log."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "freshness_minutes": {
+                    "type": "integer",
+                    "description": "Window (minutes) for inferring current parent links. Default 60.",
+                    "default": 60,
+                    "minimum": 1,
+                    "maximum": 1440,
+                }
+            },
+            "required": [],
+        },
     },
     {
         "name": "list_active_issues",
-        "description": "Return all active Thread network issues detected by the reasoner.",
+        "description": "Return all currently-open Thread network issues from the SQLite issues table.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "get_health_snapshot",
-        "description": "Return current health snapshot including data freshness age.",
+        "description": (
+            "Return current health snapshot: node counts by status (healthy / stale / offline), "
+            "active issue counts, and data freshness age."
+        ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "run_reasoner",
+        "description": (
+            "Run the deterministic anomaly reasoner once over the SQLite event log. "
+            "Opens new issues and auto-closes issues whose triggering condition no "
+            "longer holds. Returns the summary with opened/still_open/closed issue ids."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "close_issue",
+        "description": "Manually close an active issue by id.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": {"type": "integer"}},
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "seed_demo_topology",
+        "description": (
+            "DEV: populate SQLite with a deterministic demo topology (5 nodes, 4 links) "
+            "plus a couple of anomaly-triggering event patterns. Idempotent. Use to "
+            "validate the UI / reasoner before real ingestion lands."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_anomalies": {"type": "boolean", "default": True},
+            },
+            "required": [],
+        },
     },
     {
         "name": "get_recent_logs",
@@ -247,16 +302,39 @@ _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
 async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool and return its result payload."""
     if name == "get_network_topology":
-        return {"nodes": [], "links": [], "note": "ingestion not yet implemented"}
+        try:
+            freshness = int(arguments.get("freshness_minutes", 60))
+            return topology_mod.build_topology(freshness_minutes=freshness)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
     if name == "list_active_issues":
-        return {"issues": [], "note": "reasoner not yet implemented"}
+        try:
+            issues = get_store().list_active_issues()
+            return {"count": len(issues), "issues": issues}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
     if name == "get_health_snapshot":
-        return {
-            "status": "ok",
-            "data_age_seconds": None,
-            "note": "ingestion not yet implemented",
-            "checked_at": _utc_now(),
-        }
+        try:
+            return _build_health_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "run_reasoner":
+        try:
+            return reasoner_mod.run_reasoner()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "close_issue":
+        try:
+            ok = get_store().close_issue(int(arguments["id"]))
+            return {"closed": ok, "id": int(arguments["id"])}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "seed_demo_topology":
+        try:
+            include = bool(arguments.get("include_anomalies", True))
+            return seed_mod.seed_demo_topology(include_anomalies=include)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
     if name == "get_recent_logs":
         n = min(int(arguments.get("lines", 100)), LOG_TAIL_LINES)
         lines = _tail_log(n)
@@ -385,7 +463,7 @@ def create_mcp_app() -> FastAPI:
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"service": "mcp", "name": "thread-observability", "version": "0.1.0"}
+        return {"service": "mcp", "name": "thread-observability", "version": "0.7.0"}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -428,7 +506,7 @@ def create_mcp_app() -> FastAPI:
             return ok({
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {"tools": {}},
-                "serverInfo": {"name": "thread-observability", "version": "0.1.0"},
+                "serverInfo": {"name": "thread-observability", "version": "0.7.0"},
             })
 
         if method == "notifications/initialized":

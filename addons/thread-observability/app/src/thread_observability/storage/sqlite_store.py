@@ -278,6 +278,75 @@ class SQLiteStore:
         with self._lock:
             self._conn.close()
 
+    # -- issues --------------------------------------------------------
+
+    def open_issue(
+        self,
+        *,
+        kind: str,
+        severity: str,
+        eui64: str | None = None,
+        evidence: dict[str, Any] | None = None,
+        dedupe: bool = True,
+    ) -> int:
+        """Open an issue, returning its id.
+
+        If ``dedupe`` is true and an open issue with the same ``kind`` and
+        ``eui64`` already exists, that issue's id is returned and the
+        evidence is merged via REPLACE (last-write-wins).
+        """
+        now = _utc_now()
+        evidence_json = json.dumps(evidence) if evidence is not None else None
+        with self._tx() as conn:
+            if dedupe:
+                row = conn.execute(
+                    "SELECT id FROM issues"
+                    " WHERE closed_at IS NULL AND kind = ?"
+                    " AND ((eui64 IS NULL AND ? IS NULL) OR eui64 = ?)",
+                    (kind, eui64, eui64),
+                ).fetchone()
+                if row:
+                    existing_id = int(row[0])
+                    if evidence_json is not None:
+                        conn.execute(
+                            "UPDATE issues SET evidence_json = ?, severity = ?"
+                            " WHERE id = ?",
+                            (evidence_json, severity, existing_id),
+                        )
+                    return existing_id
+            cur = conn.execute(
+                "INSERT INTO issues(opened_at, severity, kind, eui64, evidence_json)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (now, severity, kind, eui64, evidence_json),
+            )
+            return int(cur.lastrowid or 0)
+
+    def close_issue(self, issue_id: int) -> bool:
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE issues SET closed_at = ? WHERE id = ? AND closed_at IS NULL",
+                (_utc_now(), issue_id),
+            )
+            return cur.rowcount > 0
+
+    def list_active_issues(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM issues WHERE closed_at IS NULL"
+                " ORDER BY opened_at DESC, id DESC"
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            evj = d.pop("evidence_json", None)
+            if evj:
+                try:
+                    d["evidence"] = json.loads(evj)
+                except Exception:  # noqa: BLE001
+                    d["evidence"] = {"_raw": evj}
+            out.append(d)
+        return out
+
 
 def _row_to_event(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
@@ -302,3 +371,16 @@ def get_store() -> SQLiteStore:
             if _store is None:
                 _store = SQLiteStore()
     return _store
+
+
+def reset_store_for_tests(store: SQLiteStore | None = None) -> None:
+    """Replace (or clear) the process-wide store. Test-only helper."""
+    global _store
+    with _singleton_lock:
+        if _store is not None and _store is not store:
+            try:
+                _store.close()
+            except Exception:  # noqa: BLE001
+                pass
+        _store = store
+
