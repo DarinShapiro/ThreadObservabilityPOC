@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Added Supervisor-backed update lifecycle MCP tools so VS Code can drive deploys end-to-end:
+  - `ha_check_for_update` — reloads the store and reports `{current, latest, update_available, auto_update, state}`. Skips Supervisor's periodic-poll wait.
+  - `ha_update_addon` — equivalent to clicking "Update" in the HA UI.
+  - `ha_set_auto_update` — toggle Supervisor's auto-update flag (`{enabled: bool}`).
+  - `ha_reinstall_addon` — uninstall + reinstall by slug (destructive; terminates the calling process mid-flight, so a connection reset is the expected success signal).
+- Underlying `supervisor_client` gains `reload_store`, `check_for_update`, `update_addon`, `set_auto_update`, `reinstall_addon`.
+
 ## 0.4.0
 
 - Replaced the placeholder JSON root page with a live status dashboard at `/` (the Ingress entry-point)

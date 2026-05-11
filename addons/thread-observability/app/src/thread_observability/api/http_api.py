@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse
 
 from . import supervisor_client
 
-ADDON_VERSION = "0.4.0"
+ADDON_VERSION = "0.5.0"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 

@@ -141,6 +141,48 @@ TOOL_DEFS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "ha_check_for_update",
+        "description": (
+            "Force Supervisor to re-scan add-on repositories, then report current vs "
+            "latest version. Returns {current, latest, update_available, auto_update, state}. "
+            "Use right after pushing a new version bump to avoid waiting for Supervisor's "
+            "periodic poll."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ha_update_addon",
+        "description": (
+            "Update this add-on to the latest version available in the store "
+            "(equivalent to clicking 'Update' in the HA UI). Supervisor pulls the new "
+            "image / rebuilds from source and restarts. Pair with ha_check_for_update first."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "ha_set_auto_update",
+        "description": (
+            "Enable or disable Supervisor's auto-update flag for this add-on."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean", "description": "True to enable, false to disable."}
+            },
+            "required": ["enabled"],
+        },
+    },
+    {
+        "name": "ha_reinstall_addon",
+        "description": (
+            "Uninstall then reinstall this add-on from the store. Destructive: clears the "
+            "add-on container and terminates the MCP process making the call (the HTTP "
+            "response will be cut short). Treat connection-reset as expected success and "
+            "poll ha_get_addon_state afterwards."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -196,6 +238,32 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return {"action": "rebuild", "result": res, "requested_at": _utc_now()}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
+    if name == "ha_check_for_update":
+        try:
+            return await supervisor_client.check_for_update()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ha_update_addon":
+        try:
+            res = await supervisor_client.update_addon()
+            return {"action": "update", "result": res, "requested_at": _utc_now()}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ha_set_auto_update":
+        enabled = bool(arguments.get("enabled", False))
+        try:
+            res = await supervisor_client.set_auto_update(enabled)
+            return {"action": "set_auto_update", "enabled": enabled, "result": res}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "ha_reinstall_addon":
+        try:
+            res = await supervisor_client.reinstall_addon("thread-observability")
+            return {"action": "reinstall", "result": res, "requested_at": _utc_now()}
+        except Exception as exc:  # noqa: BLE001
+            # Connection reset mid-uninstall is the expected success path.
+            return {"action": "reinstall", "note": "connection terminated (expected)",
+                    "error": str(exc)}
 
     raise ValueError(f"Unknown tool: {name}")
 

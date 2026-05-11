@@ -104,3 +104,83 @@ async def restart_addon() -> dict[str, Any]:
 async def rebuild_addon() -> dict[str, Any]:
     """Rebuild this add-on from its repository source, then restart."""
     return await _post("/addons/self/rebuild")
+
+
+async def reload_store() -> dict[str, Any]:
+    """Force Supervisor to re-scan all add-on repositories.
+
+    Use this right after pushing a new version to the upstream repo so
+    Supervisor sees the new ``config.yaml`` version without waiting for its
+    next periodic poll.
+    """
+    return await _post("/store/reload")
+
+
+async def check_for_update() -> dict[str, Any]:
+    """Reload the store, then report current vs latest version for this add-on.
+
+    Returns ``{current, latest, update_available, auto_update, state}``.
+    """
+    try:
+        await reload_store()
+    except Exception:  # noqa: BLE001
+        # Store reload is best-effort; we still want the current info.
+        pass
+    info = await _get_json("/addons/self/info")
+    return {
+        "current": info.get("version"),
+        "latest": info.get("version_latest"),
+        "update_available": info.get("update_available"),
+        "auto_update": info.get("auto_update"),
+        "state": info.get("state"),
+    }
+
+
+async def update_addon() -> dict[str, Any]:
+    """Update this add-on to the latest version available in the store.
+
+    Equivalent to clicking "Update" in the HA UI. Supervisor will pull the
+    new image (or rebuild from source for local repos) and restart.
+    """
+    return await _post("/addons/self/update")
+
+
+async def set_auto_update(enabled: bool) -> dict[str, Any]:
+    """Toggle Supervisor's auto-update flag for this add-on."""
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        resp = await client.post(
+            f"{SUPERVISOR_URL}/addons/self/options",
+            headers=_headers(),
+            json={"auto_update": bool(enabled)},
+        )
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except Exception:
+            return {"status": "ok", "auto_update": bool(enabled)}
+
+
+async def reinstall_addon(slug: str) -> dict[str, Any]:
+    """Uninstall then reinstall this add-on by slug.
+
+    WARNING: this terminates the process making the call. The HTTP response
+    will be cut off mid-flight once Supervisor stops the container. Caller
+    should treat a connection-reset as the expected success signal and poll
+    ``get_addon_info`` afterwards to confirm the new install.
+    """
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # /addons/self/uninstall works while we're still running.
+        await client.post(
+            f"{SUPERVISOR_URL}/addons/self/uninstall", headers=_headers()
+        )
+        # After uninstall the "self" alias is gone; use the slug.
+        resp = await client.post(
+            f"{SUPERVISOR_URL}/store/addons/{slug}/install",
+            headers=_headers(),
+        )
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except Exception:
+            return {"status": "ok", "action": "reinstall", "slug": slug}
+
