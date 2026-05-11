@@ -22,7 +22,7 @@ from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
-ADDON_VERSION = "0.7.0"
+ADDON_VERSION = "0.7.1"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 

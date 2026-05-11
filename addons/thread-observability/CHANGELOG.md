@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1 — dev-loop: enable admin role
+
+- Bumped `hassio_role` from `manager` to `admin` so `ha_update_addon` can call `POST /store/addons/{slug}/update` (Supervisor returns 403 for `manager`). This unblocks fully-automated MCP deploys.
+  - **One-time UI step required**: click Update once in the HA add-on UI to install 0.7.1 with the new role. After that, future versions deploy via `ha_update_addon` end-to-end.
+
 ## 0.7.0 — Phase 2 (part 1): topology engine + deterministic reasoner
 
 - **Topology graph engine** (`pipeline/topology.py`): builds node/link snapshot from the SQLite event log; infers current parent edges from the latest `attach` / `parent_change` event per node within a configurable freshness window; surfaces last RSSI/LQI per node.
