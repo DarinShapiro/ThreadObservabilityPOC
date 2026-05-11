@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Migrated from legacy services.d to native s6-overlay v3 s6-rc.d service format
+- Eliminates s6-overlay-suexec PID 1 fatal crash on service startup
+
 ## 0.1.2
 
 - Fixed s6-overlay v3 compatibility by replacing with-contenv shebang with plain bash in all service scripts
