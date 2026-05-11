@@ -11,7 +11,8 @@ dependencies = [
   "fastapi>=0.111",
   "uvicorn>=0.30",
   "pydantic>=2.7",
-  "httpx>=0.27"
+  "httpx>=0.27",
+  "websockets>=12.0"
 ]
 
 [project.optional-dependencies]

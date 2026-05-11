@@ -23,14 +23,20 @@ log = logging.getLogger(__name__)
 HA_CONFIG_DIR = Path(os.getenv("HA_CONFIG_DIR", "/config"))
 DEVICE_REGISTRY_PATH = HA_CONFIG_DIR / ".storage" / "core.device_registry"
 
-# Matter server stores per-node operational data; we use it to bridge
-# Matter node_id (present in HA device registry as an identifier) to the
-# Thread EUI64 we extract from OTBR. Paths vary by HA version; we try several.
-MATTER_STORAGE_CANDIDATES = [
-    HA_CONFIG_DIR / "matter_server" / "server.json",
-    HA_CONFIG_DIR / "matter_server" / "server_storage.json",
-    HA_CONFIG_DIR / ".storage" / "core.matter_server",
-]
+# Matter server WebSocket endpoint. We query it to bridge Matter node_id
+# (present in HA device registry as an identifier) to the Thread EUI64
+# we extract from OTBR. Inside the HA stack, the matter_server addon is
+# reachable by hostname; allow override for tests / non-default deployments.
+MATTER_WS_URL = os.getenv(
+    "MATTER_WS_URL",
+    "ws://core-matter-server:5580/ws",
+)
+MATTER_WS_TIMEOUT = float(os.getenv("MATTER_WS_TIMEOUT", "5.0"))
+
+# Matter General Diagnostics cluster id (0x0033 = 51), NetworkInterfaces
+# attribute (0x0000 = 0). python-matter-server keys attribute values as
+# "<endpoint>/<cluster>/<attribute>" strings.
+_MATTER_GENERAL_DIAG_NETIF_KEY = "0/51/0"
 
 # Thread-only connection types (we intentionally do NOT include zigbee here).
 _THREAD_CONN_TYPES = ("thread", "ieee802154")
@@ -75,67 +81,137 @@ def _extract_matter_node_id(value: str) -> str | None:
 
 
 def _load_matter_node_bridge() -> dict[str, str]:
-    """Load a Matter node_id -> Thread EUI64 mapping from matter-server storage.
+    """Synchronous shim over the async WebSocket bridge.
 
-    Matter server persists per-node operational data including the device's
-    Thread/IPv6 addresses. We parse known storage locations defensively; any
-    parse failure returns an empty mapping (callers degrade gracefully).
+    Used from sync test paths; in the live async pipeline we call
+    ``_load_matter_node_bridge_async`` directly to avoid nested loops.
     """
-    bridge: dict[str, str] = {}
-    for path in MATTER_STORAGE_CANDIDATES:
-        try:
-            if not path.exists():
-                continue
-            with open(path, "r") as f:
-                data = json.load(f)
-        except Exception as exc:  # noqa: BLE001
-            log.debug("Matter storage %s unreadable: %s", path, exc)
-            continue
-        nodes_blob = data.get("nodes") if isinstance(data, dict) else None
-        if not isinstance(nodes_blob, dict):
-            # HA core storage wraps payload under data.* sometimes
-            nodes_blob = (
-                (data.get("data") or {}).get("nodes")
-                if isinstance(data, dict)
-                else None
-            )
-        if not isinstance(nodes_blob, dict):
-            continue
-        for node_id, node in nodes_blob.items():
-            if not isinstance(node, dict):
-                continue
-            # Try common spots for an EUI64 / extended address.
-            ext = (
-                node.get("extended_address")
-                or node.get("extendedAddress")
-                or (node.get("thread") or {}).get("extended_address")
-                or (node.get("network") or {}).get("extended_address")
-            )
-            if ext:
+    try:
+        return asyncio.run(_load_matter_node_bridge_async())
+    except RuntimeError:
+        # Already inside a running loop; caller should use the async variant.
+        return {}
+
+
+def _hardware_address_to_eui64(raw: Any) -> str | None:
+    """Convert a Matter ``HardwareAddress`` octet-string to a 16-hex EUI64.
+
+    python-matter-server typically delivers octet strings as base64 strings or
+    as a list of byte integers. We accept both, plus already-hex strings, and
+    return ``None`` for anything that does not look like a 64-bit MAC.
+    """
+    import base64
+    import binascii
+
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, (bytes, bytearray)):
+            data = bytes(raw)
+        elif isinstance(raw, list):
+            data = bytes(int(b) & 0xFF for b in raw)
+        elif isinstance(raw, str):
+            stripped = raw.replace(":", "").replace("-", "").strip()
+            if stripped.lower().startswith("0x"):
+                stripped = stripped[2:]
+            if (
+                len(stripped) in (12, 16)
+                and all(c in "0123456789abcdefABCDEF" for c in stripped)
+            ):
+                data = bytes.fromhex(stripped)
+            else:
                 try:
-                    bridge[str(node_id)] = _normalize_ieee(str(ext))
-                    continue
-                except Exception:  # noqa: BLE001
+                    data = base64.b64decode(raw, validate=True)
+                except (binascii.Error, ValueError):
+                    return None
+        else:
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    if len(data) == 8:
+        return data.hex().lower()
+    if len(data) == 6:
+        # 48-bit MAC; not an EUI64 but caller may still want to record it.
+        return None
+    return None
+
+
+async def _load_matter_node_bridge_async() -> dict[str, str]:
+    """Build a Matter ``node_id`` -> Thread EUI64 mapping via matter-server WS.
+
+    Connects to the matter_server addon's WebSocket API and issues a
+    ``get_nodes`` command. For each returned node, we look at the General
+    Diagnostics cluster's ``NetworkInterfaces`` attribute and extract the
+    Thread interface's ``HardwareAddress`` (8-byte EUI64).
+
+    Any failure (matter_server not installed, WS unreachable, schema drift)
+    returns an empty mapping so discovery degrades gracefully.
+    """
+    try:
+        import websockets  # type: ignore[import-not-found]
+    except ImportError:
+        log.debug("websockets package not installed; skipping Matter bridge")
+        return {}
+
+    bridge: dict[str, str] = {}
+    try:
+        async with asyncio.timeout(MATTER_WS_TIMEOUT):
+            async with websockets.connect(MATTER_WS_URL) as ws:
+                # Server sends a ServerInfoMessage on connect; drain it.
+                try:
+                    await asyncio.wait_for(ws.recv(), timeout=2.0)
+                except asyncio.TimeoutError:
                     pass
-            # Fallback: derive EUI64 from an operational mesh-local IPv6 IID.
-            addrs = (
-                node.get("ip_addresses")
-                or node.get("addresses")
-                or (node.get("thread") or {}).get("addresses")
-                or []
+                req = json.dumps({
+                    "message_id": "thread-obs-get-nodes",
+                    "command": "get_nodes",
+                })
+                await ws.send(req)
+                raw = await ws.recv()
+                payload = json.loads(raw)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("Matter WS bridge unavailable (%s): %s", MATTER_WS_URL, exc)
+        return {}
+
+    nodes = payload.get("result") if isinstance(payload, dict) else None
+    if not isinstance(nodes, list):
+        log.debug("Matter WS get_nodes returned unexpected shape: %r", type(payload))
+        return {}
+
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("node_id")
+        if node_id is None:
+            continue
+        attrs = node.get("attributes") or {}
+        netifs = attrs.get(_MATTER_GENERAL_DIAG_NETIF_KEY)
+        if not isinstance(netifs, list):
+            continue
+        for iface in netifs:
+            if not isinstance(iface, dict):
+                continue
+            # Prefer the Thread interface when the type field is present.
+            hw = (
+                iface.get("HardwareAddress")
+                or iface.get("hardwareAddress")
+                or iface.get("hardware_address")
             )
-            if isinstance(addrs, list):
-                for addr in addrs:
-                    eui = _eui64_from_ipv6(str(addr))
-                    if eui:
-                        bridge[str(node_id)] = eui
-                        break
-        if bridge:
-            log.debug(
-                "Loaded Matter bridge from %s (%d entries)",
-                path, len(bridge),
-            )
-            break
+            eui = _hardware_address_to_eui64(hw)
+            if eui:
+                bridge[str(node_id)] = eui
+                break
+
+    if bridge:
+        log.debug(
+            "Loaded Matter bridge from %s (%d entries)",
+            MATTER_WS_URL, len(bridge),
+        )
+    else:
+        log.debug(
+            "Matter WS bridge returned 0 entries from %d nodes",
+            len(nodes),
+        )
     return bridge
 
 
@@ -262,8 +338,8 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
                     node_id, dev.get("name_by_user") or dev.get("name"),
                 )
     if registry_by_matter_node:
-        # Bridge Matter node_id -> EUI64 using matter-server storage.
-        bridge = _load_matter_node_bridge()
+        # Bridge Matter node_id -> EUI64 via matter-server WebSocket API.
+        bridge = await _load_matter_node_bridge_async()
         for node_id, meta in registry_by_matter_node.items():
             eui = bridge.get(node_id)
             if eui:

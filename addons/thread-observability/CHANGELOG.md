@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.7 — Thread-only matching + Matter node_id WS bridge
+
+- Restrict device registry matching to Thread connection types (`thread`, `ieee802154`); no longer match zigbee
+- Capture Matter-identifier devices from HA registry and bridge `node_id` → Thread EUI64 via matter-server WebSocket API (`get_nodes`, General Diagnostics `NetworkInterfaces.HardwareAddress`)
+- Degrades gracefully when matter-server is absent or unreachable
+- Adds `websockets>=12.0` dependency
+
 ## 0.9.6 — OTBR-based device discovery with HA device registry merge
 
 - Rewrote device discovery to query OTBR `/api/topology` endpoint as authoritative source for Thread nodes
