@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.10 — Thread Network Diagnostics ExtAddress as primary EUI64 source
+
+- Prefer Matter Thread Network Diagnostics ExtAddress attribute (cluster 0x35 / attribute 0x0F) as primary EUI64 source
+- Scan all endpoints (not just endpoint 0); some Matter Thread devices expose Thread diagnostics on non-root endpoints
+- Keep General Diagnostics NetworkInterfaces as fallback, dump one sample's payload to help confirm schema
+
 ## 0.9.9 — Matter WS bridge diagnostics
 
 - Log Matter WS connect status, server_info banner, node count, and sample node schema at INFO level

@@ -37,6 +37,9 @@ MATTER_WS_TIMEOUT = float(os.getenv("MATTER_WS_TIMEOUT", "5.0"))
 # attribute (0x0000 = 0). python-matter-server keys attribute values as
 # "<endpoint>/<cluster>/<attribute>" strings.
 _MATTER_GENERAL_DIAG_NETIF_KEY = "0/51/0"
+# Matter Thread Network Diagnostics cluster id (0x0035 = 53), ExtAddress
+# attribute (0x000F = 15) — defined as the 8-byte Thread EUI64.
+_MATTER_THREAD_DIAG_EXTADDR_SUFFIX = "/53/15"
 
 # Thread-only connection types (we intentionally do NOT include zigbee here).
 _THREAD_CONN_TYPES = ("thread", "ieee802154")
@@ -206,14 +209,17 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
     if nodes:
         sample = nodes[0] if isinstance(nodes[0], dict) else {}
         sample_attrs = sample.get("attributes") or {}
-        attr_keys = list(sample_attrs.keys())[:20] if isinstance(sample_attrs, dict) else []
+        all_keys = list(sample_attrs.keys()) if isinstance(sample_attrs, dict) else []
+        diag_keys = [k for k in all_keys if "/51/" in k or "/53/" in k]
         log.info(
-            "Matter bridge: sample node_id=%s top_keys=%s attr_key_sample=%s",
+            "Matter bridge: sample node_id=%s top_keys=%s total_attrs=%d diag_keys=%s",
             sample.get("node_id"),
             list(sample.keys())[:15],
-            attr_keys,
+            len(all_keys),
+            diag_keys[:20],
         )
 
+    dumped_sample = False
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -221,26 +227,51 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
         if node_id is None:
             continue
         attrs = node.get("attributes") or {}
-        netifs = attrs.get(_MATTER_GENERAL_DIAG_NETIF_KEY)
-        if not isinstance(netifs, list):
+        if not isinstance(attrs, dict):
             continue
-        for iface in netifs:
-            if not isinstance(iface, dict):
-                continue
-            # Prefer the Thread interface when the type field is present.
-            hw = (
-                iface.get("HardwareAddress")
-                or iface.get("hardwareAddress")
-                or iface.get("hardware_address")
-            )
-            eui = _hardware_address_to_eui64(hw)
-            if eui:
-                bridge[str(node_id)] = eui
-                break
+
+        eui: str | None = None
+
+        # Preferred path: Thread Network Diagnostics ExtAddress (any endpoint).
+        for key, value in attrs.items():
+            if key.endswith(_MATTER_THREAD_DIAG_EXTADDR_SUFFIX):
+                eui = _hardware_address_to_eui64(value)
+                if eui:
+                    break
+
+        # Fallback path: General Diagnostics NetworkInterfaces -> Thread iface HW addr.
+        if not eui:
+            for key, value in attrs.items():
+                if not key.endswith("/51/0"):
+                    continue
+                if not isinstance(value, list):
+                    continue
+                if not dumped_sample:
+                    log.info(
+                        "Matter bridge: NetworkInterfaces sample for node_id=%s: %s",
+                        node_id, json.dumps(value, default=str)[:600],
+                    )
+                    dumped_sample = True
+                for iface in value:
+                    if not isinstance(iface, dict):
+                        continue
+                    hw = (
+                        iface.get("HardwareAddress")
+                        or iface.get("hardwareAddress")
+                        or iface.get("hardware_address")
+                    )
+                    eui = _hardware_address_to_eui64(hw)
+                    if eui:
+                        break
+                if eui:
+                    break
+
+        if eui:
+            bridge[str(node_id)] = eui
 
     log.info(
-        "Matter bridge: extracted %d EUI64 mappings from %d nodes (key=%s)",
-        len(bridge), len(nodes), _MATTER_GENERAL_DIAG_NETIF_KEY,
+        "Matter bridge: extracted %d EUI64 mappings from %d nodes",
+        len(bridge), len(nodes),
     )
     return bridge
 
