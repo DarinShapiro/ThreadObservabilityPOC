@@ -14,8 +14,11 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
 from . import supervisor_client
+from ..config import get_config
+from ..storage import influx_store as ts_store
+from ..storage.sqlite_store import get_store
 
-ADDON_VERSION = "0.5.0"
+ADDON_VERSION = "0.6.0"
 LOG_PATH = Path("/data/thread-observability/addon.log")
 
 
@@ -104,6 +107,11 @@ DASHBOARD_HTML = """<!doctype html>
       <div class="muted" style="margin-top:.5rem">Ingestion not yet implemented &mdash; values populate when collectors come online.</div>
     </div>
 
+    <div class="card">
+      <div class="row"><h2>Storage</h2><span id="store-pill" class="pill warn">loading</span></div>
+      <dl class="kv" id="store-kv"></dl>
+    </div>
+
     <div class="card wide">
       <div class="row">
         <h2>Recent logs</h2>
@@ -186,6 +194,25 @@ async function refresh() {
 
     document.getElementById('logs').textContent =
       (s.recent_logs || []).join('\\n') || '(no log entries yet)';
+
+    const st = s.storage || {};
+    const ts = s.timeseries || {};
+    if (st.error) {
+      setPill(document.getElementById('store-pill'), 'err', 'error');
+      fmtKV(document.getElementById('store-kv'), {error: st.error});
+    } else {
+      const rc = st.row_counts || {};
+      const sizeKB = ((st.size_bytes || 0) / 1024).toFixed(1) + ' KB';
+      setPill(document.getElementById('store-pill'), 'ok',
+              'schema v' + (st.schema_version ?? '?'));
+      fmtKV(document.getElementById('store-kv'), {
+        db_path: st.db_path,
+        size: sizeKB,
+        nodes: rc.nodes, events: rc.events, issues: rc.issues,
+        timeseries: ts.backend || '?',
+        newest_event: st.events_newest || '—',
+      });
+    }
   } catch (e) {
     document.getElementById('logs').textContent = 'Error: ' + e.message;
   }
@@ -238,6 +265,20 @@ def create_core_app() -> FastAPI:
             sup: dict[str, object] = await supervisor_client.get_addon_info()
         except Exception as exc:  # noqa: BLE001
             sup = {"error": str(exc)}
+        try:
+            storage = get_store().stats()
+        except Exception as exc:  # noqa: BLE001
+            storage = {"error": str(exc)}
+        try:
+            ts_health = await ts_store.timeseries_health()
+        except Exception as exc:  # noqa: BLE001
+            ts_health = {"backend": "unknown", "error": str(exc)}
+        try:
+            cfg = get_config().model_dump()
+            if cfg.get("influx", {}).get("token"):
+                cfg["influx"]["token"] = "***"
+        except Exception as exc:  # noqa: BLE001
+            cfg = {"error": str(exc)}
         return {
             "addon_version": ADDON_VERSION,
             "checked_at": _utc_now(),
@@ -246,6 +287,9 @@ def create_core_app() -> FastAPI:
             "issues": list_active_issues(),
             "topology": topology_snapshot(),
             "recent_logs": _tail_log(80),
+            "storage": storage,
+            "timeseries": ts_health,
+            "config": cfg,
         }
 
     @app.get("/v1/dev/mcp-health")

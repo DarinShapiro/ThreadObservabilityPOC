@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0 — Phase 1: storage + config foundation
+
+- **SQLite store** (`storage/sqlite_store.py`) with migration-versioned schema:
+  - `nodes`, `events`, `issues`, `metadata_cache`, `ingest_state`, `schema_version`
+  - WAL mode, NORMAL sync, indexed lookups on `events(eui64, ts)` / `events(type, ts)` / `issues(closed_at, severity)`
+  - DB at `/data/thread-observability/state.db`; process-wide singleton via `get_store()`
+- **Time-series backend** (`storage/influx_store.py`) with automatic fallback:
+  - `InfluxDBStore` writes line-protocol to InfluxDB v2 (Flux queries supported)
+  - `SQLiteFallbackStore` persists numeric samples into the main SQLite DB when Influx isn’t configured / reachable
+  - `get_timeseries_store()` selects automatically based on `INFLUX_TOKEN` / health probe
+- **Typed config loader** (`config.py`) reading `/data/options.json` with Pydantic models:
+  - `ThreadObsConfig` with `retention`, `ai`, `scheduler`, `influx` sub-models
+  - Process-wide cached via `get_config()`; `reload_config()` clears the cache
+- **New MCP tools:**
+  - `get_storage_stats` — SQLite stats + active time-series backend
+  - `query_events` — filter by `eui64`, `event_type`, `since`, `limit`
+  - `insert_test_event` — dev seed for verifying end-to-end
+  - `get_config` — typed config payload (influx token redacted)
+  - `get_timeseries_health` — probe Influx / fallback
+- **Dashboard:** new “Storage” card showing schema version, DB size, row counts, active TS backend, newest event; `/v1/dev/status` now includes `storage`, `timeseries`, `config`
+
 ## 0.5.0
 
 - Added Supervisor-backed update lifecycle MCP tools so VS Code can drive deploys end-to-end:

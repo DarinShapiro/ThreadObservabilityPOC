@@ -12,6 +12,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import supervisor_client
+from ..config import get_config
+from ..storage import influx_store as ts_store
+from ..storage.sqlite_store import get_store
 
 MCP_PROTOCOL_VERSION = "2024-11-05"
 LOG_PATH = Path(os.getenv("THREAD_OBS_LOG_FILE", "/data/thread-observability/addon.log"))
@@ -183,6 +186,59 @@ TOOL_DEFS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    {
+        "name": "get_storage_stats",
+        "description": (
+            "Return SQLite store stats (schema version, file size, row counts per table, "
+            "oldest/newest event timestamps) plus the active time-series backend."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "query_events",
+        "description": (
+            "Return canonical events from the SQLite event log, newest first. "
+            "Optional filters: eui64, event_type, since (ISO-8601 timestamp). "
+            "Use to verify ingestion or to drill into a specific node's recent activity."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64":      {"type": "string"},
+                "event_type": {"type": "string"},
+                "since":      {"type": "string", "description": "ISO-8601 timestamp"},
+                "limit":      {"type": "integer", "default": 100, "minimum": 1, "maximum": 1000},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "insert_test_event",
+        "description": (
+            "DEV: insert a synthetic canonical event into the SQLite store. Used to "
+            "verify the storage layer end-to-end before real ingestion lands."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {"type": "string", "default": "0000000000000001"},
+                "type":  {"type": "string", "default": "attach"},
+                "rssi":  {"type": "integer"},
+                "lqi":   {"type": "integer"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "get_config",
+        "description": "Return the typed add-on configuration (merged from /data/options.json plus env overrides).",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_timeseries_health",
+        "description": "Probe the time-series backend (Influx if configured, else SQLite fallback) and return status.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -264,6 +320,56 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             # Connection reset mid-uninstall is the expected success path.
             return {"action": "reinstall", "note": "connection terminated (expected)",
                     "error": str(exc)}
+
+    # ---- Storage / config tools (Phase 1) ---------------------------------
+    if name == "get_storage_stats":
+        try:
+            stats = get_store().stats()
+            try:
+                ts_health = await ts_store.timeseries_health()
+            except Exception as exc:  # noqa: BLE001
+                ts_health = {"backend": "unknown", "error": str(exc)}
+            return {"sqlite": stats, "timeseries": ts_health}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "query_events":
+        try:
+            events = get_store().query_events(
+                eui64=arguments.get("eui64"),
+                event_type=arguments.get("event_type"),
+                since=arguments.get("since"),
+                limit=int(arguments.get("limit", 100)),
+            )
+            return {"events": events, "count": len(events)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "insert_test_event":
+        try:
+            eid = get_store().insert_event(
+                eui64=arguments.get("eui64", "0000000000000001"),
+                type=arguments.get("type", "attach"),
+                rssi=arguments.get("rssi"),
+                lqi=arguments.get("lqi"),
+                payload={"source": "insert_test_event"},
+            )
+            return {"inserted_event_id": eid, "at": _utc_now()}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_config":
+        try:
+            cfg = get_config()
+            # Avoid leaking the influx token in MCP output.
+            payload = cfg.model_dump()
+            if payload.get("influx", {}).get("token"):
+                payload["influx"]["token"] = "***"
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_timeseries_health":
+        try:
+            return await ts_store.timeseries_health()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     raise ValueError(f"Unknown tool: {name}")
 
