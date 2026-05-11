@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 SUPERVISOR_URL = os.getenv("SUPERVISOR_URL", "http://supervisor")
 SUPERVISOR_TOKEN_ENV = "SUPERVISOR_TOKEN"
 DEFAULT_TIMEOUT = 10.0
+HA_REST_URL = os.getenv("HA_REST_URL", "http://localhost:8123")  # Direct HA REST API
 
 
 def _token() -> str:
@@ -55,25 +56,41 @@ def _normalize_ieee(ieee_str: str) -> str:
 
 
 async def fetch_device_registry() -> list[dict[str, Any]]:
-    """Fetch the device registry from Home Assistant."""
+    """Fetch the device registry from Home Assistant.
+    
+    Tries multiple endpoints:
+    1. /api/core/config/device_registry/list (HA 2024.x+)
+    2. /config/device_registry/list (Supervisor routing)
+    3. /api/config/entities (fallback to entity registry)
+    """
+    endpoints = [
+        f"{SUPERVISOR_URL}/api/core/config/device_registry/list",
+        f"{SUPERVISOR_URL}/config/device_registry/list",
+        f"{SUPERVISOR_URL}/api/config/entities",
+    ]
+    
     try:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(
-                f"{SUPERVISOR_URL}/api/config/device_registry",
-                headers=_headers(),
-            )
-            resp.raise_for_status()
-            payload = resp.json()
+            for endpoint in endpoints:
+                try:
+                    resp = await client.get(endpoint, headers=_headers())
+                    if resp.status_code == 200:
+                        payload = resp.json()
+                        log.debug("Device registry fetch succeeded at %s", endpoint)
+                        # The response is typically {"devices": [...]} or a list directly
+                        if isinstance(payload, dict):
+                            devices = payload.get("devices", [])
+                        else:
+                            devices = payload if isinstance(payload, list) else []
+                        return devices
+                except Exception as exc:
+                    log.debug("Endpoint %s failed: %s", endpoint, exc)
+                    continue
+        log.warning("All device registry endpoints failed")
+        return []
     except Exception as exc:
         log.warning("Failed to fetch device registry: %s", exc)
         return []
-
-    # The response is typically {"devices": [...]} or a list directly
-    if isinstance(payload, dict):
-        devices = payload.get("devices", [])
-    else:
-        devices = payload if isinstance(payload, list) else []
-    return devices
 
 
 def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
