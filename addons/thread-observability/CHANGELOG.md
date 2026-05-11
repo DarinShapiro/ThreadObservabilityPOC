@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed s6-overlay v3 compatibility by replacing with-contenv shebang with plain bash in all service scripts
+
 ## 0.1.1
 
 - Fixed container startup by ensuring s6 scripts are LF-normalized and executable

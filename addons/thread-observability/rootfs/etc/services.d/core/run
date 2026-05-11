@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/bin/bash
 set -e
 
 exec python3 -m thread_observability.main --service core
