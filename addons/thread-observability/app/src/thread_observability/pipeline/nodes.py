@@ -198,6 +198,101 @@ def _build_router_peers(s: SQLiteStore) -> dict[str, list[str]]:
     return out
 
 
+def _build_next_hop_to_otbr(
+    s: SQLiteStore,
+    nodes: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Compute each router's next-hop on the path toward the OTBR.
+
+    For every router in the OTBR's partition we look at its route_table row
+    pointing at the OTBR's EUI. That row has:
+      - ``path_cost``: total cost to reach the OTBR
+      - ``next_hop_router_id``: the directly-meshed peer to forward through
+
+    Returns ``{reporter_eui: {"eui64", "name", "router_id", "path_cost",
+    "is_direct"}}``. Direct-neighbor cases (next-hop == OTBR itself) are
+    flagged with ``is_direct=True``.
+
+    Missing prerequisites (no OTBR known, no router_id mapping) yield an
+    empty dict — caller treats that as "next-hop view not available yet".
+    """
+    # Locate the OTBR.
+    otbr = next(
+        (n for n in nodes
+         if n.get("role") == "border_router" and n.get("eui64") and n.get("partition_id") is not None),
+        None,
+    )
+    if not otbr:
+        return {}
+    otbr_eui = otbr["eui64"]
+    otbr_partition = otbr["partition_id"]
+    otbr_router_id = otbr.get("router_id")
+
+    # Build router_id -> (eui64, friendly_name) for this partition.
+    router_by_id: dict[int, tuple[str, str | None]] = {}
+    for n in nodes:
+        if n.get("partition_id") != otbr_partition:
+            continue
+        rid = n.get("router_id")
+        eui = n.get("eui64")
+        if rid is None or not eui:
+            continue
+        router_by_id[int(rid)] = (eui, n.get("friendly_name") or get_node_display_name(n))
+
+    # Pull the route_table rows pointing at the OTBR.
+    with s._lock:  # noqa: SLF001
+        rows = s._conn.execute(  # noqa: SLF001
+            "SELECT reporter_eui64, path_cost, next_hop_router_id FROM links"
+            " WHERE source = 'route_table' AND neighbor_eui64 = ?",
+            (otbr_eui,),
+        ).fetchall()
+
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        reporter = r["reporter_eui64"]
+        if not reporter or reporter == otbr_eui:
+            continue
+        next_hop_rid = r["next_hop_router_id"]
+        path_cost = r["path_cost"]
+        # Per Thread spec, NextHop == own RouterId means the destination is a
+        # direct neighbor (no forwarding needed). NextHop == 63 (0x3F) means
+        # "no route". Both cases collapse to "direct to OTBR" or "unknown".
+        direct = False
+        target_eui: str | None = None
+        target_name: str | None = None
+        target_rid: int | None = None
+        if next_hop_rid is None or next_hop_rid == 63:
+            # No NextHop recorded — treat as direct to OTBR if the row exists
+            # at all (reporter has OTBR in its route table).
+            direct = True
+            target_eui = otbr_eui
+            target_name = otbr.get("friendly_name") or otbr.get("display_name")
+            target_rid = otbr_router_id if otbr_router_id is not None else None
+        else:
+            # If NextHop equals OTBR's RouterId, this reporter is a direct peer.
+            if otbr_router_id is not None and int(next_hop_rid) == int(otbr_router_id):
+                direct = True
+                target_eui = otbr_eui
+                target_name = otbr.get("friendly_name") or otbr.get("display_name")
+                target_rid = int(otbr_router_id)
+            else:
+                resolved = router_by_id.get(int(next_hop_rid))
+                if resolved:
+                    target_eui, target_name = resolved
+                    target_rid = int(next_hop_rid)
+                else:
+                    # Unknown next-hop router (we haven't seen its router_id yet).
+                    target_rid = int(next_hop_rid)
+        out[reporter] = {
+            "eui64": target_eui,
+            "name": target_name,
+            "router_id": target_rid,
+            "path_cost": int(path_cost) if path_cost is not None else None,
+            "is_direct": direct,
+        }
+    return out
+
+
 def list_nodes_enriched(
     store: SQLiteStore | None = None,
     include_signal_strength: bool = False,
@@ -218,6 +313,8 @@ def list_nodes_enriched(
     for n in nodes:
         if n.get("routing_role") == "leader" and n.get("partition_id") is not None and n.get("eui64"):
             leader_by_partition[n["partition_id"]] = n["eui64"]
+    # Next-hop to OTBR per router. Empty dict if OTBR isn't ingested yet.
+    next_hop_map = _build_next_hop_to_otbr(s, nodes)
     out: list[dict[str, Any]] = []
     for node in nodes:
         if not include_phantoms and node.get("is_phantom"):
@@ -244,6 +341,7 @@ def list_nodes_enriched(
             "partition_id": partition_id,
             "partition_leader_eui64": leader_eui,
             "partition_leader_name": name_by_eui.get(leader_eui) if leader_eui else None,
+            "router_id": node.get("router_id"),
             "router_peer_count": peer_counts.get(eui, 0) if eui else 0,
             "router_peers": [
                 {"eui64": p, "name": name_by_eui.get(p)}
@@ -251,6 +349,7 @@ def list_nodes_enriched(
             ] if eui else [],
             "parent_eui64": parent_eui,
             "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
+            "next_hop_to_otbr": next_hop_map.get(eui) if eui else None,
         }
         if include_signal_strength and eui:
             summary["signal_strength"] = get_latest_signal_strength(eui, store=s)

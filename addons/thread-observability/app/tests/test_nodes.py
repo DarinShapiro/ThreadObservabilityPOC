@@ -75,3 +75,86 @@ def test_get_latest_signal_strength(store) -> None:
     assert strength["lqi"] == 180
     assert strength["rssi_avg"] in (-67, -68)  # average of -65 and -70
     assert strength["lqi_avg"] == 190  # average of 200 and 180
+
+
+def _setup_three_router_partition(store) -> tuple[str, str, str]:
+    """Set up an OTBR + two routers in one partition with route-table links.
+
+    Topology: OTBR (router_id=1) ←direct→ Router B (router_id=5) ←→ Router C
+    (router_id=12). Router C's only path to the OTBR is *through* Router B.
+    Returns ``(otbr_eui, b_eui, c_eui)``.
+    """
+    otbr = "aaaaaaaaaaaaaaaa"
+    rb = "bbbbbbbbbbbbbbbb"
+    rc = "cccccccccccccccc"
+    partition = 0xABCDEF01
+
+    store.upsert_node_metadata(eui64=otbr, friendly_name="HA Yellow OTBR", role="border_router")
+    store.upsert_node_metadata(eui64=rb, friendly_name="Router B")
+    store.upsert_node_metadata(eui64=rc, friendly_name="Router C")
+
+    store.set_node_diagnostics(otbr, partition_id=partition, routing_role="leader")
+    store.set_node_diagnostics(rb, partition_id=partition, routing_role="router")
+    store.set_node_diagnostics(rc, partition_id=partition, routing_role="router")
+
+    store.set_node_router_id(otbr, 1)
+    store.set_node_router_id(rb, 5)
+    store.set_node_router_id(rc, 12)
+
+    # Router B has the OTBR as a direct neighbor (next_hop_router_id == OTBR's id).
+    store.replace_links_for_reporter(rb, "route_table", [
+        {"neighbor_eui64": otbr, "path_cost": 1, "next_hop_router_id": 1, "router_id": 1},
+        {"neighbor_eui64": rb,   "path_cost": 0, "next_hop_router_id": 5, "router_id": 5},
+        {"neighbor_eui64": rc,   "path_cost": 1, "next_hop_router_id": 12, "router_id": 12},
+    ])
+    # Router C must forward through Router B to reach the OTBR.
+    store.replace_links_for_reporter(rc, "route_table", [
+        {"neighbor_eui64": otbr, "path_cost": 2, "next_hop_router_id": 5, "router_id": 1},
+        {"neighbor_eui64": rb,   "path_cost": 1, "next_hop_router_id": 5, "router_id": 5},
+        {"neighbor_eui64": rc,   "path_cost": 0, "next_hop_router_id": 12, "router_id": 12},
+    ])
+    return otbr, rb, rc
+
+
+def test_next_hop_to_otbr_direct_neighbor(store) -> None:
+    otbr, rb, _ = _setup_three_router_partition(store)
+    enriched = {n["eui64"]: n for n in nodes.list_nodes_enriched(store=store)}
+    hop = enriched[rb]["next_hop_to_otbr"]
+    assert hop is not None
+    assert hop["is_direct"] is True
+    assert hop["eui64"] == otbr
+    assert hop["name"] == "HA Yellow OTBR"
+    assert hop["path_cost"] == 1
+
+
+def test_next_hop_to_otbr_multi_hop(store) -> None:
+    _, rb, rc = _setup_three_router_partition(store)
+    enriched = {n["eui64"]: n for n in nodes.list_nodes_enriched(store=store)}
+    hop = enriched[rc]["next_hop_to_otbr"]
+    assert hop is not None
+    assert hop["is_direct"] is False
+    # Router C forwards through Router B (router_id=5).
+    assert hop["eui64"] == rb
+    assert hop["name"] == "Router B"
+    assert hop["router_id"] == 5
+    assert hop["path_cost"] == 2
+
+
+def test_next_hop_to_otbr_absent_when_no_border_router(store) -> None:
+    # Two routers, no border_router role anywhere → next-hop view is N/A.
+    store.upsert_node_metadata(eui64="1111111111111111", friendly_name="R1")
+    store.upsert_node_metadata(eui64="2222222222222222", friendly_name="R2")
+    store.set_node_diagnostics("1111111111111111", routing_role="router", partition_id=1)
+    store.set_node_diagnostics("2222222222222222", routing_role="router", partition_id=1)
+
+    enriched = nodes.list_nodes_enriched(store=store)
+    for n in enriched:
+        assert n["next_hop_to_otbr"] is None
+
+
+def test_otbr_node_itself_has_no_next_hop(store) -> None:
+    otbr, _, _ = _setup_three_router_partition(store)
+    enriched = {n["eui64"]: n for n in nodes.list_nodes_enriched(store=store)}
+    # The OTBR doesn't forward to itself.
+    assert enriched[otbr]["next_hop_to_otbr"] is None
+

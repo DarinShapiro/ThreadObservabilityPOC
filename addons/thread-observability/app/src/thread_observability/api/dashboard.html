@@ -173,8 +173,9 @@
         (elects Router IDs, maintains Network Data) — <b>not</b> a forwarding hop;
         packets do not have to traverse it. Router/REED = mesh peer (no parent,
         forwards per its RouteTable). End device / Sleepy end = attached to one
-        parent router (shown as <code>via …</code>). Next-hop / path-to-OTBR view
-        coming once OTBR ingestion lands.</span>
+        parent router (shown as <code>via …</code>). <b>→ OTBR via X (cost N)</b>
+        shows each router's next forwarding hop on the path to the border router,
+        derived from its RouteTable.</span>
       </div>
     </div>
   </section>
@@ -304,6 +305,18 @@ function roleBadge(node) {
   const cls = isLeader ? 'role-leader' : ('role-' + k);
   return '<span class="pill ' + cls + '">' + label + '</span>';
 }
+function renderNextHop(node) {
+  // Caption showing the forwarding path toward the OTBR. Empty string when
+  // OTBR ingestion hasn't populated next-hop data for this router yet.
+  const nh = node.next_hop_to_otbr;
+  if (!nh || !nh.eui64) return '';
+  const target = nh.name || nh.eui64.slice(-4).toUpperCase();
+  const cost = nh.path_cost != null ? ' (cost ' + nh.path_cost + ')' : '';
+  if (nh.is_direct) {
+    return '<span class="parent-hint">→ OTBR direct' + cost + '</span>';
+  }
+  return '<span class="parent-hint">→ OTBR via ' + target + cost + '</span>';
+}
 function roleColorForGraph(node) {
   if (node.is_phantom) return '#475569';
   if (node.routing_role === 'leader') return '#dc2626';
@@ -421,10 +434,12 @@ function renderNodesTable(nodes) {
       if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers · control-plane only</span>';
       const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
       if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';
+      if (n.role === 'border_router') roleHtml += '<span class="parent-hint">this is the Thread Border Router</span>';
+      else roleHtml += renderNextHop(n);
     } else if (n.device_kind === 'router') {
       // Routers are peers in the mesh. Next-hop routing is per-destination via
       // the RouteTable; the partition Leader is just the control-plane elector,
-      // not a forwarding hop. (Next-hop view is coming once OTBR ingestion lands.)
+      // not a forwarding hop.
       const bits = [];
       if (partTag) bits.push(partTag);
       bits.push((n.router_peer_count || 0) + ' peers');
@@ -432,6 +447,8 @@ function renderNodesTable(nodes) {
       roleHtml += '<span class="parent-hint">' + bits.join(' · ') + '</span>';
       const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
       if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';
+      if (n.role === 'border_router') roleHtml += '<span class="parent-hint">this is the Thread Border Router</span>';
+      else roleHtml += renderNextHop(n);
     }
     roleCell.innerHTML = roleHtml;
     const rssiCell = el('td', {class: rssiClass(rssi)}, rssi == null ? '—' : (rssi + ' dBm'));

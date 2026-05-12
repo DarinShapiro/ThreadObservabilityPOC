@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.28 — Next-hop to OTBR per router (the actual forwarding view)
+
+- **Thread Nodes table**: every router now shows its next forwarding hop on the path to the OTBR, e.g. `→ OTBR via Eve Energy (cost 3)` or `→ OTBR direct (cost 1)` when it is a direct mesh neighbor of the border router. This is what you read first when troubleshooting — it tells you the exact router a packet leaves through, not just who the partition leader is.
+- **Schema v5** (auto-migration): `nodes.router_id` and `links.next_hop_router_id` columns added.
+- **Discovery**: `_decode_route_table` now keeps non-link-established entries (so multi-hop routes are visible), captures each entry's `RouterId` (destination) and `NextHop` (the router_id to forward through). Each router's own Thread Router ID is auto-detected from its RouteTable self-entry and persisted.
+- **OTBR REST**: parses `Rloc16` and persists the OTBR's Router ID (`router_id = rloc16 >> 10`), required to resolve next-hop chains that terminate at the border router.
+- **Enrichment**: new `next_hop_to_otbr` field on every node = `{eui64, name, router_id, path_cost, is_direct}`, computed from each router's route-table entry pointing at the OTBR. End devices (SED/FED) implicitly inherit their parent router's path.
+- **What's still next**: highlight the next-hop chain in the Graph tab when a node is clicked (visual breadcrumb to OTBR). Queued for 0.9.29.
+
 ## 0.9.27 — OTBR ingestion (border router now appears in the table)
 
 - Added `pipeline/otbr_rest.py`: a new scheduled loop (default 60s) that fetches the HA OTBR add-on's REST `/node` endpoint and upserts the Thread Border Router as a first-class node in our store. Captures ExtAddress (EUI64), State (→ routing_role), PartitionId, LeaderRouterId, Weighting, and NumOfRouter.

@@ -68,22 +68,31 @@ def test_decode_route_table_struct_fields() -> None:
     raw = [
         {
             "0": 0x1122334455667788,
-            "2": 5,    # RouterId
+            "2": 5,    # RouterId (destination)
+            "3": 5,    # NextHop (self → direct neighbor)
             "4": 1,    # PathCost
             "5": 200,  # LQIIn
             "6": 180,  # LQIOut
             "7": 30,   # Age
             "9": True, # LinkEstablished
         },
-        # LinkEstablished=False should be skipped.
-        {"0": 0x99AABBCCDDEEFF00, "4": 2, "9": False},
+        # LinkEstablished=False entries are KEPT (they represent multi-hop
+        # routes — essential for resolving next-hop to non-neighbor routers).
+        {"0": 0x99AABBCCDDEEFF00, "2": 12, "3": 5, "4": 2, "9": False},
     ]
     out = _decode_route_table(raw)
-    assert len(out) == 1
+    assert len(out) == 2
     assert out[0]["neighbor_eui64"] == "1122334455667788"
     assert out[0]["path_cost"] == 1
     assert out[0]["lqi_in"] == 200
     assert out[0]["lqi_out"] == 180
+    assert out[0]["router_id"] == 5
+    assert out[0]["next_hop_router_id"] == 5
+    # Multi-hop entry preserved with its NextHop pointer.
+    assert out[1]["neighbor_eui64"] == "99aabbccddeeff00"
+    assert out[1]["router_id"] == 12
+    assert out[1]["next_hop_router_id"] == 5
+    assert out[1]["path_cost"] == 2
 
 
 def test_extract_thread_diagnostics() -> None:

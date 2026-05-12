@@ -132,6 +132,14 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_nodes_phantom ON nodes(is_phantom);
     CREATE INDEX IF NOT EXISTS idx_nodes_referenced ON nodes(last_referenced_at DESC);
     """,
+    # v5: per-node Thread router_id (within partition) and per-link
+    # next_hop_router_id from RouteTable so we can resolve forwarding paths
+    # (e.g. "next hop toward OTBR").
+    """
+    ALTER TABLE nodes ADD COLUMN router_id          INTEGER;
+    ALTER TABLE links ADD COLUMN next_hop_router_id INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_nodes_router_id ON nodes(router_id);
+    """,
 ]
 
 
@@ -383,6 +391,19 @@ class SQLiteStore:
             )
             return cur.rowcount > 0
 
+    def set_node_router_id(self, eui64: str, router_id: int | None) -> bool:
+        """Persist a node's Thread Router ID (6-bit value within its partition).
+
+        Used to resolve next-hop RouterId references in RouteTable entries
+        back to a named node. Pass ``None`` to clear.
+        """
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE nodes SET router_id = ? WHERE eui64 = ?",
+                (router_id, eui64),
+            )
+            return cur.rowcount > 0
+
     # -- links ---------------------------------------------------------
 
     def bump_last_referenced(self, euis: Iterable[str]) -> int:
@@ -493,8 +514,9 @@ class SQLiteStore:
                         rssi_avg, rssi_last, lqi_in, lqi_out,
                         is_child, age_seconds,
                         frame_error_rate, message_error_rate, path_cost,
+                        next_hop_router_id,
                         observed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         reporter_eui64,
@@ -509,6 +531,7 @@ class SQLiteStore:
                         link.get("frame_error_rate"),
                         link.get("message_error_rate"),
                         link.get("path_cost"),
+                        link.get("next_hop_router_id"),
                         now,
                     ),
                 )

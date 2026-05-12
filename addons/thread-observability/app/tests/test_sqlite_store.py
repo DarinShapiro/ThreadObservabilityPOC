@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 4
+    assert store.schema_version == 5
     stats = store.stats()
-    assert stats["schema_version"] == 4
+    assert stats["schema_version"] == 5
     assert stats["row_counts"]["events"] == 0
 
 

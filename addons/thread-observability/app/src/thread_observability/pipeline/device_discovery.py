@@ -273,7 +273,11 @@ def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
     RouteTableStruct fields per Matter spec:
       0 ExtAddress, 1 Rloc16, 2 RouterId, 3 NextHop, 4 PathCost,
       5 LQIIn, 6 LQIOut, 7 Age, 8 Allocated, 9 LinkEstablished.
-    Entries with LinkEstablished=False are skipped (not direct neighbors).
+
+    We keep entries even when ``LinkEstablished=False`` because the NextHop +
+    PathCost on those rows tell us the *multi-hop* routing path the reporter
+    would use to reach that destination router (essential for resolving
+    "next hop to OTBR" when the OTBR is not a direct neighbor).
     """
     if not isinstance(raw, list):
         return []
@@ -283,9 +287,6 @@ def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
             continue
         eui = _ext_address_to_eui64(_field(entry, 0, "extAddress", "ExtAddress"))
         if not eui:
-            continue
-        link_est = _field(entry, 9, "linkEstablished", "LinkEstablished")
-        if link_est is False:
             continue
         out.append({
             "neighbor_eui64": eui,
@@ -298,6 +299,8 @@ def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
             "frame_error_rate": None,
             "message_error_rate": None,
             "path_cost": _coerce_int(_field(entry, 4, "pathCost", "PathCost")),
+            "router_id": _coerce_int(_field(entry, 2, "routerId", "RouterId")),
+            "next_hop_router_id": _coerce_int(_field(entry, 3, "nextHop", "NextHop")),
         })
     return out
 
@@ -919,6 +922,18 @@ def _persist_matter_diagnostics(
             links_recorded += len(neighbor_table) + len(route_table)
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to persist links for %s: %s", eui, exc)
+
+        # Determine this router's own Router ID from its RouteTable self-entry.
+        # A router's own RouteTable always contains a row where ExtAddress
+        # equals its own EUI64; that row's RouterId field is the reporter's
+        # ID within the partition. Needed to resolve next-hop references.
+        try:
+            for entry in route_table:
+                if entry.get("neighbor_eui64") == eui and entry.get("router_id") is not None:
+                    s.set_node_router_id(eui, int(entry["router_id"]))
+                    break
+        except Exception as exc:  # noqa: BLE001
+            log.debug("router_id self-detect failed for %s: %s", eui, exc)
 
         # Persist scalars.
         try:

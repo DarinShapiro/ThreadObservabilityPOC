@@ -16,7 +16,7 @@ OTBR_EUI = "e6a381123456789a"
 SAMPLE_NODE_LEADER: dict[str, Any] = {
     "State": "leader",
     "ExtAddress": "e6:a3:81:12:34:56:78:9a",
-    "Rloc16": 0x0400,
+    "Rloc16": 0x0400,  # RouterId 1, CID 0 → router_id == 1
     "NetworkName": "OpenThreadDemo",
     "NumOfRouter": 5,
     "LeaderData": {
@@ -93,6 +93,8 @@ def test_ingest_once_persists_otbr_node(
     assert res["state"] == "leader"
     assert res["active_routers"] == 5
     assert res["base_url"] in seen_bases
+    assert res["rloc16"] == 0x0400
+    assert res["router_id"] == 1
     # Probe tried at least 2 candidates (supervisor failed → next succeeded).
     assert len(seen_bases) >= 2
 
@@ -105,7 +107,26 @@ def test_ingest_once_persists_otbr_node(
     assert n["partition_id"] == 0xABCDEF01
     assert n["leader_router_id"] == 1
     assert n["active_routers"] == 5
+    assert n["router_id"] == 1
     assert n["last_referenced_at"] is not None
+
+
+def test_router_id_from_rloc16() -> None:
+    # RouterId is the top 6 bits; the low 10 bits must be zero for a router.
+    assert otbr_rest._router_id_from_rloc16(0x0400) == 1
+    assert otbr_rest._router_id_from_rloc16(0x1C00) == 7
+    assert otbr_rest._router_id_from_rloc16(0xFC00) == 63
+    assert otbr_rest._router_id_from_rloc16(0x0000) == 0
+    # Non-router RLOC (child address): low 10 bits non-zero → None.
+    assert otbr_rest._router_id_from_rloc16(0x0401) is None
+    assert otbr_rest._router_id_from_rloc16(None) is None
+
+
+def test_extract_rloc16_handles_hex_string() -> None:
+    assert otbr_rest._extract_rloc16({"Rloc16": "0x0c00"}) == 0x0C00
+    assert otbr_rest._extract_rloc16({"Rloc16": "1024"}) == 1024
+    assert otbr_rest._extract_rloc16({"rloc16": 2048}) == 2048
+    assert otbr_rest._extract_rloc16({}) is None
 
 
 def test_ingest_once_preserves_user_renamed_friendly_name(

@@ -120,6 +120,37 @@ def _extract_state(node: dict[str, Any]) -> str | None:
     return str(raw).strip().lower() or None
 
 
+def _extract_rloc16(node: dict[str, Any]) -> int | None:
+    raw = node.get("Rloc16") or node.get("rloc16") or node.get("RLOC16")
+    if raw is None:
+        return None
+    try:
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s.startswith("0x") or s.startswith("0X"):
+                return int(s, 16)
+            # Without an explicit prefix, treat as decimal. Callers that need
+            # hex semantics (very rare) should send "0x..." form.
+            return int(s)
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _router_id_from_rloc16(rloc16: int | None) -> int | None:
+    """Thread Router ID is the top 6 bits of the RLOC16 (low 10 bits are CID).
+
+    Returns ``None`` if the RLOC16 has a non-zero CID (i.e. it's an end-device
+    short address, not a router address).
+    """
+    if rloc16 is None:
+        return None
+    cid = rloc16 & 0x03FF
+    if cid != 0:
+        return None
+    return (rloc16 >> 10) & 0x3F
+
+
 async def fetch_otbr_node(base_url: str, *, timeout: float = 10.0) -> dict[str, Any]:
     """GET ``{base_url}/node`` and return parsed JSON. Raises httpx errors."""
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -191,6 +222,8 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         active_routers = int(num_of_router_raw) if num_of_router_raw is not None else None
     except (TypeError, ValueError):
         active_routers = None
+    rloc16 = _extract_rloc16(node)
+    router_id = _router_id_from_rloc16(rloc16)
 
     # Only set friendly_name on first insert — never overwrite a user rename.
     existing = s.get_node(eui64)
@@ -209,12 +242,14 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         active_routers=active_routers,
         weighting=weighting,
     )
+    if router_id is not None:
+        s.set_node_router_id(eui64, router_id)
     # Mark referenced so phantom-sweep treats it as live.
     s.bump_last_referenced([eui64])
 
     log.info(
-        "otbr_rest: ingested OTBR eui=%s state=%s partition=%s leader_router=%s active_routers=%s",
-        eui64, state, partition_id, leader_router_id, active_routers,
+        "otbr_rest: ingested OTBR eui=%s state=%s partition=%s router_id=%s leader_router=%s active_routers=%s",
+        eui64, state, partition_id, router_id, leader_router_id, active_routers,
     )
     return {
         "error": None,
@@ -225,6 +260,8 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         "routing_role": routing_role,
         "state": state,
         "active_routers": active_routers,
+        "router_id": router_id,
+        "rloc16": rloc16,
     }
 
 
