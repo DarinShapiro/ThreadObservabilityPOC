@@ -1,27 +1,40 @@
 # Thread Observability Add-on
 
-This add-on ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes API/MCP endpoints for diagnostics.
+Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes the result over MCP and a small HTTP surface for AI-assisted triage.
 
-## Included in this scaffold
+**Current version**: 0.10.0 / schema v19 / 36 MCP tools.
 
-- Add-on manifest and build metadata
+## What it does
+
 - Two-process service model in one container:
-  - Core service process
-  - MCP service process
-- Minimal runnable FastAPI endpoints:
   - Core API on port 8099 (`/health`, `/v1/health/snapshot`, `/v1/issues/active`, `/v1/topology`)
-  - MCP API on port 8100 (`/health`, `/mcp/tools`, `/mcp/call/{tool_name}`)
-- Placeholder Python package layout
-- GitHub Actions CI workflow for add-on lint/build
+  - MCP server on port 8100 (`GET /mcp/tools`, `POST /mcp/call/{tool_name}`, `POST /mcp/rpc`)
+- Each pipeline tick:
+  - Discovers Thread nodes via OTBR / Matter Server
+  - Correlates EUI-64 with HA device registry
+  - Records per-node MAC/MLE counter samples (schema v19, Phase 4)
+  - Runs deterministic reasoner rules and persists open issues
+  - Records a pipeline-tick row for temporal honesty (`meta.pipeline_tick`)
+- Retention prunes counter samples older than `full_resolution_days` (default 3) into 5-minute averaged buckets up to `sampled_archive_days` (default 14).
 
-## Not included yet
+## MCP surface
 
-- Full ingestion implementation
-- UI implementation
-- MCP tool implementations
+All read tools return a `{data, meta}` envelope. See [../../documentation/06-mcp-tools-reference.md](../../documentation/06-mcp-tools-reference.md) for the full, auto-generated catalog.
 
-## Local development notes
+First call for any new triage session:
 
-1. Build the add-on image with Home Assistant add-on tooling.
-2. Install from repository URL in Home Assistant.
-3. Configure options in add-on settings.
+```
+POST http://<host>:8100/mcp/call/start_triage
+Content-Type: application/json
+
+{"arguments": {}}
+```
+
+Returns environment + health + active issues + up to 3 `recommended_next` tool calls.
+
+## Local development
+
+1. Build the add-on image with Home Assistant add-on tooling, or push to a git repo configured as an HA add-on repository.
+2. Install from the repository URL in Home Assistant.
+3. Configure options in add-on settings (`ha_admin_token` long-lived access token, optional retention overrides).
+4. Run tests: `cd app && PYTHONPATH=src pytest -q`.

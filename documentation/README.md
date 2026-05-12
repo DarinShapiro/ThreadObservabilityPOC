@@ -1,5 +1,9 @@
 # Thread Observability Platform - Design Documentation
 
+> **Status (2026-05): the add-on is on version 0.10.0, schema v19, with 36 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
+>
+> For the current, runtime-accurate tool surface see [06-mcp-tools-reference.md](06-mcp-tools-reference.md). For per-release detail see [`addons/thread-observability/CHANGELOG.md`](../addons/thread-observability/CHANGELOG.md).
+
 ## Quick Navigation
 
 1. **[Architecture Decision Document](01-architecture-decision.md)**
@@ -35,6 +39,10 @@
    - Migration path between profiles
    - Comparison matrix
    - Recommendations by user type
+
+5. **[Install Strategy: Add-on vs HACS](05-install-strategy-addon-vs-hacs.md)**
+
+6. **[MCP Tool Reference](06-mcp-tools-reference.md)** *(authoritative, auto-generated from the live `/mcp/tools` registry)*
 
 ---
 
@@ -83,7 +91,7 @@
 - [ ] Log adapter (deterministic parsing)
 - [ ] Topology analyzer (graph of nodes/links)
 - [ ] Anomaly detector (6 rule-based checks)
-- [ ] 3 core MCP tools (`get_network_topology`, `get_node_details`, `list_active_issues`)
+- [x] 36 MCP tools across triage, mesh state, history, issues, counter time-series, discovery, storage, playbooks, and HA/Supervisor lifecycle (see [06-mcp-tools-reference.md](06-mcp-tools-reference.md))
 - [ ] Web UI dashboard (topology graph, issues list, node details)
 
 **Add-on Packaging**
@@ -268,74 +276,20 @@ ai:
 
 ---
 
-## MCP Tools (v1)
+## MCP Tools (current)
 
-### get_network_topology()
-```json
-{
-  "nodes": [
-    {
-      "id": "aabbccddee001122",
-      "name": "Kitchen Light",
-      "role": "end_device",
-      "parent": "aabbccddee001100",
-      "health_score": 95,
-      "rssi": -68,
-      "last_seen": "2025-05-11T14:30:00Z"
-    }
-  ],
-  "links": [
-    {"parent": "aabbccddee001100", "child": "aabbccddee001122"}
-  ],
-  "root_node": "aabbccddee000000",
-  "timestamp": "2025-05-11T14:31:00Z"
-}
-```
+The shipped add-on (0.10.0) exposes 36 read- and lifecycle tools. See [06-mcp-tools-reference.md](06-mcp-tools-reference.md) for the full, auto-generated catalog with arguments and descriptions.
 
-### get_node_details(node_id)
-```json
-{
-  "id": "aabbccddee001122",
-  "name": "Kitchen Light",
-  "role": "sleepy_end_device",
-  "parent": "aabbccddee001100",
-  "parent_name": "Kitchen Router",
-  "rssi": -68,
-  "lqi": 220,
-  "rssi_trend": [-68, -67, -69, -70],
-  "parent_changes_24h": 0,
-  "attach_failures_24h": 0,
-  "last_seen": "2025-05-11T14:30:00Z",
-  "health_score": 95,
-  "events": [
-    {"timestamp": "14:30", "type": "attach", "details": "..."},
-    {"timestamp": "14:15", "type": "detach", "details": "..."}
-  ]
-}
-```
+Highlights:
 
-### list_active_issues(severity_threshold?)
-```json
-[
-  {
-    "severity": "error",
-    "entity": "aabbccddee001122",
-    "entity_name": "Kitchen Light",
-    "issue_type": "offline",
-    "detected_at": "2025-05-11T13:45:00Z",
-    "duration_minutes": 46,
-    "evidence": ["No activity > 1 hour threshold"]
-  },
-  {
-    "severity": "warning",
-    "entity": "aabbccddee002233",
-    "entity_name": "Basement Light",
-    "issue_type": "parent_churn",
-    "detected_at": "2025-05-11T14:20:00Z",
-    "evidence": ["3 parent changes in last 60 minutes"]
-  }
-]
-```
+- **Triage entry points**: `start_triage`, `get_environment`, `get_pipeline_health`, `get_health_snapshot`
+- **Mesh state**: `get_mesh_state`, `list_all_nodes`, `analyze_node`
+- **Counter time-series (Phase 4, schema v19)**: `get_counter_series`, `compare_node_counters`
+- **History**: `query_history`, `list_topology_history`, `get_topology_history_entry`, `diff_topology_history`
+- **Issues**: `list_active_issues`, `close_issue`
+- **HA/Supervisor lifecycle**: `ha_get_addon_state`, `ha_update_addon`, `ha_restart_addon`, `ha_check_for_update`, ...
+
+All read tools return a `{data, meta}` envelope. `meta` carries `as_of`, `data_source`, `cache_age_s`, and the latest `pipeline_tick` block so clients can decide whether the cached data is fresh enough.
 
 ---
 

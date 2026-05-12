@@ -177,6 +177,8 @@ class Finding(TypedDict):
 
 ---
 
+> **Status note (2026-05):** this document captures the original V1 module-interface design. The shipped implementation evolved through Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series). For the current, runtime-accurate tool list see [`06-mcp-tools-reference.md`](06-mcp-tools-reference.md).
+
 ## Storage Layer Interface
 
 Reasoners and MCP tools access data via a consistent query interface.
@@ -255,16 +257,20 @@ class MCPToolRegistry:
         pass
 ```
 
-### Thread Module Tools (v1)
+### Thread Module Tools (shipped 0.10.0)
 
-1. **get_network_topology**
+*The original V1 design targeted three core tools. The shipped surface is 36 tools across triage, mesh state, counter time-series, history, issues, discovery, storage, playbooks, and HA/Supervisor lifecycle. See [`06-mcp-tools-reference.md`](06-mcp-tools-reference.md) for the live catalog.*
+
+Original V1 design intent:
+
+1. **get_network_topology** (now `get_mesh_state`)
    - Input: (entity_filter?, time_point?)
-   - Output: {nodes: [...], links: [...], root_node, timestamp}
+   - Output: {nodes: [...], links: [...], partition_id, computed_at}
    - No model required
 
-2. **get_node_details**
-   - Input: node_id
-   - Output: {role, parent, children, rssi_trend, attach_count, last_seen, ...}
+2. **get_node_details** (now `analyze_node`)
+   - Input: eui64
+   - Output: structured node payload incl. parent + neighbors, open issues, recent timeline, baselines, playbook entries
    - No model required
 
 3. **list_active_issues**
@@ -272,10 +278,7 @@ class MCPToolRegistry:
    - Output: [Finding, ...]
    - No model required
 
-4. **explain_incident** (optional, model-assisted)
-   - Input: finding_id
-   - Output: {probable_causes: [...], evidence: [...], recommended_actions: [...]}
-   - May require model
+4. **explain_incident** (deferred; reasoner runs deterministically per tick)
 
 ---
 

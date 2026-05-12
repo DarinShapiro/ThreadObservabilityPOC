@@ -48,13 +48,15 @@
 **Flow**:
 1. User has Claude Desktop connected to HA via MCP
 2. User asks: "Is my Thread network healthy?"
-3. Claude uses MCP tools: `get_network_topology()`, `list_active_issues()`
+3. Claude uses MCP tools: `start_triage`, `get_mesh_state`, `list_active_issues`, `get_counter_series`
 4. Claude generates natural language summary: "Your Thread network has 28 healthy devices. The bathroom sensor has been offline for 1 hour with repeated attach failures; parent link quality is marginal."
 5. User can ask follow-up: "What changed 1 hour ago in my home?" (cross-domain reasoning, future work)
 
 **Outcome**: LLM becomes a natural interface for network diagnostics.
 
 ---
+
+> **Status note (2026-05):** this product spec describes the original 3-tool V1 target. The shipped add-on (0.10.0) exposes 36 MCP tools including a `start_triage` entry point and per-node `get_counter_series` / `compare_node_counters` time-series queries. For the current surface see [`06-mcp-tools-reference.md`](06-mcp-tools-reference.md).
 
 ## Core Features (v1)
 
@@ -166,21 +168,18 @@ thread:
 
 ### 8. MCP Server + Tools
 
-**Tools**:
-1. `get_network_topology()`
-   - Returns: nodes (id, name, role, parent, health), edges (parent->child)
-   - No parameters; real-time snapshot
-   - ~100ms response for 50 nodes
+**Tools** (shipped 0.10.0; 36 total - see [`06-mcp-tools-reference.md`](06-mcp-tools-reference.md) for the auto-generated catalog):
 
-2. `get_node_details(node_id)`
-   - Returns: all fields from Node Detail Page
-   - Includes full event timeline (last 100 events)
-   - ~50ms response
+- **Triage entry points**: `start_triage`, `get_environment`, `get_pipeline_health`, `get_health_snapshot`
+- **Mesh state**: `get_mesh_state` (was `get_network_topology` in this spec), `list_all_nodes`, `analyze_node` (was `get_node_details`)
+- **Counter time-series (Phase 4)**: `get_counter_series`, `compare_node_counters`
+- **Issues / history / playbooks**: `list_active_issues`, `close_issue`, `query_history`, `lookup_playbook`, `list_playbooks`
+- **Topology history**: `list_topology_history`, `get_topology_history_entry`, `diff_topology_history`
+- **Discovery / sync**: `sync_ha_devices`, `list_thread_datasets`, `list_otbr_candidates`, `set_otbr_slug`, `ingest_now`, `get_ingest_state`
+- **Storage / config**: `get_storage_stats`, `get_timeseries_health`, `get_config`, `get_recent_logs`
+- **HA / Supervisor lifecycle**: `ha_get_addon_state`, `ha_get_addon_logs`, `ha_get_supervisor_logs`, `ha_check_for_update`, `ha_restart_addon`, `ha_update_addon`, `ha_rebuild_addon`, `ha_set_auto_update`, `ha_reinstall_addon`
 
-3. `list_active_issues(severity_threshold?)`
-   - Returns: current anomalies, sorted by severity
-   - Optional filter: severity level
-   - ~50ms response
+All read tools return a `{data, meta}` envelope; `meta.as_of`, `meta.cache_age_s`, and `meta.pipeline_tick` let clients reason about freshness.
 
 **Implementation**: FastAPI + MCP wrapper, runs on HA Yellow alongside add-on
 
