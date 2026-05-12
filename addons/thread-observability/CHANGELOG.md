@@ -1,4 +1,9 @@
-# Changelog
+# Changelog## 0.9.50 — Verify HA-Core-routed `ha_update_addon` (no functional change)
+
+No-op version bump to exercise the 0.9.49 update path from MCP end-to-end:
+`ha_update_addon(dry_run=true)` followed by a real `ha_update_addon` call.
+If 0.9.50 lands without the 403 self-update guard tripping, the in-loop
+deploy cycle is fully unblocked.
 ## 0.9.49 \u2014 Route `ha_update_addon` through Home Assistant Core service
 
 **Root cause uncovered by the 0.9.48 dry-run test.** Calling
