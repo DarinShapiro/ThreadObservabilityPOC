@@ -169,9 +169,12 @@
         0–255 LQI down to this 4-bucket value.</span>
       </div>
       <div class="legend" style="margin-top:4px;">
-        <span><b>Role:</b> Leader = partition root; Router/REED = mesh peer
-        (no parent — uses route table); End device / Sleepy end = attached to
-        one parent router (shown as <code>via …</code>).</span>
+        <span><b>Role:</b> Leader = partition <i>control-plane</i> coordinator
+        (elects Router IDs, maintains Network Data) — <b>not</b> a forwarding hop;
+        packets do not have to traverse it. Router/REED = mesh peer (no parent,
+        forwards per its RouteTable). End device / Sleepy end = attached to one
+        parent router (shown as <code>via …</code>). Next-hop / path-to-OTBR view
+        coming once OTBR ingestion lands.</span>
       </div>
     </div>
   </section>
@@ -411,16 +414,21 @@ function renderNodesTable(nodes) {
       if (parent) roleHtml += '<span class="parent-hint">via ' + parent + '</span>';
       else roleHtml += '<span class="parent-hint">no parent reported</span>';
     } else if (n.routing_role === 'leader') {
-      // Leader is the root of its partition.
-      if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers</span>';
+      // Leader is the partition's control-plane coordinator (assigns Router IDs,
+      // maintains Network Data). It is NOT a forwarding hub — packets do not
+      // have to traverse it. Next-hop routing is decided per-router via the
+      // RouteTable.
+      if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers · control-plane only</span>';
       const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
       if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';
     } else if (n.device_kind === 'router') {
-      // Routers are peers in the mesh — show partition + peer count + leader.
+      // Routers are peers in the mesh. Next-hop routing is per-destination via
+      // the RouteTable; the partition Leader is just the control-plane elector,
+      // not a forwarding hop. (Next-hop view is coming once OTBR ingestion lands.)
       const bits = [];
       if (partTag) bits.push(partTag);
       bits.push((n.router_peer_count || 0) + ' peers');
-      if (n.partition_leader_name && n.partition_leader_eui64 !== n.eui64) bits.push('leader: ' + n.partition_leader_name);
+      if (n.partition_leader_name && n.partition_leader_eui64 !== n.eui64) bits.push('partition leader: ' + n.partition_leader_name + ' (control-plane)');
       roleHtml += '<span class="parent-hint">' + bits.join(' · ') + '</span>';
       const peers = (n.router_peers || []).map(p => p.name || (p.eui64 || '').slice(-4).toUpperCase());
       if (peers.length) roleHtml += '<span class="parent-hint">peers: ' + peers.join(', ') + '</span>';

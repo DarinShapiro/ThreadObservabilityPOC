@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.26 — Leader is control-plane only (label clarified)
+
+- The Thread partition **Leader** is a control-plane coordinator (assigns Router IDs, maintains Network Data) — it is **not** a forwarding hop. Packets do not have to traverse the Leader; each router picks its own next-hop per destination via its RouteTable.
+- Relabeled the role-column caption:
+  - Router rows: `partition N · K peers · partition leader: X (control-plane)` (was `leader: X`).
+  - Leader row: `partition N · K router peers · control-plane only`.
+- Updated the Role legend on the Network tab to call out that Leader is control-plane only and packets don't have to go through it.
+- Next-hop / path-to-OTBR visualization is queued for after OTBR ingestion lands (so we can resolve actual forwarding paths from each router's RouteTable to the border router).
+
 ## 0.9.25 — Router↔router mesh backbone visualized, peer names in table
 
 - **Graph tab** now distinguishes the three kinds of edges so router↔router peer links (the mesh backbone) are visually distinct from router→child attachments and multi-hop route-table entries:
