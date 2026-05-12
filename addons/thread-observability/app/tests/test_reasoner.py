@@ -77,7 +77,9 @@ def test_attach_failures_open_and_close(store: SQLiteStore) -> None:
 def test_offline_node_opens_crit_issue(store: SQLiteStore) -> None:
     eui = "33" * 8
     old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
-    # last_seen is updated by insert_event; explicitly set old ts
+    # Registry-first (v9): event ingestion no longer auto-creates node
+    # rows. Seed the node first so insert_event can UPDATE its last_seen.
+    store.upsert_node_metadata(eui64=eui)
     store.insert_event(eui64=eui, type="attach", ts=old)
     out = run_reasoner(store=store)
     assert len(out["opened"]) == 1

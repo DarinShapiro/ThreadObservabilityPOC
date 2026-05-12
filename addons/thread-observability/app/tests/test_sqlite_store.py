@@ -8,16 +8,29 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 8
+    assert store.schema_version == 9
     stats = store.stats()
-    assert stats["schema_version"] == 8
+    assert stats["schema_version"] == 9
     assert stats["row_counts"]["events"] == 0
 
 
-def test_insert_event_creates_node(store: SQLiteStore) -> None:
-    eid = store.insert_event(eui64="aa" * 8, type="attach", rssi=-60, lqi=200)
+def test_insert_event_updates_known_node_only(store: SQLiteStore) -> None:
+    """Registry-first (v9): events only update existing node rows.
+
+    Unknown EUIs never get auto-inserted from event ingestion — they
+    belong on the link side via the ``neighbor_known`` flag, not as
+    phantom nodes.
+    """
+    eui = "aa" * 8
+    # Unknown EUI: event records but no node row created.
+    eid = store.insert_event(eui64=eui, type="attach", rssi=-60, lqi=200)
     assert eid >= 1
-    node = store.get_node("aa" * 8)
+    assert store.get_node(eui) is None
+
+    # Once registered, subsequent events update last_seen on the row.
+    store.upsert_node_metadata(eui64=eui)
+    store.insert_event(eui64=eui, type="attach", rssi=-55, lqi=210)
+    node = store.get_node(eui)
     assert node is not None
     assert node["last_seen"]
 
@@ -102,11 +115,25 @@ def test_set_node_diagnostics(store: SQLiteStore) -> None:
     assert nodes[A]["diag_updated_at"] is not None
 
 
-def test_bump_last_referenced_creates_node(store: SQLiteStore) -> None:
-    eui = "bb" * 8
-    n = store.bump_last_referenced([eui])
-    assert n == 1
-    node = store.get_node(eui)
+def test_bump_last_referenced_skips_unknown_and_touches_known(
+    store: SQLiteStore,
+) -> None:
+    """Registry-first (v9): ``bump_last_referenced`` is UPDATE-only.
+
+    Unknown EUIs (not in the registry-driven ``nodes`` table) are
+    silently skipped; they surface via ``links.neighbor_known = 0``
+    instead.
+    """
+    unknown = "bb" * 8
+    known = "cc" * 8
+    # Unknown EUI: no row created, count is 0.
+    assert store.bump_last_referenced([unknown]) == 0
+    assert store.get_node(unknown) is None
+
+    # Known EUI: row touched, count is 1.
+    store.upsert_node_metadata(eui64=known)
+    assert store.bump_last_referenced([known]) == 1
+    node = store.get_node(known)
     assert node is not None
     assert node["last_referenced_at"] is not None
     assert node["is_phantom"] == 0
@@ -115,6 +142,12 @@ def test_bump_last_referenced_creates_node(store: SQLiteStore) -> None:
 def test_sweep_phantoms_marks_old_and_clears_fresh(store: SQLiteStore) -> None:
     old_eui = "cc" * 8
     fresh_eui = "dd" * 8
+    # Registry-first (v9): pre-seed both as mesh-only nodes (no device_id)
+    # so ``bump_last_referenced`` can touch them and phantom-sweep logic
+    # applies. In production these rows would be created by the HA
+    # registry sync; for legacy phantom-sweep semantics we seed bare rows.
+    store.upsert_node_metadata(eui64=old_eui)
+    store.upsert_node_metadata(eui64=fresh_eui)
     store.bump_last_referenced([old_eui, fresh_eui])
     # Backdate one row to look stale.
     stale_ts = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
@@ -137,6 +170,8 @@ def test_sweep_phantoms_marks_old_and_clears_fresh(store: SQLiteStore) -> None:
 def test_purge_phantom_nodes_removes_links(store: SQLiteStore) -> None:
     A = "ee" * 8
     B = "ff" * 8
+    store.upsert_node_metadata(eui64=A)
+    store.upsert_node_metadata(eui64=B)
     store.bump_last_referenced([A, B])
     store.replace_links_for_reporter(A, "neighbor_table", [
         {"neighbor_eui64": B, "rssi_avg": -55, "is_child": True},
@@ -156,6 +191,8 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     A = "aa" * 8
     B = "bb" * 8
     # Seed some state across the cache tables.
+    store.upsert_node_metadata(eui64=A)
+    store.upsert_node_metadata(eui64=B)
     store.insert_event(eui64=A, type="attach", rssi=-50)
     store.bump_last_referenced([A, B])
     store.replace_links_for_reporter(A, "neighbor_table", [
@@ -173,7 +210,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 8
+    assert store.schema_version == 9
 
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
@@ -242,7 +279,10 @@ def test_recompute_node_statuses_state_machine(store: SQLiteStore) -> None:
     store.upsert_node_metadata(eui64=fresh, friendly_name="Fresh", device_id="d1")
     store.upsert_node_metadata(eui64=stale, friendly_name="Stale", device_id="d2")
     store.upsert_node_metadata(eui64=registered_old, friendly_name="Old", device_id="d3")
-    # Mesh-only nodes (no device_id).
+    # Mesh-only nodes (no device_id). Registry-first (v9): bump is now
+    # UPDATE-only, so the rows must be created explicitly first.
+    store.upsert_node_metadata(eui64=dead)
+    store.upsert_node_metadata(eui64=unreg)
     store.bump_last_referenced([dead, unreg])
     # Clear unreg's last_referenced_at so it really has none.
     with store._tx() as conn:  # noqa: SLF001
@@ -279,6 +319,9 @@ def test_purge_expired_nodes_preserves_ha_registered(store: SQLiteStore) -> None
     keep = "11" * 8
     purge = "22" * 8
     store.upsert_node_metadata(eui64=keep, friendly_name="Keep", device_id="x")
+    # Registry-first (v9): seed the mesh-only row explicitly; bump no
+    # longer auto-creates unknown EUIs.
+    store.upsert_node_metadata(eui64=purge)
     store.bump_last_referenced([purge])
     very_old = (datetime.now(tz=UTC) - timedelta(days=90)).isoformat()
     with store._tx() as conn:  # noqa: SLF001

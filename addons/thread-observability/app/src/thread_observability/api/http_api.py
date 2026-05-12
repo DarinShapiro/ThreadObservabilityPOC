@@ -212,6 +212,22 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"reporter_eui64": eui64, "error": str(exc), "neighbors": [], "routes": []}
 
+    @app.get("/v1/links/stale")
+    def links_stale() -> dict[str, object]:
+        """List every link row whose neighbor EUI is not in the registry.
+
+        These are the dead-link references — router caches pointing at
+        EUIs HA has never heard of (recommissioned devices, abandoned
+        pairings, ghost neighbors from a previous partition). Replaces
+        the old ``/v1/phantoms`` view as the troubleshooting entry point:
+        the EUI here is *not* a node, it's a reference to investigate.
+        """
+        try:
+            rows = get_store().list_stale_links()
+            return {"count": len(rows), "links": rows}
+        except Exception as exc:  # noqa: BLE001
+            return {"count": 0, "links": [], "error": str(exc)}
+
     @app.get("/v1/phantoms")
     def phantoms_snapshot() -> dict[str, object]:
         try:
@@ -310,6 +326,12 @@ def create_core_app() -> FastAPI:
             phantoms = _build_phantom_list()
         except Exception as exc:  # noqa: BLE001
             phantoms = {"error": str(exc), "phantoms": []}
+        # Stale link count: troubleshooting bait surfaced from links table.
+        # See ``/v1/links/stale`` for the full list.
+        try:
+            stale_link_count = len(get_store().list_stale_links())
+        except Exception:  # noqa: BLE001
+            stale_link_count = 0
         # Resolve OTBR up-front so consumers don't infer it from heuristics.
         try:
             otbr = routing_mod.find_otbr()
@@ -333,6 +355,7 @@ def create_core_app() -> FastAPI:
             "pipeline": pipeline,
             "otbr_eui64": otbr_eui64,
             "node_counts": node_counts,
+            "stale_link_count": stale_link_count,
             "all_nodes": all_nodes,
         }
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.36 — Registry-first node model (phantom-creation killed at source)
+
+The `nodes` table is now authoritative for "what devices exist", sourced from the HA device registry (plus the OTBR). Stray EUIs seen in another router's NeighborTable or RouteTable no longer create node rows — they become a `neighbor_known = 0` flag on the link row instead. This kills the phantom problem at its root: dead-link references can't masquerade as devices, and offline / online state stays with HA where it belongs.
+
+- **Schema v9.** Adds `nodes.is_thread` (1 = Thread, 0 = WiFi/other Matter, NULL = unknown) and `links.neighbor_known` (1 = neighbor EUI is in the registry, 0 = stale reference). Two indexes: `idx_nodes_is_thread`, partial `idx_links_stale WHERE neighbor_known = 0`.
+- **Storage is UPDATE-only for unknown EUIs.** `bump_last_referenced` and `insert_event` no longer auto-create node rows. Only `upsert_node_metadata` (driven by the HA registry sync + OTBR ingest) inserts rows. Returns count of rows actually touched.
+- **`replace_links_for_reporter` computes `neighbor_known` per row** against the current node set; stale references surface immediately.
+- **`SQLiteStore.refresh_neighbor_known()`** reconciles every existing link row's flag after a registry sync adds or removes nodes — newly-registered devices flip their stale links to known without waiting for the next reporter poll.
+- **`SQLiteStore.list_stale_links()`** returns every link whose neighbor EUI isn't in the registry. These are the troubleshooting bait: a router is forwarding to (or seeing as a neighbor) an EUI no Matter device is registered under — usually a recommissioned device that left a stale router cache, or a failed pairing whose Thread frame counter survived.
+- **New `GET /v1/links/stale`** endpoint returning `{count, links}`. `GET /v1/dev/status` gains a `stale_link_count` summary.
+- **OTBR ingest stamps `is_thread=True`** alongside `role=border_router`. The HA device registry sync stamps `is_thread=True` on every Thread Matter device it materializes.
+- **Tests migrated to the new contract.** `test_insert_event_creates_node` → `test_insert_event_updates_known_node_only` (verifies events to unknown EUIs do NOT create node rows). `test_bump_last_referenced_creates_node` → `test_bump_last_referenced_skips_unknown_and_touches_known`. Schema-version assertions bumped 8 → 9. Tests that previously relied on auto-creation now pre-seed via `upsert_node_metadata`. **145/146 passing** (1 deliberate skip; same as 0.9.35).
+- **Deferred to 0.9.37:** retirement of the `phantom` / `unregistered` status enum and the legacy `is_phantom` column. Both remain in place for one release of backwards compatibility — but they are now factually unreachable for any HA-registered device, and the troubleshooting workflow has moved to `/v1/links/stale`.
+
 ## 0.9.35 — Scenario fixtures + pipeline integration + property tests
 
 - **Scenario fixtures** (`tests/scenarios/`). JSON-driven mesh shapes drive a parametrized test matrix. Five shipped: single OTBR with three routers, two-partition network split, stale phantom singleton, REED attached as child, and cold-start empty. Adding a new mesh quirk is now a new JSON file, not new Python.

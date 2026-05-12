@@ -233,6 +233,7 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         eui64=eui64,
         friendly_name=desired_friendly,
         role=_OTBR_ROLE,
+        is_thread=True,
     )
     s.set_node_diagnostics(
         eui64,

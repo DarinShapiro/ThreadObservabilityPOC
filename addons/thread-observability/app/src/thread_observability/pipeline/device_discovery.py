@@ -919,6 +919,7 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
                 sw_version=sw_version,
                 hw_version=hw_version,
                 ha_device_path=ha_device_path,
+                is_thread=True,
             )
             if eui in existing_euis:
                 updated += 1
@@ -1088,6 +1089,20 @@ def _persist_matter_diagnostics(
         s.bump_last_referenced(referenced)
     except Exception as exc:  # noqa: BLE001
         log.warning("Failed to bump last_referenced_at: %s", exc)
+
+    # Registry-first (v9): the registry sync above may have added or
+    # removed nodes; reconcile each link's ``neighbor_known`` flag so
+    # ``/v1/links/stale`` reflects the current node set without waiting
+    # for the next reporter poll cycle.
+    try:
+        nk = s.refresh_neighbor_known()
+        if nk["marked_known"] or nk["marked_stale"]:
+            log.info(
+                "neighbor_known refresh: marked_known=%d marked_stale=%d",
+                nk["marked_known"], nk["marked_stale"],
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("refresh_neighbor_known failed: %s", exc)
 
     # Status thresholds. `OFFLINE_AFTER_SECONDS` flips online -> offline;
     # `PHANTOM_AFTER_SECONDS` flips offline -> phantom (eligible for purge,

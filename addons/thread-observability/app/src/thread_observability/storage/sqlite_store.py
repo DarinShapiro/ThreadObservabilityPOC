@@ -185,6 +185,22 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE links ADD COLUMN partition_id       INTEGER;
     CREATE INDEX IF NOT EXISTS idx_links_partition ON links(partition_id);
     """,
+    # v9: registry-first node model. The `nodes` table is now authoritative
+    # for "what devices exist", sourced exclusively from the HA device
+    # registry (plus the OTBR). Stray EUIs seen in NeighborTable / RouteTable
+    # rows of other routers no longer create node rows — they become a
+    # `neighbor_known = 0` flag on the link row instead. This eliminates the
+    # phantom-node problem at its root: dead links can't masquerade as
+    # devices, and online/offline state belongs to HA, not our heuristics.
+    #
+    # `is_thread` distinguishes Thread Matter devices from WiFi Matter
+    # devices in the same registry (we only care about Thread ones).
+    """
+    ALTER TABLE nodes ADD COLUMN is_thread INTEGER;
+    ALTER TABLE links ADD COLUMN neighbor_known INTEGER NOT NULL DEFAULT 1;
+    CREATE INDEX IF NOT EXISTS idx_nodes_is_thread ON nodes(is_thread);
+    CREATE INDEX IF NOT EXISTS idx_links_stale ON links(neighbor_known) WHERE neighbor_known = 0;
+    """,
 ]
 
 
@@ -266,10 +282,11 @@ class SQLiteStore:
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (ts, eui64, type, parent_eui64, rssi, lqi, payload_json),
             )
+            # Registry-first (v9): only bump last_seen if the node is
+            # already known. Unknown EUIs don't get phantom rows from events.
             conn.execute(
-                "INSERT INTO nodes(eui64, first_seen, last_seen) VALUES (?, ?, ?)"
-                " ON CONFLICT(eui64) DO UPDATE SET last_seen=excluded.last_seen",
-                (eui64, ts, ts),
+                "UPDATE nodes SET last_seen = ? WHERE eui64 = ?",
+                (ts, eui64),
             )
             return int(cur.lastrowid or 0)
 
@@ -324,19 +341,24 @@ class SQLiteStore:
         sw_version: str | None = None,
         hw_version: str | None = None,
         ha_device_path: str | None = None,
+        is_thread: bool | None = None,
     ) -> None:
         now = _utc_now()
         # Keep legacy `area` column populated with the resolved name so older
         # readers continue to work.
         legacy_area = area if area is not None else area_name
+        is_thread_val: int | None = (
+            None if is_thread is None else (1 if is_thread else 0)
+        )
         with self._tx() as conn:
             conn.execute(
                 """
                 INSERT INTO nodes(eui64, friendly_name, area, device_id, role,
                                   area_id, area_name, manufacturer, model,
                                   sw_version, hw_version, ha_device_path,
+                                  is_thread,
                                   first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(eui64) DO UPDATE SET
                     friendly_name  = COALESCE(excluded.friendly_name,  nodes.friendly_name),
                     area           = COALESCE(excluded.area,           nodes.area),
@@ -349,12 +371,14 @@ class SQLiteStore:
                     sw_version     = COALESCE(excluded.sw_version,     nodes.sw_version),
                     hw_version     = COALESCE(excluded.hw_version,     nodes.hw_version),
                     ha_device_path = COALESCE(excluded.ha_device_path, nodes.ha_device_path),
+                    is_thread      = COALESCE(excluded.is_thread,      nodes.is_thread),
                     last_seen      = excluded.last_seen
                 """,
                 (
                     eui64, friendly_name, legacy_area, device_id, role,
                     area_id, area_name, manufacturer, model,
                     sw_version, hw_version, ha_device_path,
+                    is_thread_val,
                     now, now,
                 ),
             )
@@ -476,11 +500,15 @@ class SQLiteStore:
     # -- links ---------------------------------------------------------
 
     def bump_last_referenced(self, euis: Iterable[str]) -> int:
-        """Mark each EUI as referenced now. Returns count of rows touched.
+        """Update ``last_referenced_at`` for every known EUI in the batch.
 
-        Inserts a placeholder node row if the EUI isn't known yet, so
-        every observed neighbor gets a presence record even without
-        device-registry metadata.
+        **Registry-first contract (v9):** this method is UPDATE-only. EUIs
+        that aren't already in the ``nodes`` table are silently skipped —
+        they belong to stale neighbor/route references and have no business
+        in our authoritative node set. Use :meth:`upsert_node_metadata`
+        (driven by the HA device registry sync) to add real nodes.
+
+        Returns the number of rows that were actually touched.
         """
         ts = _utc_now()
         n = 0
@@ -488,13 +516,11 @@ class SQLiteStore:
             for eui in euis:
                 if not eui:
                     continue
-                conn.execute(
-                    "INSERT INTO nodes(eui64, first_seen, last_seen, last_referenced_at)"
-                    " VALUES (?, ?, ?, ?)"
-                    " ON CONFLICT(eui64) DO UPDATE SET last_referenced_at = excluded.last_referenced_at",
-                    (eui, ts, ts, ts),
+                cur = conn.execute(
+                    "UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+                    (ts, eui),
                 )
-                n += 1
+                n += int(cur.rowcount or 0)
         return n
 
     def sweep_phantoms(self, threshold_seconds: int) -> dict[str, int]:
@@ -701,6 +727,11 @@ class SQLiteStore:
                 "DELETE FROM links WHERE reporter_eui64 = ? AND source = ?",
                 (reporter_eui64, source),
             )
+            # Build the "known EUI" set once per call. Cheaper than a
+            # subquery per row and we'll need this for every link anyway.
+            known_euis = {
+                r[0] for r in conn.execute("SELECT eui64 FROM nodes").fetchall()
+            }
             for link in links:
                 neighbor = link.get("neighbor_eui64")
                 if not neighbor:
@@ -710,6 +741,10 @@ class SQLiteStore:
                     if v is None:
                         return None
                     return 1 if v else 0
+
+                # Registry-first (v9): mark the row as a stale reference if
+                # the neighbor isn't in the (registry-driven) nodes table.
+                neighbor_known = 1 if neighbor in known_euis else 0
 
                 conn.execute(
                     """
@@ -722,8 +757,9 @@ class SQLiteStore:
                         rx_on_when_idle, full_thread_device, full_network_data,
                         link_frame_counter, mle_frame_counter,
                         link_established, allocated, partition_id,
+                        neighbor_known,
                         observed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         reporter_eui64,
@@ -747,6 +783,7 @@ class SQLiteStore:
                         _b(link.get("link_established")),
                         _b(link.get("allocated")),
                         partition_id,
+                        neighbor_known,
                         now,
                     ),
                 )
@@ -763,6 +800,47 @@ class SQLiteStore:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def list_stale_links(self) -> list[dict[str, Any]]:
+        """Return every link row whose ``neighbor_eui64`` is not in the nodes
+        table — i.e., neighbor/route references to EUIs HA has never heard of.
+
+        These are the troubleshooting bait: a router is forwarding to (or
+        seeing as a neighbor) an EUI that no Matter device is registered
+        under. Usually a recommissioned device that left a stale router
+        cache, or a device whose Matter pairing failed but Thread retained
+        a frame counter.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM links WHERE neighbor_known = 0"
+                " ORDER BY reporter_eui64, neighbor_eui64"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def refresh_neighbor_known(self) -> dict[str, int]:
+        """Recompute ``neighbor_known`` for every link against the current
+        nodes table. Call this after the HA registry sync stage adds or
+        removes nodes so existing link rows reflect the new node set
+        without waiting for the reporter to be re-polled.
+
+        Returns ``{marked_known, marked_stale}``.
+        """
+        with self._tx() as conn:
+            cur1 = conn.execute(
+                "UPDATE links SET neighbor_known = 1"
+                " WHERE neighbor_known = 0"
+                "   AND neighbor_eui64 IN (SELECT eui64 FROM nodes)"
+            )
+            cur2 = conn.execute(
+                "UPDATE links SET neighbor_known = 0"
+                " WHERE neighbor_known = 1"
+                "   AND neighbor_eui64 NOT IN (SELECT eui64 FROM nodes)"
+            )
+            return {
+                "marked_known": int(cur1.rowcount or 0),
+                "marked_stale": int(cur2.rowcount or 0),
+            }
 
     def sweep_stale_links(self, ttl_seconds: int) -> int:
         """Delete link rows whose ``observed_at`` is older than the TTL.

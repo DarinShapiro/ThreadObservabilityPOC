@@ -166,6 +166,9 @@ def test_topology_parent_inferred_from_is_child(store: SQLiteStore) -> None:
 
 def test_topology_hides_phantoms_by_default(store: SQLiteStore) -> None:
     """Phantoms should be filtered out of nodes and links by default."""
+    # Registry-first (v9): seed the rows explicitly; bump is UPDATE-only.
+    store.upsert_node_metadata(eui64=A)
+    store.upsert_node_metadata(eui64=B)
     store.bump_last_referenced([A, B])
     store.replace_links_for_reporter(A, "neighbor_table", [
         {"neighbor_eui64": B, "rssi_avg": -55, "is_child": 1},

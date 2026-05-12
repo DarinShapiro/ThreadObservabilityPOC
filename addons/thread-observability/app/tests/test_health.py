@@ -18,6 +18,12 @@ def test_health_empty_store(store: SQLiteStore) -> None:
 
 def test_health_classifies_nodes(store: SQLiteStore) -> None:
     now = datetime.now(tz=UTC)
+    # Registry-first (v9): event ingestion no longer auto-creates node
+    # rows. Seed each EUI as a registry-known node so health classification
+    # can see them.
+    store.upsert_node_metadata(eui64="aa" * 8)
+    store.upsert_node_metadata(eui64="bb" * 8)
+    store.upsert_node_metadata(eui64="cc" * 8)
     store.insert_event(eui64="aa" * 8, type="attach", ts=now.isoformat())
     store.insert_event(eui64="bb" * 8, type="attach",
                        ts=(now - timedelta(minutes=10)).isoformat())
