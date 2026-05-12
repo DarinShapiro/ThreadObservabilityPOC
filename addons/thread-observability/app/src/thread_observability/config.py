@@ -58,6 +58,7 @@ class ThreadObsConfig(BaseModel):
 
     log_level: str = "info"
     timezone: str = "UTC"
+    reset_db_on_start: bool = Field(default=True)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)

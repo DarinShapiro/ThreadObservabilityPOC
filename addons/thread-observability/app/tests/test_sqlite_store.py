@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 5
+    assert store.schema_version == 7
     stats = store.stats()
-    assert stats["schema_version"] == 5
+    assert stats["schema_version"] == 7
     assert stats["row_counts"]["events"] == 0
 
 
@@ -150,3 +150,148 @@ def test_purge_phantom_nodes_removes_links(store: SQLiteStore) -> None:
     assert result["deleted_nodes"] >= 1
     assert result["deleted_links"] >= 1
     assert store.get_node(A) is None
+
+
+def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> None:
+    A = "aa" * 8
+    B = "bb" * 8
+    # Seed some state across the cache tables.
+    store.insert_event(eui64=A, type="attach", rssi=-50)
+    store.bump_last_referenced([A, B])
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -55, "is_child": True},
+    ])
+    store.open_issue(kind="weak_link", severity="warn", eui64=A)
+    assert store.stats()["row_counts"]["nodes"] >= 1
+
+    deleted = store.reset_data()
+    assert deleted >= 1
+
+    counts = store.stats()["row_counts"]
+    assert counts["nodes"] == 0
+    assert counts["links"] == 0
+    assert counts["events"] == 0
+    assert counts["issues"] == 0
+    # Schema migrations still recorded.
+    assert store.schema_version == 7
+
+
+def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
+    eui = "cc" * 8
+    store.upsert_node_metadata(
+        eui64=eui,
+        friendly_name="Kitchen Plug",
+        device_id="abc123",
+        area_id="kitchen",
+        area_name="Kitchen",
+        manufacturer="Eve",
+        model="Energy",
+        sw_version="2.1.0",
+        hw_version="1",
+        ha_device_path="/config/devices/device/abc123",
+    )
+    node = store.get_node(eui)
+    assert node is not None
+    assert node["friendly_name"] == "Kitchen Plug"
+    assert node["area_id"] == "kitchen"
+    assert node["area_name"] == "Kitchen"
+    # Legacy `area` mirrors area_name for backwards compatibility.
+    assert node["area"] == "Kitchen"
+    assert node["manufacturer"] == "Eve"
+    assert node["model"] == "Energy"
+    assert node["sw_version"] == "2.1.0"
+    assert node["hw_version"] == "1"
+    assert node["ha_device_path"] == "/config/devices/device/abc123"
+
+    # COALESCE semantics: partial update must not wipe existing fields.
+    store.upsert_node_metadata(eui64=eui, friendly_name="Kitchen Plug v2")
+    node2 = store.get_node(eui)
+    assert node2["friendly_name"] == "Kitchen Plug v2"
+    assert node2["manufacturer"] == "Eve"
+    assert node2["area_name"] == "Kitchen"
+
+
+def test_sweep_stale_links_deletes_old_rows(store: SQLiteStore) -> None:
+    A = "11" * 8
+    B = "22" * 8
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -60, "is_child": False},
+    ])
+    # Force the observed_at into the past.
+    stale = (datetime.now(tz=UTC) - timedelta(seconds=3600)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE links SET observed_at = ?", (stale,))
+
+    # TTL too generous: nothing should be evicted.
+    assert store.sweep_stale_links(ttl_seconds=7200) == 0
+    assert len(store.list_links()) == 1
+
+    # TTL tight: row evicted.
+    assert store.sweep_stale_links(ttl_seconds=900) == 1
+    assert store.list_links() == []
+
+
+def test_recompute_node_statuses_state_machine(store: SQLiteStore) -> None:
+    fresh = "aa" * 8       # online: referenced now, registered
+    stale = "bb" * 8       # offline: referenced 1h ago, registered
+    dead = "cc" * 8        # phantom: referenced 48h ago, no device_id
+    unreg = "dd" * 8       # unregistered: never referenced, no device_id
+    registered_old = "ee" * 8  # offline: registered, last ref 48h ago (never goes phantom)
+
+    # Registered nodes (have device_id).
+    store.upsert_node_metadata(eui64=fresh, friendly_name="Fresh", device_id="d1")
+    store.upsert_node_metadata(eui64=stale, friendly_name="Stale", device_id="d2")
+    store.upsert_node_metadata(eui64=registered_old, friendly_name="Old", device_id="d3")
+    # Mesh-only nodes (no device_id).
+    store.bump_last_referenced([dead, unreg])
+    # Clear unreg's last_referenced_at so it really has none.
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE nodes SET last_referenced_at = NULL WHERE eui64 = ?", (unreg,))
+
+    now = datetime.now(tz=UTC)
+    fresh_ts = now.isoformat()
+    stale_ts = (now - timedelta(hours=1)).isoformat()
+    dead_ts = (now - timedelta(hours=48)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (fresh_ts, fresh))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (stale_ts, stale))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (dead_ts, dead))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (dead_ts, registered_old))
+
+    summary = store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+    assert summary["online"] == 1
+    # stale + registered_old are both offline (registered, recent-ish or old).
+    assert summary["offline"] == 2
+    assert summary["unregistered"] == 1
+    assert summary["phantom"] == 1
+
+    assert store.get_node(fresh)["status"] == "online"
+    assert store.get_node(stale)["status"] == "offline"
+    assert store.get_node(registered_old)["status"] == "offline"  # protected
+    assert store.get_node(unreg)["status"] == "unregistered"
+    assert store.get_node(dead)["status"] == "phantom"
+    # is_phantom mirrors status=='phantom' for backwards compat.
+    assert store.get_node(dead)["is_phantom"] == 1
+    assert store.get_node(stale)["is_phantom"] == 0
+
+
+def test_purge_expired_nodes_preserves_ha_registered(store: SQLiteStore) -> None:
+    keep = "11" * 8
+    purge = "22" * 8
+    store.upsert_node_metadata(eui64=keep, friendly_name="Keep", device_id="x")
+    store.bump_last_referenced([purge])
+    very_old = (datetime.now(tz=UTC) - timedelta(days=90)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (very_old, keep))
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (very_old, purge))
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+    # `keep` is HA-registered: offline forever. `purge` is mesh-only: phantom.
+    assert store.get_node(keep)["status"] == "offline"
+    assert store.get_node(purge)["status"] == "phantom"
+
+    result = store.purge_expired_nodes(max_offline_seconds=30 * 86400)
+    assert result["deleted_nodes"] == 1
+    assert purge in result["euis"]
+    # HA-registered preserved.
+    assert store.get_node(keep) is not None
+    assert store.get_node(purge) is None

@@ -206,6 +206,9 @@
         <span>┄┄┄ dashed = router→child (end device attached)</span>
         <span>⋯⋯⋯ dotted = route-table entry (multi-hop)</span>
       </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>Tip:</b> click any node to highlight its forwarding path to the OTBR. Click the empty canvas to clear.</span>
+      </div>
     </div>
   </section>
 
@@ -593,10 +596,90 @@ async function renderGraph() {
         'curve-style': 'bezier', 'opacity': 0.6,
         'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(color)',
       }},
+      // Path-highlight classes (toggled by click-to-trace).
+      { selector: '.path-faded', style: { 'opacity': 0.12 } },
+      { selector: 'node.path-hit', style: {
+        'border-width': 4, 'border-color': '#facc15',
+        'opacity': 1,
+      }},
+      { selector: 'node.path-otbr', style: {
+        'border-width': 4, 'border-color': '#22c55e',
+        'opacity': 1,
+      }},
+      { selector: 'edge.path-hit', style: {
+        'line-color': '#facc15', 'opacity': 1, 'width': 5,
+        'target-arrow-color': '#facc15', 'z-index': 999,
+      }},
     ],
     layout: { name: 'cose', animate: false, idealEdgeLength: 110, nodeRepulsion: 9000, gravity: 0.4 },
     wheelSensitivity: 0.2,
   });
+
+  // Click-to-trace: walk next_hop_to_otbr from the clicked node to the OTBR
+  // and highlight the entire forwarding path. Click background to clear.
+  cy.on('tap', 'node', (evt) => highlightPathToOtbr(evt.target.id()));
+  cy.on('tap', (evt) => { if (evt.target === cy) clearPathHighlight(); });
+}
+
+function _nextHopMapByEui() {
+  // Build {eui64 -> next_hop_eui64} from the cached /v1/dev/status response.
+  const m = new Map();
+  if (!lastStatus) return m;
+  for (const n of (lastStatus.all_nodes || [])) {
+    const nh = n.next_hop_to_otbr;
+    if (nh && nh.eui64 && n.eui64) m.set(n.eui64, nh.eui64);
+  }
+  return m;
+}
+
+function _findOtbrEui() {
+  if (!lastStatus) return null;
+  // OTBR is the partition leader of the partition that contains a node
+  // whose next_hop_to_otbr.is_direct points at it — but the simpler signal
+  // is: the node where next_hop_to_otbr is null AND routing_role === 'leader'
+  // (the OTBR itself is the leader of its partition in single-OTBR meshes).
+  for (const n of (lastStatus.all_nodes || [])) {
+    if (n.routing_role === 'leader' && !n.next_hop_to_otbr) return n.eui64;
+  }
+  return null;
+}
+
+function clearPathHighlight() {
+  if (!cy) return;
+  cy.elements().removeClass('path-faded path-hit path-otbr');
+}
+
+function highlightPathToOtbr(startEui) {
+  if (!cy || !startEui) return;
+  const hops = _nextHopMapByEui();
+  const otbrEui = _findOtbrEui();
+  // Walk the chain with cycle detection; bail at depth 32 just in case.
+  const pathNodes = [startEui];
+  const seen = new Set([startEui]);
+  let cur = startEui;
+  for (let i = 0; i < 32; i++) {
+    const nxt = hops.get(cur);
+    if (!nxt || seen.has(nxt)) break;
+    pathNodes.push(nxt);
+    seen.add(nxt);
+    cur = nxt;
+    if (otbrEui && cur === otbrEui) break;
+  }
+  cy.elements().addClass('path-faded');
+  for (const eui of pathNodes) {
+    const n = cy.getElementById(eui);
+    if (n) n.removeClass('path-faded').addClass(eui === otbrEui ? 'path-otbr' : 'path-hit');
+  }
+  // Light up the edges between consecutive path nodes (either direction).
+  for (let i = 0; i + 1 < pathNodes.length; i++) {
+    const a = pathNodes[i], b = pathNodes[i + 1];
+    cy.edges().forEach((e) => {
+      const s = e.data('source'), t = e.data('target');
+      if ((s === a && t === b) || (s === b && t === a)) {
+        e.removeClass('path-faded').addClass('path-hit');
+      }
+    });
+  }
 }
 
 $('#graph-show-phantoms').addEventListener('change', renderGraph);

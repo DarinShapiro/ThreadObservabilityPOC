@@ -140,6 +140,33 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE links ADD COLUMN next_hop_router_id INTEGER;
     CREATE INDEX IF NOT EXISTS idx_nodes_router_id ON nodes(router_id);
     """,
+    # v6: richer HA-registry metadata. Existing `area` column stays for
+    # backwards compatibility (we now mirror `area_name` into it); the new
+    # columns let the UI render area/manufacturer/model and link out to
+    # the HA device page directly.
+    """
+    ALTER TABLE nodes ADD COLUMN area_id        TEXT;
+    ALTER TABLE nodes ADD COLUMN area_name      TEXT;
+    ALTER TABLE nodes ADD COLUMN manufacturer   TEXT;
+    ALTER TABLE nodes ADD COLUMN model          TEXT;
+    ALTER TABLE nodes ADD COLUMN sw_version     TEXT;
+    ALTER TABLE nodes ADD COLUMN hw_version     TEXT;
+    ALTER TABLE nodes ADD COLUMN ha_device_path TEXT;
+    CREATE INDEX IF NOT EXISTS idx_nodes_area_id ON nodes(area_id);
+    """,
+    # v7: explicit node status enum, replacing the binary is_phantom flag
+    # as the primary lifecycle signal. Values:
+    #   'online'       — referenced in current discovery window
+    #   'offline'      — not referenced recently but still within retention
+    #   'unregistered' — observed via mesh, no HA device_id
+    #   'phantom'      — eligible for purge (long-stale, not HA-registered)
+    # `is_phantom` stays for now (mirrored from status='phantom') so any
+    # external consumer keeps working; remove in a later major.
+    """
+    ALTER TABLE nodes ADD COLUMN status            TEXT NOT NULL DEFAULT 'online';
+    ALTER TABLE nodes ADD COLUMN status_changed_at TEXT;
+    CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
+    """,
 ]
 
 
@@ -272,22 +299,46 @@ class SQLiteStore:
         area: str | None = None,
         device_id: str | None = None,
         role: str | None = None,
+        area_id: str | None = None,
+        area_name: str | None = None,
+        manufacturer: str | None = None,
+        model: str | None = None,
+        sw_version: str | None = None,
+        hw_version: str | None = None,
+        ha_device_path: str | None = None,
     ) -> None:
         now = _utc_now()
+        # Keep legacy `area` column populated with the resolved name so older
+        # readers continue to work.
+        legacy_area = area if area is not None else area_name
         with self._tx() as conn:
             conn.execute(
                 """
                 INSERT INTO nodes(eui64, friendly_name, area, device_id, role,
+                                  area_id, area_name, manufacturer, model,
+                                  sw_version, hw_version, ha_device_path,
                                   first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(eui64) DO UPDATE SET
-                    friendly_name = COALESCE(excluded.friendly_name, nodes.friendly_name),
-                    area          = COALESCE(excluded.area,          nodes.area),
-                    device_id     = COALESCE(excluded.device_id,     nodes.device_id),
-                    role          = COALESCE(excluded.role,          nodes.role),
-                    last_seen     = excluded.last_seen
+                    friendly_name  = COALESCE(excluded.friendly_name,  nodes.friendly_name),
+                    area           = COALESCE(excluded.area,           nodes.area),
+                    device_id      = COALESCE(excluded.device_id,      nodes.device_id),
+                    role           = COALESCE(excluded.role,           nodes.role),
+                    area_id        = COALESCE(excluded.area_id,        nodes.area_id),
+                    area_name      = COALESCE(excluded.area_name,      nodes.area_name),
+                    manufacturer   = COALESCE(excluded.manufacturer,   nodes.manufacturer),
+                    model          = COALESCE(excluded.model,          nodes.model),
+                    sw_version     = COALESCE(excluded.sw_version,     nodes.sw_version),
+                    hw_version     = COALESCE(excluded.hw_version,     nodes.hw_version),
+                    ha_device_path = COALESCE(excluded.ha_device_path, nodes.ha_device_path),
+                    last_seen      = excluded.last_seen
                 """,
-                (eui64, friendly_name, area, device_id, role, now, now),
+                (
+                    eui64, friendly_name, legacy_area, device_id, role,
+                    area_id, area_name, manufacturer, model,
+                    sw_version, hw_version, ha_device_path,
+                    now, now,
+                ),
             )
 
     def get_node(self, eui64: str) -> dict[str, Any] | None:
@@ -482,6 +533,127 @@ class SQLiteStore:
                 "euis": euis,
             }
 
+    def recompute_node_statuses(
+        self,
+        *,
+        offline_seconds: int,
+        phantom_seconds: int,
+    ) -> dict[str, int]:
+        """Recompute the ``status`` column for every node.
+
+        State machine (evaluated atomically against the current timestamp):
+
+        * ``online``       — ``last_referenced_at`` within ``offline_seconds``.
+        * ``offline``      — last referenced between ``offline_seconds`` and
+          ``phantom_seconds`` ago, OR HA-registered (``device_id`` not null)
+          regardless of age (HA-registered nodes never auto-purge).
+        * ``unregistered`` — never referenced AND no HA ``device_id``. Includes
+          rows inserted by neighbor-table sightings before discovery has had
+          a chance to associate them with an HA device.
+        * ``phantom``      — last referenced longer than ``phantom_seconds``
+          ago AND not HA-registered. Eligible for ``purge_expired_nodes``.
+
+        ``is_phantom`` is mirrored from the new column for backwards compat.
+        ``status_changed_at`` is bumped only when the value actually changes.
+
+        Returns ``{state: count}`` summary plus ``changed`` (number of rows
+        whose status flipped this call).
+        """
+        now = _utc_now()
+        offline_cutoff = (
+            datetime.now(tz=UTC) - timedelta(seconds=offline_seconds)
+        ).isoformat()
+        phantom_cutoff = (
+            datetime.now(tz=UTC) - timedelta(seconds=phantom_seconds)
+        ).isoformat()
+        with self._tx() as conn:
+            # Compute the new status per row in a single CASE expression so we
+            # don't fight ourselves with overlapping UPDATEs.
+            cur = conn.execute(
+                """
+                UPDATE nodes
+                   SET status_changed_at = CASE
+                           WHEN status <> new_status THEN ?
+                           ELSE status_changed_at
+                       END,
+                       status     = new_status,
+                       is_phantom = CASE WHEN new_status = 'phantom' THEN 1 ELSE 0 END
+                  FROM (
+                      SELECT eui64,
+                             CASE
+                                 WHEN last_referenced_at IS NOT NULL
+                                  AND last_referenced_at >= ?  THEN 'online'
+                                 WHEN device_id IS NOT NULL    THEN 'offline'
+                                 WHEN last_referenced_at IS NOT NULL
+                                  AND last_referenced_at >= ?  THEN 'offline'
+                                 WHEN last_referenced_at IS NULL THEN 'unregistered'
+                                 ELSE 'phantom'
+                             END AS new_status
+                        FROM nodes
+                  ) AS calc
+                 WHERE nodes.eui64 = calc.eui64
+                """,
+                (now, offline_cutoff, phantom_cutoff),
+            )
+            changed = int(cur.rowcount or 0)
+            counts = {
+                row["status"]: int(row["n"])
+                for row in conn.execute(
+                    "SELECT status, COUNT(*) AS n FROM nodes GROUP BY status"
+                ).fetchall()
+            }
+        out = {
+            "online": counts.get("online", 0),
+            "offline": counts.get("offline", 0),
+            "unregistered": counts.get("unregistered", 0),
+            "phantom": counts.get("phantom", 0),
+            "changed": changed,
+        }
+        return out
+
+    def purge_expired_nodes(self, *, max_offline_seconds: int) -> dict[str, Any]:
+        """Delete nodes in 'phantom' state OR 'offline' beyond the retention
+        window, provided they are NOT HA-registered.
+
+        HA-registered nodes (``device_id`` not null) are preserved indefinitely
+        — they represent something the user owns and we should respect.
+
+        Also removes any link rows touching the deleted EUIs.
+        """
+        cutoff = (
+            datetime.now(tz=UTC) - timedelta(seconds=max_offline_seconds)
+        ).isoformat()
+        with self._tx() as conn:
+            rows = conn.execute(
+                """
+                SELECT eui64 FROM nodes
+                 WHERE device_id IS NULL
+                   AND (
+                        status = 'phantom'
+                     OR (status = 'offline' AND (status_changed_at IS NULL OR status_changed_at < ?))
+                   )
+                """,
+                (cutoff,),
+            ).fetchall()
+            euis = [r[0] for r in rows]
+            if not euis:
+                return {"deleted_nodes": 0, "deleted_links": 0, "euis": []}
+            placeholders = ",".join("?" for _ in euis)
+            cur_links = conn.execute(
+                f"DELETE FROM links WHERE reporter_eui64 IN ({placeholders})"
+                f"    OR neighbor_eui64 IN ({placeholders})",
+                (*euis, *euis),
+            )
+            cur_nodes = conn.execute(
+                f"DELETE FROM nodes WHERE eui64 IN ({placeholders})",
+                euis,
+            )
+            return {
+                "deleted_nodes": int(cur_nodes.rowcount or 0),
+                "deleted_links": int(cur_links.rowcount or 0),
+                "euis": euis,
+            }
+
     def replace_links_for_reporter(
         self,
         reporter_eui64: str,
@@ -549,6 +721,28 @@ class SQLiteStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
 
+    def sweep_stale_links(self, ttl_seconds: int) -> int:
+        """Delete link rows whose ``observed_at`` is older than the TTL.
+
+        ``replace_links_for_reporter`` only overwrites rows for the
+        (reporter, source) tuples that report this cycle. If a reporter
+        goes silent (powered off, removed from fabric, falls off-mesh)
+        its rows never refresh and persist forever, causing dead nodes
+        to keep appearing as "peer of X" long after they are gone.
+
+        Calling this each discovery cycle with a TTL of roughly
+        3\u00d7 the discovery interval purges those stale rows without
+        risking false-positives during a single missed poll.
+
+        Returns the number of rows deleted.
+        """
+        cutoff = (datetime.now(tz=UTC) - timedelta(seconds=ttl_seconds)).isoformat()
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM links WHERE observed_at < ?", (cutoff,),
+            )
+            return int(cur.rowcount or 0)
+
     # -- stats ---------------------------------------------------------
 
     def stats(self) -> dict[str, Any]:
@@ -575,6 +769,48 @@ class SQLiteStore:
     def vacuum(self) -> None:
         with self._lock:
             self._conn.execute("VACUUM")
+
+    def reset_data(self) -> int:
+        """Truncate all observed-state tables, preserving schema.
+
+        The DB is a live cache of what the Thread fabric currently reports;
+        anything we keep across restarts that does not come back in the next
+        poll cycle is by definition stale. Wiping on every boot makes the
+        DB authoritative-by-construction: if a node/link reappears, it is
+        real; if it does not, it was zombie data.
+
+        Preserves: ``schema_version`` (migrations stay applied).
+        Wipes: ``nodes``, ``links``, ``events``, ``issues``,
+        ``metadata_cache``, ``ingest_state``.
+
+        Returns the total number of rows deleted across all tables.
+        """
+        tables = (
+            "links",
+            "events",
+            "issues",
+            "nodes",
+            "metadata_cache",
+            "ingest_state",
+        )
+        total = 0
+        with self._tx() as conn:
+            for t in tables:
+                # Use a guarded delete so missing tables (older schema) are skipped.
+                exists = conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                    (t,),
+                ).fetchone()
+                if not exists:
+                    continue
+                cur = conn.execute(f"DELETE FROM {t}")
+                total += cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        # Reclaim space outside the transaction.
+        try:
+            self._conn.execute("VACUUM")
+        except sqlite3.OperationalError:
+            pass
+        return total
 
     def close(self) -> None:
         with self._lock:

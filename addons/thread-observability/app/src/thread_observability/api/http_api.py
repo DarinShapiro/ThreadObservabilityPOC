@@ -99,6 +99,19 @@ async def _lifespan(app: FastAPI):
     reasoner_interval = int(getattr(cfg.scheduler, "reasoner_interval_seconds", 120))
     otbr_rest_interval = int(getattr(cfg.scheduler, "otbr_rest_interval_seconds", 60))
 
+    # The SQLite store is a live cache of what the Thread fabric currently
+    # reports. Anything that survives across a restart but does not come back
+    # in the next poll cycle is, by definition, stale. Wiping on boot makes
+    # the DB authoritative-by-construction.
+    if getattr(cfg, "reset_db_on_start", True):
+        try:
+            deleted = get_store().reset_data()
+            log.info("reset_db_on_start: wiped %d rows from cache tables", deleted)
+        except Exception:  # noqa: BLE001
+            log.exception("reset_db_on_start: failed to truncate cache tables")
+    else:
+        log.info("reset_db_on_start=false: preserving previous DB contents")
+
     tasks = [
         asyncio.create_task(
             otbr_adapter.run_forever(interval_seconds=ingest_interval),

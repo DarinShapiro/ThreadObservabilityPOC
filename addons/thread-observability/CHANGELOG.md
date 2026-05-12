@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.9.31 — Status enum + graph click-to-trace
+
+- **Node status enum** (replaces the binary `is_phantom` flag as the primary lifecycle signal):
+  - `online`       — referenced in the current discovery window (`OFFLINE_AFTER_SECONDS`, default 900s).
+  - `offline`      — not referenced recently, OR HA-registered (`device_id` present) regardless of age. **HA-registered nodes never auto-purge.**
+  - `unregistered` — observed via mesh but never had a recent reference and no HA `device_id`.
+  - `phantom`      — stale beyond `PHANTOM_AFTER_SECONDS` (default 24h) AND not HA-registered. Eligible for purge.
+- **Schema v7** (auto-migration): `nodes.status` (NOT NULL DEFAULT 'online'), `nodes.status_changed_at`, indexed on `status`. `is_phantom` retained and mirrored from `status='phantom'` for backwards compat.
+- **Atomic recompute**: new `recompute_node_statuses(offline_seconds, phantom_seconds)` evaluates the state machine for every row in a single SQL pass; `status_changed_at` only updates when the value actually flips.
+- **Offline retention**: new `purge_expired_nodes(max_offline_seconds)` deletes phantom-state rows and `offline` rows older than the retention window (default 30 days via `OFFLINE_RETENTION_SECONDS`), but never touches HA-registered nodes. Both hooks run at the end of every discovery cycle.
+- **API**: `/v1/dev/status all_nodes[*]` and the single-node summary now include `status` (from the new column, falling back to the legacy heuristic for un-recomputed rows) and `status_changed_at`.
+- **Graph click-to-trace**: clicking any node in the Network Graph tab highlights its forwarding path to the OTBR by walking `next_hop_to_otbr.eui64` (with cycle detection, depth≤32). Path nodes get a yellow border, the OTBR gets a green border, and non-path nodes/edges fade to 12% opacity. Click the empty canvas to clear. (This was the deferred 0.9.29 visual; rebuilt cleanly on a single style array.)
+- **Skipped from earlier plan**: Influx time-series snapshots. The HA InfluxDB add-on isn't deployed in this env; existing `InfluxConfig` + `SQLiteFallbackStore` plumbing stays in place, ready to light up when a token is provisioned. Until then, SQLite remains the only backend and stays a wipe-on-boot cache.
+
+## 0.9.30 — HA registry reconciler + link TTL
+
+- **Persist full HA metadata** on every node: `area_id`, `area_name`, `manufacturer`, `model`, `sw_version`, `hw_version`, `ha_device_path` (deep link to `/config/devices/device/<id>`). Was silently dropping all of these in 0.9.29 — the reconciler collected them but only wrote `friendly_name` + `device_id`.
+- **Area registry resolution**: reads `/config/.storage/core.area_registry` once per discover cycle to map `area_id → area_name`. Logs the count so we can spot `/config` mount issues immediately (`area_registry=0` means the addon can't see HA storage).
+- **Schema v6** (auto-migration): new columns on `nodes` for the fields above, indexed on `area_id`. Legacy `area` column is mirrored from `area_name` for backwards compat.
+- **Don't skip metadata-only registry rows**: 0.9.29 skipped any device without a `friendly_name` *and* a `device_id`. Now we persist anything that has *any* of friendly_name / device_id / area_id / manufacturer / model so the UI can render context even for unnamed devices.
+- **Link-row TTL**: new `sweep_stale_links(ttl_seconds)` runs at the end of every discovery cycle (default 900s, configurable via `LINK_TTL_SECONDS`). Reporter rows that aren't refreshed within ~3× the discover interval are evicted. This is the second line of defense after wipe-on-boot — zombie peers can't survive even a single missed restart.
+- **API surface**: `/v1/dev/status all_nodes` now returns `area`, `area_id`, `area_name`, `manufacturer`, `model`, `sw_version`, `hw_version`, `ha_device_path` per node.
+- **What's still next**: status enum (`online / offline / unregistered / phantom`) with 30-day offline retention; Influx time-series snapshots per ingestion run (the path to graduating SQLite from cache to system-of-record); Graph tab click-to-trace highlighting. Queued for 0.9.31.
+
+## 0.9.29 — The DB is a cache, not a system of record
+
+- **Wipe-on-startup**: `nodes`, `links`, `events`, `issues`, `metadata_cache`, and `ingest_state` are now truncated on every addon start. The Thread fabric and the HA device registry are the sources of truth; SQLite is a live cache of what those sources currently report. Anything that survives a restart but does not come back in the next poll cycle was, by definition, stale.
+- **Why**: a year-dead soil-moisture sensor was still appearing as a "peer of router X" because `replace_links_for_reporter` never deletes rows for reporters that go silent, and `bump_last_referenced` kept resurrecting the EUI from those stale rows. Truncate-on-boot eliminates the entire class of zombie-row bugs in one stroke; if a node reappears, it is real.
+- **New config**: `reset_db_on_start: bool` (default `true`). Set to `false` to preserve previous DB contents across restarts (debugging only — production should leave the default).
+- **New API**: `SQLiteStore.reset_data()` — truncates cache tables, preserves `schema_version`, runs `VACUUM`. Logged at INFO with the row count deleted.
+- **What's still next**: HA-registry reconciler fix (every node currently shows `friendly_name: null` in production), persist `area_id`/`manufacturer`/`model`, and Graph-tab click-to-trace next-hop highlighting. Queued for 0.9.30.
+
 ## 0.9.28 — Next-hop to OTBR per router (the actual forwarding view)
 
 - **Thread Nodes table**: every router now shows its next forwarding hop on the path to the OTBR, e.g. `→ OTBR via Eve Energy (cost 3)` or `→ OTBR direct (cost 1)` when it is a direct mesh neighbor of the border router. This is what you read first when troubleshooting — it tells you the exact router a packet leaves through, not just who the partition leader is.

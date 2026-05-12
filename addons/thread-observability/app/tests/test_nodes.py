@@ -48,7 +48,9 @@ def test_get_node_summary(store) -> None:
     assert summary["eui64"] == "aabbccddeeff0011"
     assert summary["friendly_name"] == "Sensor A"
     assert summary["display_name"] == "Sensor A"
-    assert summary["status"] == "healthy"
+    # 0.9.31: status column defaults to 'online' on upsert; previously the
+    # `infer_node_status` heuristic returned 'healthy'.
+    assert summary["status"] == "online"
     assert summary["signal_strength"]["rssi"] == -70
     assert summary["signal_strength"]["lqi"] == 180
 

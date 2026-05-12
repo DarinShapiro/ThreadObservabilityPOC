@@ -112,11 +112,19 @@ def get_node_summary(
         "friendly_name": node.get("friendly_name"),
         "display_name": get_node_display_name(node),
         "role": node.get("role"),
-        "area": node.get("area"),
+        "area": node.get("area_name") or node.get("area"),
+        "area_id": node.get("area_id"),
+        "area_name": node.get("area_name"),
+        "manufacturer": node.get("manufacturer"),
+        "model": node.get("model"),
+        "sw_version": node.get("sw_version"),
+        "hw_version": node.get("hw_version"),
+        "ha_device_path": node.get("ha_device_path"),
         "device_id": node.get("device_id"),
         "first_seen": node.get("first_seen"),
         "last_seen": node.get("last_seen"),
-        "status": infer_node_status(node),
+        "status": node.get("status") or infer_node_status(node),
+        "status_changed_at": node.get("status_changed_at"),
     }
 
     if include_signal_strength:
@@ -317,7 +325,9 @@ def list_nodes_enriched(
     next_hop_map = _build_next_hop_to_otbr(s, nodes)
     out: list[dict[str, Any]] = []
     for node in nodes:
-        if not include_phantoms and node.get("is_phantom"):
+        if not include_phantoms and (
+            node.get("status") == "phantom" or node.get("is_phantom")
+        ):
             continue
         eui = node.get("eui64")
         routing_role = node.get("routing_role")
@@ -331,12 +341,20 @@ def list_nodes_enriched(
             "role": node.get("role"),
             "routing_role": routing_role,
             "device_kind": classify_device_kind(routing_role),
-            "area": node.get("area"),
+            "area": node.get("area_name") or node.get("area"),
+            "area_id": node.get("area_id"),
+            "area_name": node.get("area_name"),
+            "manufacturer": node.get("manufacturer"),
+            "model": node.get("model"),
+            "sw_version": node.get("sw_version"),
+            "hw_version": node.get("hw_version"),
+            "ha_device_path": node.get("ha_device_path"),
             "device_id": node.get("device_id"),
             "first_seen": node.get("first_seen"),
             "last_seen": node.get("last_seen"),
-            "status": infer_node_status(node),
-            "is_phantom": bool(node.get("is_phantom")),
+            "status": node.get("status") or infer_node_status(node),
+            "status_changed_at": node.get("status_changed_at"),
+            "is_phantom": bool(node.get("is_phantom")) or node.get("status") == "phantom",
             "last_referenced_at": node.get("last_referenced_at"),
             "partition_id": partition_id,
             "partition_leader_eui64": leader_eui,

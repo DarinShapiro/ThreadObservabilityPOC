@@ -22,6 +22,31 @@ log = logging.getLogger(__name__)
 # HA config directory - typically /config in the addon environment
 HA_CONFIG_DIR = Path(os.getenv("HA_CONFIG_DIR", "/config"))
 DEVICE_REGISTRY_PATH = HA_CONFIG_DIR / ".storage" / "core.device_registry"
+AREA_REGISTRY_PATH = HA_CONFIG_DIR / ".storage" / "core.area_registry"
+
+
+def _load_area_registry() -> dict[str, str]:
+    """Read HA's area registry and return ``{area_id: area_name}``.
+
+    Returns an empty dict on any failure (file missing, malformed JSON,
+    /config not mounted). Caller treats missing area_name as “unknown”.
+    """
+    try:
+        raw = json.loads(AREA_REGISTRY_PATH.read_text())
+    except FileNotFoundError:
+        log.debug("area registry not found at %s", AREA_REGISTRY_PATH)
+        return {}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("failed to read area registry: %s", exc)
+        return {}
+    areas = (raw.get("data") or {}).get("areas") or []
+    out: dict[str, str] = {}
+    for a in areas:
+        aid = a.get("id")
+        name = a.get("name")
+        if aid and name:
+            out[str(aid)] = str(name)
+    return out
 
 # Matter server WebSocket endpoint. We query it to bridge Matter node_id
 # (present in HA device registry as an identifier) to the Thread EUI64
@@ -603,6 +628,8 @@ async def fetch_device_registry() -> list[dict[str, Any]]:
             "manufacturer": dev.get("manufacturer"),
             "model": dev.get("model"),
             "area_id": dev.get("area_id"),
+            "sw_version": dev.get("sw_version"),
+            "hw_version": dev.get("hw_version"),
             "primary_config_entry": dev.get("primary_config_entry"),
         }
         # Primary path: direct Thread connection on the device.
@@ -756,6 +783,8 @@ def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str
                         "manufacturer": dev.get("manufacturer"),
                         "model": dev.get("model"),
                         "area_id": dev.get("area_id"),
+                        "sw_version": dev.get("sw_version"),
+                        "hw_version": dev.get("hw_version"),
                         "primary_config_entry": dev.get("primary_config_entry"),
                     }
                     log.debug(
@@ -781,6 +810,8 @@ def _extract_thread_devices(devices: list[dict[str, Any]]) -> dict[str, dict[str
                         "manufacturer": dev.get("manufacturer"),
                         "model": dev.get("model"),
                         "area_id": dev.get("area_id"),
+                        "sw_version": dev.get("sw_version"),
+                        "hw_version": dev.get("hw_version"),
                         "primary_config_entry": dev.get("primary_config_entry"),
                     }
                     log.debug(
@@ -811,6 +842,9 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
         log.info("No Thread devices found in device registry")
         return {"matched": 0, "updated": 0, "devices": {}}
 
+    # Resolve area_id -> area_name once. Empty dict if /config not mounted.
+    area_names = _load_area_registry()
+
     # Correlate with our nodes, and also insert any registry/bridge devices
     # that don't yet have a row (so Matter-commissioned Thread devices appear
     # in the nodes list even before OTBR logs mention them).
@@ -823,37 +857,78 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
     for eui, dev in thread_devs.items():
         friendly_name = dev.get("name_by_user") or dev.get("name")
         device_id = dev.get("device_id")
-        if not friendly_name and not device_id:
+        manufacturer = dev.get("manufacturer")
+        model = dev.get("model")
+        area_id = dev.get("area_id")
+        sw_version = dev.get("sw_version")
+        hw_version = dev.get("hw_version")
+        # Anything that contributes useful metadata is worth persisting,
+        # even an unnamed registry device — area/manufacturer/model still
+        # let the UI render context.
+        if not any((friendly_name, device_id, area_id, manufacturer, model)):
             continue
+        area_name = area_names.get(str(area_id)) if area_id else None
+        # Deep link to the HA device page; HA renders /config/devices/device/<id>.
+        ha_device_path = f"/config/devices/device/{device_id}" if device_id else None
         matches[eui] = {
             "friendly_name": friendly_name,
             "device_id": device_id,
-            "manufacturer": dev.get("manufacturer"),
-            "model": dev.get("model"),
+            "manufacturer": manufacturer,
+            "model": model,
+            "area_id": area_id,
+            "area_name": area_name,
+            "sw_version": sw_version,
+            "hw_version": hw_version,
+            "ha_device_path": ha_device_path,
         }
         try:
             s.upsert_node_metadata(
                 eui64=eui,
                 friendly_name=friendly_name,
                 device_id=device_id,
+                area_id=area_id,
+                area_name=area_name,
+                manufacturer=manufacturer,
+                model=model,
+                sw_version=sw_version,
+                hw_version=hw_version,
+                ha_device_path=ha_device_path,
             )
             if eui in existing_euis:
                 updated += 1
-                log.info("Updated node %s with device name '%s'", eui, friendly_name)
+                log.info(
+                    "Updated node %s: name=%r area=%r mfg=%r model=%r",
+                    eui, friendly_name, area_name, manufacturer, model,
+                )
             else:
                 inserted += 1
-                log.info("Inserted node %s with device name '%s'", eui, friendly_name)
+                log.info(
+                    "Inserted node %s: name=%r area=%r mfg=%r model=%r",
+                    eui, friendly_name, area_name, manufacturer, model,
+                )
         except Exception as exc:
             log.warning("Failed to upsert node %s: %s", eui, exc)
 
     log.info(
-        "device discovery: scanned %d devices, found %d matches, updated %d, inserted %d",
-        len(devices), len(matches), updated, inserted,
+        "device discovery: scanned %d devices, found %d matches, updated %d, inserted %d, area_registry=%d",
+        len(devices), len(matches), updated, inserted, len(area_names),
     )
 
     # Persist Thread diagnostics + neighbor/route tables harvested from
     # matter-server (cluster 53). Also detect partition splits.
     diag_summary = _persist_matter_diagnostics(s, nodes)
+
+    # Evict stale link rows whose reporters have gone silent (~3\u00d7 discover
+    # interval; configurable via env). Without this, zombie peers persist
+    # forever — see CHANGELOG 0.9.30.
+    link_ttl_s = int(os.getenv("LINK_TTL_SECONDS", "900"))
+    try:
+        evicted_links = s.sweep_stale_links(link_ttl_s)
+        if evicted_links:
+            log.info("link TTL sweep: evicted %d rows older than %ds", evicted_links, link_ttl_s)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("link TTL sweep failed: %s", exc)
+        evicted_links = 0
 
     return {
         "devices_scanned": len(devices),
@@ -862,6 +937,7 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
         "inserted": inserted,
         "matches": matches,
         "diagnostics": diag_summary,
+        "stale_links_evicted": evicted_links,
     }
 
 
@@ -971,14 +1047,55 @@ def _persist_matter_diagnostics(
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Failed to insert partition_change event for %s: %s", eui, exc)
 
-    # Bump last_referenced_at for everything we observed, then run the
-    # phantom sweep against the configured staleness threshold.
+    # Bump last_referenced_at for everything we observed, then recompute
+    # node status (online / offline / unregistered / phantom). The legacy
+    # binary phantom sweep stays for one cycle of backwards compat with the
+    # diagnostics summary; the new column is the authoritative signal.
     try:
         s.bump_last_referenced(referenced)
     except Exception as exc:  # noqa: BLE001
         log.warning("Failed to bump last_referenced_at: %s", exc)
+
+    # Status thresholds. `OFFLINE_AFTER_SECONDS` flips online -> offline;
+    # `PHANTOM_AFTER_SECONDS` flips offline -> phantom (eligible for purge,
+    # unless HA-registered). Both env-configurable for ops dial-in.
+    offline_after_s = int(os.getenv("OFFLINE_AFTER_SECONDS", "900"))         # 15 min
+    phantom_after_s = int(os.getenv("PHANTOM_AFTER_SECONDS",
+                                     str(int(PHANTOM_THRESHOLD_HOURS * 3600))))  # 24h default
+    status_summary: dict[str, int] = {}
     try:
-        sweep = s.sweep_phantoms(int(PHANTOM_THRESHOLD_HOURS * 3600))
+        status_summary = s.recompute_node_statuses(
+            offline_seconds=offline_after_s,
+            phantom_seconds=phantom_after_s,
+        )
+        if status_summary.get("changed"):
+            log.info(
+                "status: online=%d offline=%d unregistered=%d phantom=%d (changed=%d)",
+                status_summary.get("online", 0),
+                status_summary.get("offline", 0),
+                status_summary.get("unregistered", 0),
+                status_summary.get("phantom", 0),
+                status_summary["changed"],
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("recompute_node_statuses failed: %s", exc)
+
+    # Purge eligible expired nodes (phantom OR offline-beyond-retention,
+    # never HA-registered). 30-day retention by default.
+    max_offline_s = int(os.getenv("OFFLINE_RETENTION_SECONDS", str(30 * 86400)))
+    try:
+        purged = s.purge_expired_nodes(max_offline_seconds=max_offline_s)
+        if purged.get("deleted_nodes"):
+            log.info(
+                "purge_expired_nodes: deleted %d nodes / %d links (retention=%ds)",
+                purged["deleted_nodes"], purged["deleted_links"], max_offline_s,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("purge_expired_nodes failed: %s", exc)
+
+    # Legacy sweep kept for diagnostics consumers that still inspect counts.
+    try:
+        sweep = s.sweep_phantoms(phantom_after_s)
         phantom_marked = sweep["marked"]
         phantom_cleared = sweep["cleared"]
     except Exception as exc:  # noqa: BLE001
