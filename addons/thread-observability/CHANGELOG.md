@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.15 — Upsert bridged Matter devices into nodes table
+
+- `discover_and_sync` now inserts a row for every Matter-bridged Thread device, not only updates existing ones
+- Result: all Matter-commissioned Thread devices show up in the Thread Nodes table immediately, with friendly names, even if OTBR logs haven't observed them yet
+- Response now also includes `inserted` count alongside `updated`
+
 ## 0.9.14 — Stamp EUI64 + preserve registry metadata in merged map
 
 - `fetch_device_registry` now writes `extendedAddress` onto every value in the merged dict so `_extract_thread_devices` can key on it

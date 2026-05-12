@@ -625,49 +625,50 @@ async def discover_and_sync(store: SQLiteStore | None = None) -> dict[str, Any]:
         log.info("No Thread devices found in device registry")
         return {"matched": 0, "updated": 0, "devices": {}}
 
-    # Correlate with our nodes
+    # Correlate with our nodes, and also insert any registry/bridge devices
+    # that don't yet have a row (so Matter-commissioned Thread devices appear
+    # in the nodes list even before OTBR logs mention them).
     nodes = s.list_nodes()
+    existing_euis = {n.get("eui64") for n in nodes if n.get("eui64")}
     updated = 0
+    inserted = 0
     matches: dict[str, dict[str, Any]] = {}
 
-    for node in nodes:
-        eui = node.get("eui64")
-        if not eui:
+    for eui, dev in thread_devs.items():
+        friendly_name = dev.get("name_by_user") or dev.get("name")
+        device_id = dev.get("device_id")
+        if not friendly_name and not device_id:
             continue
-        if eui in thread_devs:
-            dev = thread_devs[eui]
-            # Use name_by_user (user-set) if available, else the auto name
-            friendly_name = dev.get("name_by_user") or dev.get("name")
-            device_id = dev.get("device_id")
-            matches[eui] = {
-                "friendly_name": friendly_name,
-                "device_id": device_id,
-                "manufacturer": dev.get("manufacturer"),
-                "model": dev.get("model"),
-            }
-            # Update the node with metadata
-            try:
-                s.set_node_metadata(
-                    eui64=eui,
-                    friendly_name=friendly_name,
-                    device_id=device_id,
-                )
+        matches[eui] = {
+            "friendly_name": friendly_name,
+            "device_id": device_id,
+            "manufacturer": dev.get("manufacturer"),
+            "model": dev.get("model"),
+        }
+        try:
+            s.upsert_node_metadata(
+                eui64=eui,
+                friendly_name=friendly_name,
+                device_id=device_id,
+            )
+            if eui in existing_euis:
                 updated += 1
-                log.info(
-                    "Updated node %s with device name '%s'",
-                    eui, friendly_name,
-                )
-            except Exception as exc:
-                log.warning("Failed to update node %s: %s", eui, exc)
+                log.info("Updated node %s with device name '%s'", eui, friendly_name)
+            else:
+                inserted += 1
+                log.info("Inserted node %s with device name '%s'", eui, friendly_name)
+        except Exception as exc:
+            log.warning("Failed to upsert node %s: %s", eui, exc)
 
     log.info(
-        "device discovery: scanned %d devices, found %d matches, updated %d nodes",
-        len(devices), len(matches), updated,
+        "device discovery: scanned %d devices, found %d matches, updated %d, inserted %d",
+        len(devices), len(matches), updated, inserted,
     )
     return {
         "devices_scanned": len(devices),
         "matched": len(matches),
         "updated": updated,
+        "inserted": inserted,
         "matches": matches,
     }
 
