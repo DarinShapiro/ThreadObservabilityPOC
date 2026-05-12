@@ -298,3 +298,60 @@ def test_reasoner_closes_stale_partition_split_when_topology_resolved(
     assert not any(i["id"] == issue_id for i in store.list_active_issues())
 
 
+def test_wrong_network_opens_issue_for_minority(store: SQLiteStore) -> None:
+    """v0.9.46: minority extended_pan_id triggers wrong_network."""
+    majority_epid = "aaaaaaaaaaaaaaaa"
+    minority_epid = "bbbbbbbbbbbbbbbb"
+    for i, eui in enumerate(("11" * 8, "22" * 8, "33" * 8)):
+        store.upsert_node_metadata(eui64=eui, friendly_name=f"r{i}")
+        store.set_node_diagnostics(
+            eui, network_name="ha-thread-main", extended_pan_id=majority_epid,
+        )
+    minority_eui = "44" * 8
+    store.upsert_node_metadata(eui64=minority_eui, friendly_name="stray")
+    store.set_node_diagnostics(
+        minority_eui, network_name="ha-thread-old", extended_pan_id=minority_epid,
+    )
+
+    out = run_reasoner(store=store)
+    issues = [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["eui64"] == minority_eui
+    ev = issue["evidence"]
+    assert ev["node_extended_pan_id"] == minority_epid
+    assert ev["modal_extended_pan_id"] == majority_epid
+    assert ev["modal_member_count"] == 3
+    assert ev["minority_member_count"] == 1
+    assert issue["id"] in out["opened"]
+
+
+def test_wrong_network_closes_when_resolved(store: SQLiteStore) -> None:
+    """Once the minority node adopts the modal EPID, the issue auto-closes."""
+    eui = "55" * 8
+    store.upsert_node_metadata(eui64=eui)
+    store.set_node_diagnostics(eui, extended_pan_id="bbbbbbbbbbbbbbbb")
+    for other in ("66" * 8, "77" * 8):
+        store.upsert_node_metadata(eui64=other)
+        store.set_node_diagnostics(other, extended_pan_id="aaaaaaaaaaaaaaaa")
+    run_reasoner(store=store)
+    active = [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
+    assert len(active) == 1
+    issue_id = active[0]["id"]
+
+    # Minority node re-attached on the right network.
+    store.set_node_diagnostics(eui, extended_pan_id="aaaaaaaaaaaaaaaa")
+    out = run_reasoner(store=store)
+    assert issue_id in out["closed"]
+
+
+def test_wrong_network_no_issue_when_all_match(store: SQLiteStore) -> None:
+    """Sanity: a healthy mesh on one EPID must not fire wrong_network."""
+    for eui in ("11" * 8, "22" * 8, "33" * 8):
+        store.upsert_node_metadata(eui64=eui)
+        store.set_node_diagnostics(eui, extended_pan_id="aaaaaaaaaaaaaaaa")
+    run_reasoner(store=store)
+    assert not [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
+
+
+

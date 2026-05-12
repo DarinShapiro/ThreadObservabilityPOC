@@ -29,6 +29,37 @@ def build_health_snapshot(*, store: SQLiteStore | None = None) -> dict[str, Any]
         newest = s._conn.execute(  # noqa: SLF001
             "SELECT MAX(ts) FROM events"
         ).fetchone()[0]
+        # v0.9.46: count physical-hardware-identity tuples that appear
+        # on more than one EUI64 row. This is the live signal for
+        # "device was re-commissioned and the old identity wasn't
+        # cleaned up", which presents as ghost nodes in the topology.
+        dup_phys_row = s._conn.execute(  # noqa: SLF001
+            """
+            SELECT COALESCE(SUM(c), 0) AS rows_in_dup_groups,
+                   COUNT(*) AS dup_group_count
+            FROM (
+                SELECT COUNT(*) AS c
+                FROM nodes
+                WHERE vendor_id IS NOT NULL
+                  AND product_id IS NOT NULL
+                  AND serial_number IS NOT NULL
+                  AND COALESCE(status, '') != 'phantom'
+                GROUP BY vendor_id, product_id, serial_number
+                HAVING c > 1
+            )
+            """
+        ).fetchone()
+        # v0.9.46: count distinct Thread network identities present on
+        # non-phantom nodes. >1 means at least one device is on stale
+        # credentials.
+        distinct_epids_row = s._conn.execute(  # noqa: SLF001
+            """
+            SELECT COUNT(DISTINCT extended_pan_id) AS c
+            FROM nodes
+            WHERE extended_pan_id IS NOT NULL
+              AND COALESCE(status, '') != 'phantom'
+            """
+        ).fetchone()
 
     healthy = stale = offline = 0
     for r in node_rows:
@@ -69,6 +100,9 @@ def build_health_snapshot(*, store: SQLiteStore | None = None) -> dict[str, Any]
             "stale_nodes": stale,
             "offline_nodes": offline,
             "total_nodes": len(node_rows),
+            "duplicate_physical_device_groups": int(dup_phys_row["dup_group_count"] or 0),
+            "duplicate_physical_device_rows": int(dup_phys_row["rows_in_dup_groups"] or 0),
+            "distinct_thread_networks": int(distinct_epids_row["c"] or 0),
         },
         "active_issues": {
             "count": len(active),

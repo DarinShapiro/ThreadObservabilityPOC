@@ -281,6 +281,105 @@ async def reinstall_addon(slug: str) -> dict[str, Any]:
             return {"status": "ok", "action": "reinstall", "slug": slug}
 
 
+_THREAD_DATASETS_CACHE: dict[str, Any] = {"expires_at": 0.0, "data": None}
+_THREAD_DATASETS_TTL_S = 300.0
+
+
+async def list_thread_datasets() -> dict[str, Any]:
+    """Return the Thread Border Router credential datasets known to HA.
+
+    Uses the Home Assistant Core WebSocket API (``thread/list_datasets``)
+    via the Supervisor proxy at ``ws://supervisor/core/websocket``. The
+    ``SUPERVISOR_TOKEN`` doubles as a long-lived HA access token through
+    that proxy.
+
+    Cached for 5 minutes — datasets change rarely and the WS handshake is
+    not free. Required so a consultant can correlate a node's
+    ``extended_pan_id`` (now persisted per-node in v0.9.46) against the
+    credentials HA still has on file.
+    """
+    import json as _json  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+    from datetime import UTC as _UTC, datetime as _dt  # noqa: PLC0415
+
+    now_mono = _time.monotonic()
+    cached_data = _THREAD_DATASETS_CACHE.get("data")
+    if cached_data is not None and _THREAD_DATASETS_CACHE.get("expires_at", 0.0) > now_mono:
+        return {**cached_data, "cached": True}
+
+    try:
+        import websockets  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError as exc:
+        raise SupervisorUnavailable(
+            "websockets package not installed; cannot reach HA core WS"
+        ) from exc
+
+    token = _token()
+    ws_url = SUPERVISOR_URL.replace("http://", "ws://").replace("https://", "wss://")
+    ws_url = f"{ws_url}/core/websocket"
+
+    datasets: list[dict[str, Any]] = []
+    try:
+        async with websockets.connect(ws_url, open_timeout=10.0) as ws:
+            hello = _json.loads(await ws.recv())
+            if hello.get("type") != "auth_required":
+                raise SupervisorUnavailable(
+                    f"unexpected HA WS greeting: {hello.get('type')!r}"
+                )
+            await ws.send(_json.dumps({"type": "auth", "access_token": token}))
+            auth_resp = _json.loads(await ws.recv())
+            if auth_resp.get("type") != "auth_ok":
+                raise SupervisorUnavailable(
+                    f"HA WS auth failed: {auth_resp.get('message') or auth_resp}"
+                )
+            await ws.send(_json.dumps({"id": 1, "type": "thread/list_datasets"}))
+            result = _json.loads(await ws.recv())
+            if not result.get("success"):
+                err = result.get("error") or {}
+                raise SupervisorUnavailable(
+                    f"thread/list_datasets failed: {err.get('message') or err}"
+                )
+            payload = result.get("result") or {}
+            raw = payload.get("datasets") if isinstance(payload, dict) else payload
+            if isinstance(raw, list):
+                for d in raw:
+                    if not isinstance(d, dict):
+                        continue
+                    epid = d.get("extended_pan_id")
+                    if isinstance(epid, str):
+                        epid_norm = epid.lower().removeprefix("0x").rjust(16, "0")
+                    else:
+                        epid_norm = None
+                    datasets.append({
+                        "dataset_id": d.get("dataset_id"),
+                        "preferred": bool(d.get("preferred")),
+                        "preferred_border_agent_id": d.get("preferred_border_agent_id"),
+                        "network_name": d.get("network_name"),
+                        "extended_pan_id": epid_norm,
+                        "extended_pan_id_raw": d.get("extended_pan_id"),
+                        "channel": d.get("channel"),
+                        "pan_id": d.get("pan_id"),
+                        "source": d.get("source"),
+                        "created": d.get("created"),
+                    })
+    except SupervisorUnavailable:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise SupervisorUnavailable(
+            f"could not reach HA core WS at {ws_url}: {exc}"
+        ) from exc
+
+    result_obj = {
+        "datasets": datasets,
+        "count": len(datasets),
+        "fetched_at": _dt.now(tz=_UTC).isoformat(),
+        "cache_ttl_seconds": int(_THREAD_DATASETS_TTL_S),
+    }
+    _THREAD_DATASETS_CACHE["data"] = dict(result_obj)
+    _THREAD_DATASETS_CACHE["expires_at"] = now_mono + _THREAD_DATASETS_TTL_S
+    return {**result_obj, "cached": False}
+
+
 async def get_ha_device_registry() -> list[dict[str, Any]]:
     """Attempt to fetch Home Assistant's device registry via REST API.
 

@@ -369,6 +369,36 @@ def _extract_thread_diagnostics(attrs: dict[str, Any]) -> dict[str, Any]:
             return val
         return None
 
+    def _get_str(suffix: str) -> str | None:
+        val = attrs.get(f"0/53/{suffix}")
+        if isinstance(val, str) and val:
+            return val
+        return None
+
+    def _get_ext_pan_id() -> str | None:
+        # 0x0004 ExtendedPanId — Matter spec defines it as octstr<8>
+        # (8-byte). matter-server sometimes surfaces it as an int (raw
+        # uint64), sometimes as a base64/hex string, depending on the
+        # SDK version. Normalize to lowercase 16-char hex so two nodes
+        # on the same Thread network always store the same string.
+        val = attrs.get("0/53/4")
+        if isinstance(val, int):
+            return f"{val:016x}"
+        if isinstance(val, str) and val:
+            v = val.lower().removeprefix("0x")
+            # Pure hex already?
+            if all(c in "0123456789abcdef" for c in v) and len(v) <= 16:
+                return v.rjust(16, "0")
+            # base64 fallback for SDK builds that emit it that way.
+            try:
+                import base64  # noqa: PLC0415
+                raw = base64.b64decode(val)
+                if len(raw) == 8:
+                    return raw.hex()
+            except Exception:  # noqa: BLE001
+                pass
+        return None
+
     role_int = _get_int("1")
     # v10: stability counters from cluster 53. Spec attribute IDs noted in
     # parens; these are monotonic device-side counters that survive across
@@ -409,6 +439,11 @@ def _extract_thread_diagnostics(attrs: dict[str, Any]) -> dict[str, Any]:
         "rx_err_no_frame_count": _get_int("50"),                   # 0x0032
         "rx_err_sec_count": _get_int("53"),                        # 0x0035
         "rx_err_fcs_count": _get_int("54"),                        # 0x0036
+        # v17 (0.9.46) — per-node Thread network identity.
+        # attr 0x0002 NetworkName (e.g. "ha-thread-cb7d"),
+        # attr 0x0004 ExtendedPanId (8-byte octstr, normalized to hex).
+        "network_name": _get_str("2"),
+        "extended_pan_id": _get_ext_pan_id(),
     }
 
 
@@ -570,12 +605,22 @@ async def _load_matter_node_bridge_async() -> dict[str, str]:
             diagnostics = _extract_thread_diagnostics(attrs)
             neighbor_table = _decode_neighbor_table(attrs.get("0/53/7"))
             route_table = _decode_route_table(attrs.get("0/53/8"))
+            # v17 (0.9.46): pull BasicInformation cluster (0x0028 = 40)
+            # for vendor_id / product_id / serial_number so duplicate
+            # physical-device detection can group rows by hardware
+            # identity rather than relying on friendly_name.
+            basic_info = {
+                "vendor_id": attrs.get("0/40/2"),
+                "product_id": attrs.get("0/40/4"),
+                "serial_number": attrs.get("0/40/15"),
+            }
             if eui or diagnostics["partition_id"] is not None or neighbor_table or route_table:
                 rich_cache[canon_for_rich] = {
                     "eui64": eui,
                     "diagnostics": diagnostics,
                     "neighbor_table": neighbor_table,
                     "route_table": route_table,
+                    "basic_info": basic_info,
                 }
 
     # Publish the rich cache so `discover_and_sync` can persist diagnostics.
@@ -1062,6 +1107,10 @@ async def _persist_matter_diagnostics(
     re_attached_events = 0
     rloc16_change_events = 0
     leaders_by_partition: dict[int, str] = {}
+    # v17 (0.9.46): track per-partition Thread network identity so the
+    # partition_split issue's evidence can tell credentials-mismatch
+    # apart from RF-fragmentation.
+    network_identity_by_partition: dict[int, dict[str, str | None]] = {}
 
     # v0.9.45: pre-compute the set of reporters that re-attached this
     # cycle (parent_change_count strictly increased vs. the prior
@@ -1325,16 +1374,46 @@ async def _persist_matter_diagnostics(
                 rx_err_no_frame_count=diag.get("rx_err_no_frame_count"),
                 rx_err_sec_count=diag.get("rx_err_sec_count"),
                 rx_err_fcs_count=diag.get("rx_err_fcs_count"),
+                network_name=diag.get("network_name"),
+                extended_pan_id=diag.get("extended_pan_id"),
             )
             if updated_diag:
                 diag_nodes += 1
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to persist diagnostics for %s: %s", eui, exc)
 
+        # v17 (0.9.46): persist hardware identity (vendor_id, product_id,
+        # serial_number) so duplicate physical devices (same hardware
+        # commissioned under multiple EUI64s) can be detected.
+        basic_info = info.get("basic_info") or {}
+        bi_vid = basic_info.get("vendor_id")
+        bi_pid = basic_info.get("product_id")
+        bi_sn = basic_info.get("serial_number")
+        if any((isinstance(bi_vid, int), isinstance(bi_pid, int), isinstance(bi_sn, str) and bi_sn)):
+            try:
+                s.upsert_node_metadata(
+                    eui64=eui,
+                    vendor_id=bi_vid if isinstance(bi_vid, int) else None,
+                    product_id=bi_pid if isinstance(bi_pid, int) else None,
+                    serial_number=bi_sn if isinstance(bi_sn, str) and bi_sn else None,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("Failed to persist basic_info for %s: %s", eui, exc)
+
         # Partition tracking + change detection.
         pid = diag.get("partition_id")
         if isinstance(pid, int):
             partitions.setdefault(pid, []).append(eui)
+            # First node that reports a network_name / extended_pan_id
+            # in this partition wins (they should all agree within a
+            # partition; if they don't, that's a separate problem).
+            ident_slot = network_identity_by_partition.setdefault(
+                pid, {"network_name": None, "extended_pan_id": None}
+            )
+            if ident_slot["network_name"] is None and diag.get("network_name"):
+                ident_slot["network_name"] = diag.get("network_name")
+            if ident_slot["extended_pan_id"] is None and diag.get("extended_pan_id"):
+                ident_slot["extended_pan_id"] = diag.get("extended_pan_id")
             role = diag.get("routing_role")
             if role == "leader":
                 leaders_by_partition.setdefault(pid, eui)
@@ -1475,6 +1554,8 @@ async def _persist_matter_diagnostics(
             "leader_eui64": leaders_by_partition.get(pid),
             "member_count": len(members),
             "members": members,
+            "network_name": network_identity_by_partition.get(pid, {}).get("network_name"),
+            "extended_pan_id": network_identity_by_partition.get(pid, {}).get("extended_pan_id"),
         }
         for pid, members in sorted(live_partitions.items())
     ]
@@ -1483,12 +1564,21 @@ async def _persist_matter_diagnostics(
     try:
         active = [i for i in s.list_active_issues() if i.get("kind") == "partition_split"]
         if split:
+            distinct_epids = sorted({
+                p["extended_pan_id"] for p in partition_summary
+                if p.get("extended_pan_id")
+            })
             s.open_issue(
                 kind="partition_split",
                 severity="warning",
                 evidence={
                     "partitions": partition_summary,
                     "partition_count": len(live_partitions),
+                    # If partitions report different extended_pan_ids,
+                    # this is a credentials-mismatch (stale dataset on
+                    # one device) not an RF-fragmentation issue.
+                    "distinct_extended_pan_ids": distinct_epids,
+                    "credentials_mismatch_suspected": len(distinct_epids) > 1,
                 },
             )
         else:

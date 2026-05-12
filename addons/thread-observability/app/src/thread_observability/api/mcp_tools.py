@@ -277,6 +277,17 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "list_thread_datasets",
+        "description": (
+            "Return the Thread Border Router credential datasets known to Home "
+            "Assistant (network_name, extended_pan_id, channel, source, preferred). "
+            "Pair with get_node_metadata or analyze_node to determine whether a node "
+            "reporting an unexpected extended_pan_id is on a stale Thread dataset. "
+            "Cached for 5 minutes."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "get_storage_stats",
         "description": (
             "Return SQLite store stats (schema version, file size, row counts per table, "
@@ -885,6 +896,11 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             # Connection reset mid-uninstall is the expected success path.
             return {"action": "reinstall", "note": "connection terminated (expected)",
                     "error": str(exc)}
+    if name == "list_thread_datasets":
+        try:
+            return await supervisor_client.list_thread_datasets()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     # ---- Storage / config tools (Phase 1) ---------------------------------
     if name == "get_storage_stats":

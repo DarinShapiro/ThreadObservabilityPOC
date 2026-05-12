@@ -138,3 +138,38 @@ def test_extract_thread_diagnostics_missing() -> None:
     assert d["channel"] is None
     assert d["routing_role"] is None
     assert d["partition_id"] is None
+    # v0.9.46
+    assert d["network_name"] is None
+    assert d["extended_pan_id"] is None
+
+
+def test_extract_thread_diagnostics_network_identity_int_epid() -> None:
+    """v0.9.46: per-node Thread network identity (NetworkName + ExtendedPanId).
+
+    matter-server commonly surfaces ExtendedPanId as a raw int (the
+    uint64 value); we must normalize it to a 16-char lowercase hex
+    string so persistence + comparison are stable.
+    """
+    attrs = {
+        "0/53/0": 25,
+        "0/53/2": "ha-thread-cb7d",
+        "0/53/4": 0x1234567890ABCDEF,
+        "0/53/9": 1,
+    }
+    d = _extract_thread_diagnostics(attrs)
+    assert d["network_name"] == "ha-thread-cb7d"
+    assert d["extended_pan_id"] == "1234567890abcdef"
+
+
+def test_extract_thread_diagnostics_network_identity_short_int_epid() -> None:
+    """Low ExtendedPanId values must left-pad to 16 hex chars."""
+    attrs = {"0/53/4": 1}
+    d = _extract_thread_diagnostics(attrs)
+    assert d["extended_pan_id"] == "0000000000000001"
+
+
+def test_extract_thread_diagnostics_network_identity_hex_string_epid() -> None:
+    """Some SDK builds surface ExtendedPanId as a hex string already."""
+    attrs = {"0/53/4": "AbCdEf1234567890"}
+    d = _extract_thread_diagnostics(attrs)
+    assert d["extended_pan_id"] == "abcdef1234567890"

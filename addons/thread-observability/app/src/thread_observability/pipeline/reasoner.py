@@ -378,6 +378,55 @@ def run_reasoner(
             trigger_since=trigger,
         )
 
+    # ---- wrong_network (v0.9.46) ----
+    # If multiple non-phantom nodes report differing extended_pan_ids,
+    # the minority is on stale Thread credentials — typically a device
+    # re-commissioned while a stale dataset was still cached on HA.
+    # This is a credentials problem, not an RF/partition-fragmentation
+    # problem, so it deserves its own issue kind.
+    try:
+        all_nodes = s.list_nodes()
+    except Exception:  # noqa: BLE001
+        all_nodes = []
+    epid_to_nodes: dict[str, list[dict]] = {}
+    for n in all_nodes:
+        if n.get("status") == "phantom":
+            continue
+        epid = n.get("extended_pan_id")
+        if not epid:
+            continue
+        epid_to_nodes.setdefault(epid, []).append(n)
+    if len(epid_to_nodes) >= 2:
+        # Modal = the extended_pan_id with the most members.
+        modal_epid, modal_members = max(
+            epid_to_nodes.items(), key=lambda kv: len(kv[1])
+        )
+        modal_name = next(
+            (n.get("network_name") for n in modal_members if n.get("network_name")),
+            None,
+        )
+        for epid, members in epid_to_nodes.items():
+            if epid == modal_epid:
+                continue
+            for n in members:
+                eui = n.get("eui64")
+                if not eui:
+                    continue
+                seen_keys.add(("wrong_network", eui))
+                _emit(
+                    "wrong_network",
+                    "warn",
+                    eui,
+                    {
+                        "node_extended_pan_id": epid,
+                        "node_network_name": n.get("network_name"),
+                        "modal_extended_pan_id": modal_epid,
+                        "modal_network_name": modal_name,
+                        "modal_member_count": len(modal_members),
+                        "minority_member_count": len(members),
+                    },
+                )
+
     # ---- auto-close issues whose trigger no longer holds ----
     managed_kinds = {
         "parent_churn",
@@ -385,6 +434,7 @@ def run_reasoner(
         "offline_node",
         "re_attach_storm",
         "mesh_disagreement",
+        "wrong_network",
     }
     for (kind, eui), issue in active_by_key.items():
         if kind not in managed_kinds:
@@ -444,6 +494,9 @@ def run_reasoner(
             "mesh_disagreement": {
                 "threshold_pct": MESH_DISAGREEMENT_PCT_THRESHOLD,
                 "max_age_minutes": MESH_DISAGREEMENT_MAX_AGE_MIN,
+            },
+            "wrong_network": {
+                "trigger": "node extended_pan_id differs from modal mesh value",
             },
         },
     }

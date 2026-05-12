@@ -261,6 +261,25 @@
         "If the EUI keeps reappearing, an unattached device with that EUI is still in RF range."
       ],
       "references": []
+    },
+    {
+      "id": "wrong_network",
+      "title": "Node on a different Thread network (stale credentials)",
+      "applies_to": ["wrong_network"],
+      "summary": "The node reports an extended_pan_id that differs from the rest of the mesh. The hardware is alive and the radio works, but it's joined a different (typically stale) Thread network. Common cause: device was factory-reset and re-commissioned while HA still had an older Thread dataset cached, so it picked up the wrong credentials.",
+      "evidence_to_collect": [
+        "analyze_node for the affected eui — confirm node.extended_pan_id and node.network_name differ from peers",
+        "list_thread_datasets — does HA still have the stale dataset on file?",
+        "get_health_snapshot — summary.distinct_thread_networks > 1 confirms the split"
+      ],
+      "remediation_steps": [
+        "Open HA → Settings → Devices & Services → Thread, delete any non-preferred dataset whose extended_pan_id matches the minority node.",
+        "Factory-reset the affected device and re-commission via the Apple Home / Google Home / HA companion app so it adopts the preferred dataset.",
+        "After re-commissioning, the device's eui64 will change. Use analyze_node on the new eui to check for a duplicate physical_identity entry, and delete the stale registry row if so."
+      ],
+      "references": [
+        "Thread spec §8.4 (Active Operational Dataset)"
+      ]
     }
   ]
 }

@@ -181,6 +181,41 @@ def analyze_node(
         "status_change_count_recent": status_change_recent,
     }
 
+    # --- physical_identity (v0.9.46) ---------------------------------
+    # Detect duplicate hardware: the same vendor_id/product_id/serial_number
+    # tuple observed under multiple EUI64s. This happens when a device is
+    # re-commissioned (Matter generates a new EUI64 each time) without
+    # the old identity being cleaned up. Surfacing the duplicates lets
+    # the consultant flag stale ghost rows.
+    physical_identity: dict[str, Any] | None = None
+    if node:
+        vid = node.get("vendor_id")
+        pid = node.get("product_id")
+        sn = node.get("serial_number")
+        if vid is not None and pid is not None and sn:
+            other_instances = []
+            for other in s.list_nodes():
+                if other.get("eui64") == eui64:
+                    continue
+                if (
+                    other.get("vendor_id") == vid
+                    and other.get("product_id") == pid
+                    and other.get("serial_number") == sn
+                ):
+                    other_instances.append({
+                        "eui64": other.get("eui64"),
+                        "friendly_name": other.get("friendly_name"),
+                        "status": other.get("status"),
+                        "last_seen": other.get("last_seen"),
+                    })
+            physical_identity = {
+                "vendor_id": vid,
+                "product_id": pid,
+                "serial_number": sn,
+                "duplicate_count": len(other_instances) + 1,
+                "other_instances": other_instances,
+            }
+
     # --- playbooks ----------------------------------------------------
     kinds = {
         i.get("kind") for i in open_issues if i.get("kind")
@@ -199,4 +234,5 @@ def analyze_node(
         "baselines": baselines,
         "playbooks": matched_playbooks,
         "matched_issue_kinds": sorted(k for k in kinds if k),
+        "physical_identity": physical_identity,
     }

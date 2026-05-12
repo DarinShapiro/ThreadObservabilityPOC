@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.46 — Per-node Thread network identity, duplicate physical device detection, `wrong_network` reasoner rule
+
+Motivated by a live diagnosis where the addon could not self-diagnose a partition split caused by a re-commissioned device joining the *wrong* Thread network — the cluster 53 attributes that prove it (`NetworkName`, `ExtendedPanId`) were polled every cycle but never persisted. The fix is to extend already-collected data rather than add new pipelines.
+
+- **Schema v17 — six new columns on `nodes`.** `network_name` and `extended_pan_id` carry per-node Thread network identity from Matter cluster 53 (attrs `0x0002`, `0x0004`); `vendor_id`, `product_id`, `serial_number` carry hardware identity from BasicInformation cluster `0x0028` (attrs `0x0002`, `0x0004`, `0x000F`). Two new indexes: `idx_nodes_extended_pan_id` and `idx_nodes_physical_identity (vendor_id, product_id, serial_number)`.
+
+- **`_extract_thread_diagnostics` populates the new fields.** `ExtendedPanId` arrives as an int or hex string depending on matter-server SDK version; the extractor normalizes both to lowercase 16-char hex so persistence and comparison are stable. Base64 (8-byte octstr) fallback included.
+
+- **`partition_split` evidence is now self-diagnosing.** Each partition entry in the issue's evidence includes `network_name` and `extended_pan_id`. Two new top-level fields surface the credentials-vs-RF distinction explicitly: `distinct_extended_pan_ids` lists every EPID seen across live partitions, and `credentials_mismatch_suspected: true` when more than one is present. A consultant inspecting the issue can now answer "is this RF fragmentation or stale credentials?" without leaving the tool.
+
+- **Reasoner rule `wrong_network`.** Computes the modal `extended_pan_id` across non-phantom nodes; any node with a non-NULL EPID that disagrees with the majority gets a per-node `wrong_network` issue. Evidence carries both the node's and the modal EPID/name plus member counts so the playbook can frame the remediation. Added to `managed_kinds` so the rule auto-closes when the minority node re-joins the right network.
+
+- **`analyze_node` surfaces `physical_identity`.** When the node has vendor/product/serial, the response includes a new `physical_identity` block listing every *other* EUI in the database sharing the same hardware-identity triple. This is the live signal for "this device was re-commissioned and the old EUI64 was never cleaned up" — exactly the failure mode the live diagnosis turned up.
+
+- **Health snapshot summary gained three counters.** `duplicate_physical_device_groups` and `duplicate_physical_device_rows` count hardware-identity collisions across non-phantom nodes; `distinct_thread_networks` counts distinct EPIDs. Any value > 1 on the last is the same red flag the new reasoner rule fires on.
+
+- **New MCP tool `list_thread_datasets`.** Wraps HA core's `thread/list_datasets` WebSocket command through the Supervisor proxy at `ws://supervisor/core/websocket` using the existing `SUPERVISOR_TOKEN`. Returns `{datasets: [{network_name, extended_pan_id, channel, source, preferred, ...}], count, fetched_at, cached, cache_ttl_seconds}` — `extended_pan_id` normalized to the same 16-char lowercase hex as the per-node columns so the values compare directly. Cached in-memory for 5 minutes.
+
+- **Playbook `wrong_network`.** New `playbooks.json` entry walking the consultant through deleting the stale dataset in HA Settings → Thread, factory-resetting the device, re-commissioning, and using `analyze_node` on the new EUI to detect the duplicate `physical_identity` row.
+
+Tests: 5 new unit tests covering network-identity extraction (int/hex/short EPID), wrong_network open/close/no-fire, duplicate physical identity in analyze_node, and the two new health counters. Migration test updated to v17.
+
 ## 0.9.45 — Three live-network fixes: analyze_node membership binding, reasoner-owned partition_split close, re_attached_node reporter-reattach guard
 
 Three independent bugs surfaced during the first live assessment of 0.9.44 against a real Thread network. All three were correctness gaps where a code path silently dropped or misattributed signal; fixing them required no schema change and no API change.

@@ -42,3 +42,33 @@ def test_health_reflects_critical_issues(store: SQLiteStore) -> None:
     snap = build_health_snapshot(store=store)
     assert snap["status"] == "critical"
     assert snap["active_issues"]["by_severity"]["crit"] == 1
+
+
+def test_health_counts_duplicate_physical_devices(store: SQLiteStore) -> None:
+    """v0.9.46: hardware-identity duplicates surface in summary."""
+    store.upsert_node_metadata(
+        eui64="aa" * 8, vendor_id=1, product_id=2, serial_number="DUP",
+    )
+    store.upsert_node_metadata(
+        eui64="bb" * 8, vendor_id=1, product_id=2, serial_number="DUP",
+    )
+    store.upsert_node_metadata(
+        eui64="cc" * 8, vendor_id=1, product_id=2, serial_number="UNIQUE",
+    )
+    snap = build_health_snapshot(store=store)
+    s = snap["summary"]
+    assert s["duplicate_physical_device_groups"] == 1
+    assert s["duplicate_physical_device_rows"] == 2
+
+
+def test_health_counts_distinct_thread_networks(store: SQLiteStore) -> None:
+    """v0.9.46: distinct extended_pan_ids surface in summary."""
+    store.upsert_node_metadata(eui64="11" * 8)
+    store.set_node_diagnostics("11" * 8, extended_pan_id="aaaaaaaaaaaaaaaa")
+    store.upsert_node_metadata(eui64="22" * 8)
+    store.set_node_diagnostics("22" * 8, extended_pan_id="aaaaaaaaaaaaaaaa")
+    store.upsert_node_metadata(eui64="33" * 8)
+    store.set_node_diagnostics("33" * 8, extended_pan_id="bbbbbbbbbbbbbbbb")
+    snap = build_health_snapshot(store=store)
+    assert snap["summary"]["distinct_thread_networks"] == 2
+

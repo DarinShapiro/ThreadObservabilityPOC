@@ -147,3 +147,47 @@ def test_analyze_does_not_implicate_unrelated_node_in_global_issue(
     res = an_mod.analyze_node(outside, store=store)
     assert res["open_issues"] == []
     assert res["matched_issue_kinds"] == []
+
+
+def test_analyze_surfaces_duplicate_physical_identity(store: SQLiteStore) -> None:
+    """v0.9.46: nodes sharing vendor/product/serial are reported as duplicates."""
+    pb_mod.reset_cache_for_tests()
+    eui_a = "aa" * 8
+    eui_b = "bb" * 8
+    eui_c = "cc" * 8
+    # Two rows for the same physical device (a was re-commissioned as b).
+    store.upsert_node_metadata(
+        eui64=eui_a, friendly_name="Foyer Light (stale)",
+        vendor_id=4488, product_id=12345, serial_number="SN-XYZ-001",
+    )
+    store.upsert_node_metadata(
+        eui64=eui_b, friendly_name="Foyer Light",
+        vendor_id=4488, product_id=12345, serial_number="SN-XYZ-001",
+    )
+    # Unrelated device — must not appear in the duplicate set.
+    store.upsert_node_metadata(
+        eui64=eui_c, friendly_name="Kitchen Light",
+        vendor_id=4488, product_id=12345, serial_number="SN-DIFFERENT",
+    )
+
+    res = an_mod.analyze_node(eui_b, store=store)
+    phys = res["physical_identity"]
+    assert phys is not None
+    assert phys["vendor_id"] == 4488
+    assert phys["product_id"] == 12345
+    assert phys["serial_number"] == "SN-XYZ-001"
+    assert phys["duplicate_count"] == 2
+    other_euis = {o["eui64"] for o in phys["other_instances"]}
+    assert other_euis == {eui_a}
+
+
+def test_analyze_physical_identity_none_when_no_basic_info(
+    store: SQLiteStore,
+) -> None:
+    """Nodes without BasicInformation data yield ``physical_identity`` None."""
+    pb_mod.reset_cache_for_tests()
+    eui = "dd" * 8
+    store.upsert_node_metadata(eui64=eui, friendly_name="Plain")
+    res = an_mod.analyze_node(eui, store=store)
+    assert res["physical_identity"] is None
+

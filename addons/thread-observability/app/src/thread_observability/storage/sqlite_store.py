@@ -412,6 +412,37 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_topology_snapshots_hash
         ON topology_snapshots(snapshot_hash);
     """,
+    # v17 (0.9.46): per-node Thread network identity (cluster 53
+    # NetworkName attr 0x0002, ExtendedPanId attr 0x0004) +
+    # device-registry physical-identity fields used to detect
+    # duplicate commissioning of the same physical hardware.
+    #
+    # Why on ``nodes`` and not ``network_data``: the per-node copy
+    # is the *source of truth for whether this device is on the
+    # mesh we expect*. A device whose ``extended_pan_id`` doesn't
+    # match the modal value across the mesh is on a different
+    # Thread network — even if its ``partition_id`` happens to
+    # collide. ``network_data`` continues to hold partition-wide
+    # facts (leader-discovered active dataset blob etc.); the new
+    # columns hold what each node *itself reports*.
+    #
+    # ``vendor_id`` / ``product_id`` / ``serial_number`` come from
+    # the HA device registry (Basic Information cluster, surfaced
+    # via the existing ``discover_thread_devices`` lookup). When
+    # two ``nodes`` rows share the same triple they are the same
+    # physical hardware re-commissioned — duplicate-identity
+    # detection key off this.
+    """
+    ALTER TABLE nodes ADD COLUMN network_name      TEXT;
+    ALTER TABLE nodes ADD COLUMN extended_pan_id   TEXT;
+    ALTER TABLE nodes ADD COLUMN vendor_id         INTEGER;
+    ALTER TABLE nodes ADD COLUMN product_id        INTEGER;
+    ALTER TABLE nodes ADD COLUMN serial_number     TEXT;
+    CREATE INDEX IF NOT EXISTS idx_nodes_extended_pan_id
+        ON nodes(extended_pan_id);
+    CREATE INDEX IF NOT EXISTS idx_nodes_physical_identity
+        ON nodes(vendor_id, product_id, serial_number);
+    """,
 ]
 
 
@@ -553,6 +584,14 @@ class SQLiteStore:
         hw_version: str | None = None,
         ha_device_path: str | None = None,
         is_thread: bool | None = None,
+        # v17 (0.9.46) — physical-identity fields from HA device registry.
+        # Used to group duplicate commissionings of the same physical
+        # hardware. ``serial_number`` is the Matter Basic Information
+        # cluster's SerialNumber attribute, surfaced by HA's device
+        # registry alongside manufacturer/model.
+        vendor_id: int | None = None,
+        product_id: int | None = None,
+        serial_number: str | None = None,
     ) -> None:
         now = _utc_now()
         # Keep legacy `area` column populated with the resolved name so older
@@ -568,8 +607,9 @@ class SQLiteStore:
                                   area_id, area_name, manufacturer, model,
                                   sw_version, hw_version, ha_device_path,
                                   is_thread,
+                                  vendor_id, product_id, serial_number,
                                   first_seen, last_seen)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(eui64) DO UPDATE SET
                     friendly_name  = COALESCE(excluded.friendly_name,  nodes.friendly_name),
                     area           = COALESCE(excluded.area,           nodes.area),
@@ -583,6 +623,9 @@ class SQLiteStore:
                     hw_version     = COALESCE(excluded.hw_version,     nodes.hw_version),
                     ha_device_path = COALESCE(excluded.ha_device_path, nodes.ha_device_path),
                     is_thread      = COALESCE(excluded.is_thread,      nodes.is_thread),
+                    vendor_id      = COALESCE(excluded.vendor_id,      nodes.vendor_id),
+                    product_id     = COALESCE(excluded.product_id,     nodes.product_id),
+                    serial_number  = COALESCE(excluded.serial_number,  nodes.serial_number),
                     last_seen      = excluded.last_seen
                 """,
                 (
@@ -590,6 +633,7 @@ class SQLiteStore:
                     area_id, area_name, manufacturer, model,
                     sw_version, hw_version, ha_device_path,
                     is_thread_val,
+                    vendor_id, product_id, serial_number,
                     now, now,
                 ),
             )
@@ -692,6 +736,13 @@ class SQLiteStore:
         rx_err_no_frame_count: int | None = None,
         rx_err_sec_count: int | None = None,
         rx_err_fcs_count: int | None = None,
+        # v17 (0.9.46): per-node Thread network identity (cluster 53
+        # attrs 0x0002 NetworkName, 0x0004 ExtendedPanId). These let
+        # the consultant distinguish "on the right Thread network but
+        # split into multiple partitions" (RF issue) from "on a
+        # different Thread network entirely" (credentials mismatch).
+        network_name: str | None = None,
+        extended_pan_id: str | None = None,
     ) -> bool:
         """Update Thread diagnostic scalars for a node. Returns True if row updated.
 
@@ -740,6 +791,8 @@ class SQLiteStore:
                     rx_err_no_frame_count                = ?,
                     rx_err_sec_count                     = ?,
                     rx_err_fcs_count                     = ?,
+                    network_name                         = ?,
+                    extended_pan_id                      = ?,
                     diag_updated_at                      = ?
                 WHERE eui64 = ?
                 """,
@@ -757,6 +810,7 @@ class SQLiteStore:
                     rx_total_count, rx_duplicated_count,
                     rx_err_no_frame_count, rx_err_sec_count,
                     rx_err_fcs_count,
+                    network_name, extended_pan_id,
                     _utc_now(), eui64,
                 ),
             )
