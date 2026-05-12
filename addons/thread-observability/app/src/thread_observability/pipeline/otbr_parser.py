@@ -162,8 +162,15 @@ def parse_line(line: str) -> ParsedEvent | None:
             ipv6_match = _IPV6_EUI64_RE.search(body)
             if ipv6_match:
                 ipv6_eui_part = ipv6_match.group("eui64_ipv6")
-                # Convert "c6b7:7f58:e5ac:eed4" to "c6b77f58e5aceed4"
-                eui = ipv6_eui_part.replace(":", "").lower()
+                # Convert "c6b7:7f58:e5ac:eed4" → "c6b77f58e5aceed4"
+                iid_hex = ipv6_eui_part.replace(":", "").lower()
+                # IPv6 modified-EUI64 (RFC 4291) flips the U/L bit of byte 0.
+                # Reverse it to get the real Thread EUI64 that Matter reports.
+                try:
+                    first_byte = int(iid_hex[:2], 16) ^ 0x02
+                    eui = f"{first_byte:02x}{iid_hex[2:]}"
+                except ValueError:
+                    eui = iid_hex
         
         # For role_change / attach_* there may be no eui64 in the line; try
         # the fallback "ext_addr=" anywhere else in the body.

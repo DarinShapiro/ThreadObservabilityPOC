@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.18 — Un-flip U/L bit when deriving EUI64 from IPv6 IID
+
+- OTBR log parser converted Mesh-Local IPv6 IIDs (e.g. `c6b7:...`) directly to EUI64 strings, but per RFC 4291 the modified-EUI64 IID has bit 6 of byte 0 flipped
+- Now we XOR byte 0 with 0x02 to recover the real EUI64, so events join up with Matter-bridged node rows (`c4b7...` not `c6b7...`)
+- Fixes empty Role / RSSI / Status columns on the Thread Nodes table
+
 ## 0.9.17 — Remove one-shot truncation
 
 - Reverted the 0.9.16 startup wipe now that the DB has been cleaned
