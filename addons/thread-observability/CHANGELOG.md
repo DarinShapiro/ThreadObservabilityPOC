@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.16 — ONE-SHOT: truncate data tables on startup
+
+- Lifespan startup hook deletes all rows from `events`, `issues`, `metadata_cache`, `ingest_state`, `nodes` and runs `VACUUM`
+- Removes ghost rows like `000000000000d000` accumulated by pre-0.9.14 ingestion
+- **Revert this block in 0.9.17 once the DB is clean**
+
 ## 0.9.15 — Upsert bridged Matter devices into nodes table
 
 - `discover_and_sync` now inserts a row for every Matter-bridged Thread device, not only updates existing ones
