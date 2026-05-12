@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 12
+    assert store.schema_version == 13
     stats = store.stats()
-    assert stats["schema_version"] == 12
+    assert stats["schema_version"] == 13
     assert stats["row_counts"]["events"] == 0
 
 
@@ -82,7 +82,7 @@ def test_links_replace_and_list(store: SQLiteStore) -> None:
         {"neighbor_eui64": B, "rssi_avg": -50},
         {"neighbor_eui64": C, "rssi_avg": -60, "is_child": 1},
     ])
-    assert n == 2
+    assert n["inserted"] == 2
     rows = store.list_links()
     assert len(rows) == 2
     # Replace overwrites prior entries for the same (reporter, source).
@@ -189,7 +189,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 12
+    assert store.schema_version == 13
 
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
@@ -503,7 +503,7 @@ def test_recompute_node_statuses_emits_status_change_events(store: SQLiteStore) 
     store.apply_availability([(eui, True, "ha_entity")])
 
     s1 = store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
-    # No availability flip yet — only the implicit DEFAULT 'online' -> 'online'
+    # No availability flip yet ï¿½ only the implicit DEFAULT 'online' -> 'online'
     # path runs, which is a no-op (old == new), so no event row.
     assert s1["transitions"] == 0
 
@@ -548,3 +548,136 @@ def test_get_node_flap_history_aggregates_counts(store: SQLiteStore) -> None:
     only_a = store.get_node_flap_history(eui64=a, limit=50)
     assert only_a["count"] == 2
     assert set(only_a["flap_counts"].keys()) == {a}
+
+
+# ---------------------------------------------------------------------------
+# v0.9.42: link flap events + MAC error counters + diff-returning links
+# ---------------------------------------------------------------------------
+
+
+def test_replace_links_returns_diff(store: SQLiteStore) -> None:
+    """v0.9.42: replace_links_for_reporter returns added/removed neighbor sets."""
+    reporter = "aa" * 8
+    n1 = "11" * 8
+    n2 = "22" * 8
+    n3 = "33" * 8
+    for eui in (reporter, n1, n2, n3):
+        store.upsert_node_metadata(eui64=eui)
+
+    # First call ï¿½ nothing prior, everything is "added".
+    r1 = store.replace_links_for_reporter(
+        reporter, "neighbor_table",
+        [{"neighbor_eui64": n1}, {"neighbor_eui64": n2}],
+    )
+    assert r1["inserted"] == 2
+    assert sorted(r1["added"]) == sorted([n1, n2])
+    assert r1["removed"] == []
+
+    # Swap n2 -> n3: one added, one removed.
+    r2 = store.replace_links_for_reporter(
+        reporter, "neighbor_table",
+        [{"neighbor_eui64": n1}, {"neighbor_eui64": n3}],
+    )
+    assert r2["inserted"] == 2
+    assert r2["added"] == [n3]
+    assert r2["removed"] == [n2]
+
+    # Identical set: no diff.
+    r3 = store.replace_links_for_reporter(
+        reporter, "neighbor_table",
+        [{"neighbor_eui64": n1}, {"neighbor_eui64": n3}],
+    )
+    assert r3["added"] == []
+    assert r3["removed"] == []
+
+
+def test_set_node_diagnostics_persists_v13_counters(store: SQLiteStore) -> None:
+    """v0.9.42: MAC error counters and partition-stability counters round-trip."""
+    eui = "ab" * 8
+    store.upsert_node_metadata(eui64=eui, device_id="d1")
+    ok = store.set_node_diagnostics(
+        eui,
+        tx_total_count=10_000,
+        tx_retry_count=42,
+        tx_err_cca_count=3,
+        tx_err_abort_count=1,
+        tx_err_busy_channel_count=2,
+        rx_total_count=9_500,
+        rx_duplicated_count=12,
+        rx_err_no_frame_count=4,
+        rx_err_sec_count=0,
+        rx_err_fcs_count=7,
+        partition_id_change_count=5,
+        better_partition_attach_attempt_count=8,
+    )
+    assert ok is True
+    node = store.get_node(eui)
+    assert node["tx_total_count"] == 10_000
+    assert node["tx_retry_count"] == 42
+    assert node["tx_err_cca_count"] == 3
+    assert node["tx_err_abort_count"] == 1
+    assert node["tx_err_busy_channel_count"] == 2
+    assert node["rx_total_count"] == 9_500
+    assert node["rx_duplicated_count"] == 12
+    assert node["rx_err_no_frame_count"] == 4
+    assert node["rx_err_sec_count"] == 0
+    assert node["rx_err_fcs_count"] == 7
+    assert node["partition_id_change_count"] == 5
+    assert node["better_partition_attach_attempt_count"] == 8
+
+
+def test_get_link_flap_history_aggregates_pairs(store: SQLiteStore) -> None:
+    """v0.9.42: get_link_flap_history buckets events by sorted (reporter, neighbor) pair.
+
+    Both directions of an edge land in the same bucket so a single flap
+    surfaces once even if both endpoints reported it.
+    """
+    a = "aa" * 8
+    b = "bb" * 8
+    c = "cc" * 8
+    for eui in (a, b, c):
+        store.upsert_node_metadata(eui64=eui)
+
+    # a sees b appear, then disappear, then re-appear.
+    store.insert_event(
+        eui64=a, type="link_acquired",
+        payload={"reporter_eui64": a, "neighbor_eui64": b,
+                 "source": "neighbor_table", "partition_id": 1},
+    )
+    store.insert_event(
+        eui64=a, type="link_lost",
+        payload={"reporter_eui64": a, "neighbor_eui64": b,
+                 "source": "neighbor_table", "partition_id": 1},
+    )
+    # b also reports the same edge ï¿½ same bucket.
+    store.insert_event(
+        eui64=b, type="link_acquired",
+        payload={"reporter_eui64": b, "neighbor_eui64": a,
+                 "source": "neighbor_table", "partition_id": 1},
+    )
+    # An unrelated edge a<->c.
+    store.insert_event(
+        eui64=a, type="link_acquired",
+        payload={"reporter_eui64": a, "neighbor_eui64": c,
+                 "source": "route_table", "partition_id": 1},
+    )
+
+    hist = store.get_link_flap_history(limit=50)
+    assert hist["count"] == 4
+    counts = hist["flap_counts"]
+    # Pair key is sorted "neighbor|reporter".
+    ab_key = "|".join(sorted([a, b]))
+    ac_key = "|".join(sorted([a, c]))
+    assert counts[ab_key]["total"] == 3
+    assert counts[ab_key]["acquired"] == 2
+    assert counts[ab_key]["lost"] == 1
+    assert counts[ac_key]["total"] == 1
+    assert counts[ac_key]["acquired"] == 1
+
+    # source filter
+    only_neighbor = store.get_link_flap_history(source="neighbor_table", limit=50)
+    assert only_neighbor["count"] == 3
+    # neighbor_eui64 filter
+    only_c = store.get_link_flap_history(neighbor_eui64=c, limit=50)
+    assert only_c["count"] == 1
+

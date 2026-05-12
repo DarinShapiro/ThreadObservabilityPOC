@@ -137,6 +137,18 @@ def get_node_summary(
     if include_signal_strength:
         summary["signal_strength"] = get_latest_signal_strength(eui64, store=s)
 
+    # v0.9.42: SED mesh-alive enrichment (see build_topology for rationale).
+    if classify_device_kind(node.get("routing_role")) == "sed":
+        sed_state = _build_sed_mesh_state(s).get(eui64)
+        if sed_state:
+            summary["mesh_alive"] = sed_state["mesh_alive"]
+            summary["parent_link_age_seconds"] = sed_state["parent_link_age_seconds"]
+            summary["sed_classification"] = sed_state["sed_classification"]
+        else:
+            summary["mesh_alive"] = False
+            summary["parent_link_age_seconds"] = None
+            summary["sed_classification"] = "orphan"
+
     return summary
 
 
@@ -172,6 +184,72 @@ def _build_parent_map(s: SQLiteStore) -> dict[str, str]:
             " WHERE is_child = 1 AND source = 'neighbor_table'"
         ).fetchall()
     return {r["neighbor_eui64"]: r["reporter_eui64"] for r in rows if r["neighbor_eui64"]}
+
+
+# How recent the parent's neighbor_table entry for a child must be before we
+# stop trusting it as evidence the child is "still talking to the mesh". The
+# Matter NeighborTable surfacing cadence is the matter-server cluster-53
+# poll, which we drive on the topology recompute interval (30s default). A
+# 5-minute window forgives one or two skipped polls without prematurely
+# marking a SED as offline.
+_SED_MESH_ALIVE_WINDOW_SECONDS = 300
+
+
+def _build_sed_mesh_state(s: SQLiteStore) -> dict[str, dict[str, Any]]:
+    """For each SED, classify whether the mesh still considers it attached.
+
+    Even when HA's MQTT-derived availability flips a battery sleepy device
+    to ``available=False`` (because the device hasn't published an attribute
+    update in the LWT window), the device may still be perfectly happy on
+    the mesh — it just hasn't woken up to talk to Matter. The router that
+    parents the SED reports it via its ``NeighborTable`` regardless of
+    whether the sleepy has anything to say.
+
+    This helper joins those two views: for every link row where
+    ``is_child=1``, the (parent_reporter, child_neighbor) pair is evidence
+    the parent claimed this SED within the last topology poll. We expose:
+
+      ``mesh_alive`` (bool)            — at least one parent claims the
+                                         child within
+                                         ``_SED_MESH_ALIVE_WINDOW_SECONDS``
+      ``parent_link_age_seconds`` (int) — age of the freshest parent
+                                         claim (None when no claim
+                                         exists)
+      ``sed_classification`` (str)     — applied at the topology layer:
+                                            "fresh"   parent observed
+                                                      <window seconds ago
+                                            "stale"   parent's claim is
+                                                      older than the window
+                                            "orphan"  no parent currently
+                                                      claims this SED
+    """
+    now = datetime.now(tz=UTC)
+    with s._lock:  # noqa: SLF001
+        rows = s._conn.execute(  # noqa: SLF001
+            "SELECT neighbor_eui64, MAX(observed_at) AS latest"
+            "  FROM links"
+            " WHERE is_child = 1 AND source = 'neighbor_table'"
+            "   AND neighbor_eui64 IS NOT NULL"
+            " GROUP BY neighbor_eui64"
+        ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        nei = r["neighbor_eui64"]
+        latest = r["latest"]
+        if not nei or not latest:
+            continue
+        try:
+            obs = datetime.fromisoformat(latest.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            continue
+        age = max(0, int((now - obs).total_seconds()))
+        alive = age <= _SED_MESH_ALIVE_WINDOW_SECONDS
+        out[nei] = {
+            "mesh_alive": alive,
+            "parent_link_age_seconds": age,
+            "sed_classification": "fresh" if alive else "stale",
+        }
+    return out
 
 
 def _build_router_peer_counts(s: SQLiteStore) -> dict[str, int]:
@@ -321,6 +399,7 @@ def list_nodes_enriched(
     parent_map = _build_parent_map(s)
     peer_counts = _build_router_peer_counts(s)
     peer_map = _build_router_peers(s)
+    sed_mesh_state = _build_sed_mesh_state(s)
     name_by_eui = {n["eui64"]: (n.get("friendly_name") or get_node_display_name(n))
                    for n in nodes if n.get("eui64")}
     # Map partition_id -> leader EUI by scanning nodes for routing_role == 'leader'
@@ -379,6 +458,21 @@ def list_nodes_enriched(
             "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
             "next_hop_to_otbr": next_hop_map.get(eui) if eui else None,
         }
+        # v0.9.42: SED mesh-alive enrichment. Only meaningful for sleepy
+        # end devices; for everything else we omit these keys so the
+        # topology JSON stays tight. ``mesh_alive`` answers the operator's
+        # question "is HA wrong about this device being unavailable?"
+        # without them having to cross-reference NeighborTable manually.
+        if classify_device_kind(routing_role) == "sed":
+            sed_state = sed_mesh_state.get(eui or "")
+            if sed_state:
+                summary["mesh_alive"] = sed_state["mesh_alive"]
+                summary["parent_link_age_seconds"] = sed_state["parent_link_age_seconds"]
+                summary["sed_classification"] = sed_state["sed_classification"]
+            else:
+                summary["mesh_alive"] = False
+                summary["parent_link_age_seconds"] = None
+                summary["sed_classification"] = "orphan"
         if include_signal_strength and eui:
             summary["signal_strength"] = get_latest_signal_strength(eui, store=s)
         out.append(summary)

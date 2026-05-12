@@ -394,6 +394,21 @@ def _extract_thread_diagnostics(attrs: dict[str, Any]) -> dict[str, Any]:
         "leader_role_count": _get_int("17"),     # 0x0011
         "attach_attempt_count": _get_int("18"),  # 0x0012
         "parent_change_count": _get_int("21"),   # 0x0015
+        # v13 — partition stability counters.
+        "partition_id_change_count": _get_int("19"),               # 0x0013
+        "better_partition_attach_attempt_count": _get_int("20"),   # 0x0014
+        # v13 — MAC Tx counters.
+        "tx_total_count": _get_int("22"),                          # 0x0016
+        "tx_retry_count": _get_int("33"),                          # 0x0021
+        "tx_err_cca_count": _get_int("36"),                        # 0x0024
+        "tx_err_abort_count": _get_int("37"),                      # 0x0025
+        "tx_err_busy_channel_count": _get_int("38"),               # 0x0026
+        # v13 — MAC Rx counters.
+        "rx_total_count": _get_int("39"),                          # 0x0027
+        "rx_duplicated_count": _get_int("49"),                     # 0x0031
+        "rx_err_no_frame_count": _get_int("50"),                   # 0x0032
+        "rx_err_sec_count": _get_int("53"),                        # 0x0035
+        "rx_err_fcs_count": _get_int("54"),                        # 0x0036
     }
 
 
@@ -1010,6 +1025,9 @@ async def _persist_matter_diagnostics(
             "partition_split": False,
             "phantom_marked": 0,
             "phantom_cleared": 0,
+            "parent_change_events": 0,
+            "link_acquired_events": 0,
+            "link_lost_events": 0,
         }
 
     prior_by_eui = {n.get("eui64"): n for n in prior_nodes if n.get("eui64")}
@@ -1018,6 +1036,9 @@ async def _persist_matter_diagnostics(
     diag_nodes = 0
     partitions: dict[int, list[str]] = {}
     partition_change_events = 0
+    parent_change_events = 0
+    link_acquired_events = 0
+    link_lost_events = 0
     leaders_by_partition: dict[int, str] = {}
 
     # Collect every EUI we observe this cycle, either as a reporter or as a
@@ -1044,17 +1065,63 @@ async def _persist_matter_diagnostics(
         # Persist links (replace per source). End devices typically have
         # neither table populated; we still issue replace calls so stale
         # rows from prior cycles get cleared.
+        #
+        # v13: emit link_acquired / link_lost events using the per-call
+        # diff returned by replace_links_for_reporter. Suppress events on
+        # the very first observation of a (reporter, source) tuple — we
+        # detect this by checking whether the reporter had any prior row
+        # in the links table for this source. Without this guard a cold
+        # start would fire link_acquired for every existing edge.
+        link_partition_id = diag.get("partition_id")
         try:
-            link_partition_id = diag.get("partition_id")
-            s.replace_links_for_reporter(
-                eui, "neighbor_table", neighbor_table,
-                partition_id=link_partition_id,
-            )
-            s.replace_links_for_reporter(
-                eui, "route_table", route_table,
-                partition_id=link_partition_id,
-            )
-            links_recorded += len(neighbor_table) + len(route_table)
+            for source, table in (
+                ("neighbor_table", neighbor_table),
+                ("route_table", route_table),
+            ):
+                diff = s.replace_links_for_reporter(
+                    eui, source, table,
+                    partition_id=link_partition_id,
+                )
+                links_recorded += diff.get("inserted", 0)
+                # The first-ever sweep for this (reporter, source) will
+                # have prior_neighbors == empty AND new_neighbors !=
+                # empty, so ``added`` is the full table and ``removed``
+                # is empty. We can't reliably distinguish that from a
+                # genuine mass-acquire (e.g. router just attached) at
+                # the storage layer, so the suppression heuristic lives
+                # here: if the reporter previously had no observed_at
+                # timestamp for this source, treat ``added`` as
+                # baseline. The cheap proxy: the prior_nodes snapshot's
+                # diag_updated_at being None means we've never persisted
+                # diagnostics for this node before.
+                prior = prior_by_eui.get(eui) or {}
+                first_observation = prior.get("diag_updated_at") is None
+                if first_observation:
+                    continue
+                for neighbor in diff.get("added", []):
+                    s.insert_event(
+                        eui64=eui,
+                        type="link_acquired",
+                        payload={
+                            "reporter_eui64": eui,
+                            "neighbor_eui64": neighbor,
+                            "source": source,
+                            "partition_id": link_partition_id,
+                        },
+                    )
+                    link_acquired_events += 1
+                for neighbor in diff.get("removed", []):
+                    s.insert_event(
+                        eui64=eui,
+                        type="link_lost",
+                        payload={
+                            "reporter_eui64": eui,
+                            "neighbor_eui64": neighbor,
+                            "source": source,
+                            "partition_id": link_partition_id,
+                        },
+                    )
+                    link_lost_events += 1
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to persist links for %s: %s", eui, exc)
 
@@ -1069,6 +1136,36 @@ async def _persist_matter_diagnostics(
                     break
         except Exception as exc:  # noqa: BLE001
             log.debug("router_id self-detect failed for %s: %s", eui, exc)
+
+        # v13: emit parent_change event when parent_change_count
+        # increments. The cluster counter is monotonic on the device, so
+        # any positive delta versus our last snapshot is a genuine new
+        # parent swap (or a batch of them, which we encode as ``delta``).
+        # A drop indicates the device reset its counters (firmware
+        # update, factory reset); we treat that as a re-baseline and
+        # don't emit an event.
+        try:
+            new_pcc = diag.get("parent_change_count")
+            prior = prior_by_eui.get(eui) or {}
+            old_pcc = prior.get("parent_change_count")
+            if (
+                isinstance(new_pcc, int)
+                and isinstance(old_pcc, int)
+                and new_pcc > old_pcc
+            ):
+                s.insert_event(
+                    eui64=eui,
+                    type="parent_change",
+                    payload={
+                        "from_count": old_pcc,
+                        "to_count": new_pcc,
+                        "delta": new_pcc - old_pcc,
+                        "partition_id": diag.get("partition_id"),
+                    },
+                )
+                parent_change_events += 1
+        except Exception as exc:  # noqa: BLE001
+            log.debug("parent_change diff failed for %s: %s", eui, exc)
 
         # Persist scalars.
         try:
@@ -1085,6 +1182,20 @@ async def _persist_matter_diagnostics(
                 leader_role_count=diag.get("leader_role_count"),
                 attach_attempt_count=diag.get("attach_attempt_count"),
                 parent_change_count=diag.get("parent_change_count"),
+                partition_id_change_count=diag.get("partition_id_change_count"),
+                better_partition_attach_attempt_count=diag.get(
+                    "better_partition_attach_attempt_count"
+                ),
+                tx_total_count=diag.get("tx_total_count"),
+                tx_retry_count=diag.get("tx_retry_count"),
+                tx_err_cca_count=diag.get("tx_err_cca_count"),
+                tx_err_abort_count=diag.get("tx_err_abort_count"),
+                tx_err_busy_channel_count=diag.get("tx_err_busy_channel_count"),
+                rx_total_count=diag.get("rx_total_count"),
+                rx_duplicated_count=diag.get("rx_duplicated_count"),
+                rx_err_no_frame_count=diag.get("rx_err_no_frame_count"),
+                rx_err_sec_count=diag.get("rx_err_sec_count"),
+                rx_err_fcs_count=diag.get("rx_err_fcs_count"),
             )
             if updated_diag:
                 diag_nodes += 1
@@ -1259,10 +1370,12 @@ async def _persist_matter_diagnostics(
 
     log.info(
         "diagnostics persisted: nodes=%d links=%d partitions=%d split=%s "
-        "changes=%d phantoms_marked=%d phantoms_cleared=%d excluded_partitions=%d",
+        "changes=%d phantoms_marked=%d phantoms_cleared=%d excluded_partitions=%d "
+        "parent_changes=%d link_acq=%d link_lost=%d",
         diag_nodes, links_recorded, len(live_partitions), split,
         partition_change_events, phantom_marked, phantom_cleared,
         len(excluded_partitions),
+        parent_change_events, link_acquired_events, link_lost_events,
     )
     return {
         "nodes_with_diagnostics": diag_nodes,
@@ -1270,6 +1383,9 @@ async def _persist_matter_diagnostics(
         "partition_split": split,
         "partitions": partition_summary,
         "partition_change_events": partition_change_events,
+        "parent_change_events": parent_change_events,
+        "link_acquired_events": link_acquired_events,
+        "link_lost_events": link_lost_events,
         "phantom_marked": phantom_marked,
         "phantom_cleared": phantom_cleared,
         "excluded_phantom_partitions": excluded_partitions,

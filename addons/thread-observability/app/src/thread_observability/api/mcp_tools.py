@@ -335,6 +335,48 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "get_link_flap_history",
+        "description": (
+            "Return the per-edge link_acquired/link_lost history emitted by the "
+            "Matter cluster-53 link sweep. Each call returns the most-recent "
+            "transitions plus a flap_counts map keyed by the unordered "
+            "(reporter, neighbor) pair so a symmetric flap surfaces once. Use "
+            "this to rank unstable edges in the mesh: a high total over a short "
+            "window indicates a marginal RF link or a sleepy child whose parent "
+            "keeps timing it out. Available since v0.9.42; transitions before "
+            "that release are not recorded."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reporter_eui64": {
+                    "type": "string",
+                    "description": "Restrict to events where this EUI was the reporter.",
+                },
+                "neighbor_eui64": {
+                    "type": "string",
+                    "description": "Restrict to events where this EUI was the neighbor.",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["neighbor_table", "route_table"],
+                    "description": "Restrict to one Matter link source.",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "ISO-8601 timestamp; only transitions at or after this time.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 500,
+                    "minimum": 1,
+                    "maximum": 5000,
+                },
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "insert_test_event",
         "description": (
             "DEV: insert a synthetic canonical event into the SQLite store. Used to "
@@ -704,6 +746,17 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         try:
             return get_store().get_node_flap_history(
                 eui64=arguments.get("eui64"),
+                since=arguments.get("since"),
+                limit=int(arguments.get("limit", 500)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_link_flap_history":
+        try:
+            return get_store().get_link_flap_history(
+                reporter_eui64=arguments.get("reporter_eui64"),
+                neighbor_eui64=arguments.get("neighbor_eui64"),
+                source=arguments.get("source"),
                 since=arguments.get("since"),
                 limit=int(arguments.get("limit", 500)),
             )

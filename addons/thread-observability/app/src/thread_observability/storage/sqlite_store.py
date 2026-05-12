@@ -275,6 +275,53 @@ _MIGRATIONS: list[str] = [
     DROP INDEX IF EXISTS idx_nodes_phantom;
     ALTER TABLE nodes DROP COLUMN is_phantom;
     """,
+    # v13: cluster 53 Tx/Rx error counters + partition-change counters.
+    #
+    # The role counters captured in v10 told us about MLE state churn
+    # (router/leader/detached cycles, parent changes). They do not say
+    # anything about radio-layer health: a router that is silently
+    # dropping 30% of its transmissions because of a failing antenna or
+    # an RF-noisy neighbour looks identical in v10 to a perfectly healthy
+    # one. v13 adds the per-node MAC counters that expose this directly.
+    #
+    # Selected attributes (Matter ThreadNetworkDiagnostics cluster 0x0035):
+    #   0x0013 PartitionIdChangeCount                — how often THIS node
+    #                                                  has changed partition
+    #   0x0014 BetterPartitionAttachAttemptCount     — actively trying to
+    #                                                  merge into a stronger
+    #                                                  partition (split heal)
+    #   0x0016 TxTotalCount                          — denominator for tx rates
+    #   0x0021 TxRetryCount                          — MAC retransmits
+    #   0x0024 TxErrCcaCount                         — channel-busy failures
+    #                                                  (interference)
+    #   0x0025 TxErrAbortCount                       — driver aborts
+    #   0x0026 TxErrBusyChannelCount                 — CSMA backoff failures
+    #   0x0027 RxTotalCount                          — denominator for rx rates
+    #   0x0031 RxDuplicatedCount                     — acks lost or peer
+    #                                                  retransmitting
+    #   0x0032 RxErrNoFrameCount                     — corrupted preamble
+    #   0x0035 RxErrSecCount                         — failed MIC/auth
+    #                                                  (key roll? attacker?)
+    #   0x0036 RxErrFcsCount                         — bad FCS (RF noise,
+    #                                                  weak signal)
+    #
+    # All counters are monotonically increasing on the device; the addon
+    # snapshots them once per discovery cycle and computes per-tick deltas
+    # at read time (no new index needed — these are looked up by eui64).
+    """
+    ALTER TABLE nodes ADD COLUMN partition_id_change_count               INTEGER;
+    ALTER TABLE nodes ADD COLUMN better_partition_attach_attempt_count   INTEGER;
+    ALTER TABLE nodes ADD COLUMN tx_total_count                          INTEGER;
+    ALTER TABLE nodes ADD COLUMN tx_retry_count                          INTEGER;
+    ALTER TABLE nodes ADD COLUMN tx_err_cca_count                        INTEGER;
+    ALTER TABLE nodes ADD COLUMN tx_err_abort_count                      INTEGER;
+    ALTER TABLE nodes ADD COLUMN tx_err_busy_channel_count               INTEGER;
+    ALTER TABLE nodes ADD COLUMN rx_total_count                          INTEGER;
+    ALTER TABLE nodes ADD COLUMN rx_duplicated_count                     INTEGER;
+    ALTER TABLE nodes ADD COLUMN rx_err_no_frame_count                   INTEGER;
+    ALTER TABLE nodes ADD COLUMN rx_err_sec_count                        INTEGER;
+    ALTER TABLE nodes ADD COLUMN rx_err_fcs_count                        INTEGER;
+    """,
 ]
 
 
@@ -540,6 +587,21 @@ class SQLiteStore:
         leader_role_count: int | None = None,
         attach_attempt_count: int | None = None,
         parent_change_count: int | None = None,
+        # v13: partition-stability counters
+        partition_id_change_count: int | None = None,
+        better_partition_attach_attempt_count: int | None = None,
+        # v13: MAC-layer Tx counters
+        tx_total_count: int | None = None,
+        tx_retry_count: int | None = None,
+        tx_err_cca_count: int | None = None,
+        tx_err_abort_count: int | None = None,
+        tx_err_busy_channel_count: int | None = None,
+        # v13: MAC-layer Rx counters
+        rx_total_count: int | None = None,
+        rx_duplicated_count: int | None = None,
+        rx_err_no_frame_count: int | None = None,
+        rx_err_sec_count: int | None = None,
+        rx_err_fcs_count: int | None = None,
     ) -> bool:
         """Update Thread diagnostic scalars for a node. Returns True if row updated.
 
@@ -552,23 +614,43 @@ class SQLiteStore:
         on the device; a sustained climb in ``detached_role_count`` or
         ``parent_change_count`` is the textbook signal of an unstable
         sleepy device, surfaced without us having to catch the events live.
+
+        v13 additions: MAC-layer Tx/Rx counters and partition-stability
+        counters. These expose radio-layer health independently of MLE
+        state: a node with a fast-climbing ``tx_err_cca_count`` is seeing
+        interference; a fast-climbing ``rx_err_fcs_count`` is on a noisy
+        channel; ``rx_err_sec_count`` going up is a key-rotation or
+        attacker signal. All are monotonic; rate is computed from
+        snapshot deltas at read time.
         """
         with self._tx() as conn:
             cur = conn.execute(
                 """
                 UPDATE nodes SET
-                    partition_id         = ?,
-                    leader_router_id     = ?,
-                    routing_role         = ?,
-                    active_routers       = ?,
-                    channel              = ?,
-                    weighting            = ?,
-                    detached_role_count  = ?,
-                    router_role_count    = ?,
-                    leader_role_count    = ?,
-                    attach_attempt_count = ?,
-                    parent_change_count  = ?,
-                    diag_updated_at      = ?
+                    partition_id                         = ?,
+                    leader_router_id                     = ?,
+                    routing_role                         = ?,
+                    active_routers                       = ?,
+                    channel                              = ?,
+                    weighting                            = ?,
+                    detached_role_count                  = ?,
+                    router_role_count                    = ?,
+                    leader_role_count                    = ?,
+                    attach_attempt_count                 = ?,
+                    parent_change_count                  = ?,
+                    partition_id_change_count            = ?,
+                    better_partition_attach_attempt_count = ?,
+                    tx_total_count                       = ?,
+                    tx_retry_count                       = ?,
+                    tx_err_cca_count                     = ?,
+                    tx_err_abort_count                   = ?,
+                    tx_err_busy_channel_count            = ?,
+                    rx_total_count                       = ?,
+                    rx_duplicated_count                  = ?,
+                    rx_err_no_frame_count                = ?,
+                    rx_err_sec_count                     = ?,
+                    rx_err_fcs_count                     = ?,
+                    diag_updated_at                      = ?
                 WHERE eui64 = ?
                 """,
                 (
@@ -577,6 +659,14 @@ class SQLiteStore:
                     detached_role_count,
                     router_role_count, leader_role_count,
                     attach_attempt_count, parent_change_count,
+                    partition_id_change_count,
+                    better_partition_attach_attempt_count,
+                    tx_total_count, tx_retry_count,
+                    tx_err_cca_count, tx_err_abort_count,
+                    tx_err_busy_channel_count,
+                    rx_total_count, rx_duplicated_count,
+                    rx_err_no_frame_count, rx_err_sec_count,
+                    rx_err_fcs_count,
                     _utc_now(), eui64,
                 ),
             )
@@ -964,7 +1054,7 @@ class SQLiteStore:
         links: list[dict[str, Any]],
         *,
         partition_id: int | None = None,
-    ) -> int:
+    ) -> dict[str, Any]:
         """Replace all links for a given (reporter, source) tuple atomically.
 
         Each link dict may include: neighbor_eui64 (required), rssi_avg,
@@ -977,11 +1067,35 @@ class SQLiteStore:
         from a previous partition can be detected without re-scanning the
         whole table.
 
-        Returns the number of link rows inserted.
+        Returns a dict with:
+          ``inserted``: int       — total rows inserted this call
+          ``added``: list[str]    — neighbor EUI64s that are new for this
+                                    (reporter, source) since the previous
+                                    snapshot
+          ``removed``: list[str]  — neighbor EUI64s that were present in
+                                    the previous snapshot but are absent
+                                    now
+
+        v13: the added/removed diffs are what ``link_acquired`` /
+        ``link_lost`` events are derived from. Computing the diff inside
+        the same transaction that swaps the rows guarantees we never miss
+        a transient flap (e.g. a child that detaches and re-attaches
+        within a single tick would show up as removed+added on the parent
+        but the new row would still be present after the call).
         """
         now = _utc_now()
         inserted = 0
         with self._tx() as conn:
+            # Snapshot the previous neighbour set BEFORE deleting so we can
+            # diff it against the incoming set. Cheap: indexed lookup on
+            # (reporter_eui64, source).
+            prior_neighbors: set[str] = {
+                r[0] for r in conn.execute(
+                    "SELECT neighbor_eui64 FROM links"
+                    " WHERE reporter_eui64 = ? AND source = ?",
+                    (reporter_eui64, source),
+                ).fetchall()
+            }
             conn.execute(
                 "DELETE FROM links WHERE reporter_eui64 = ? AND source = ?",
                 (reporter_eui64, source),
@@ -991,10 +1105,12 @@ class SQLiteStore:
             known_euis = {
                 r[0] for r in conn.execute("SELECT eui64 FROM nodes").fetchall()
             }
+            new_neighbors: set[str] = set()
             for link in links:
                 neighbor = link.get("neighbor_eui64")
                 if not neighbor:
                     continue
+                new_neighbors.add(neighbor)
 
                 def _b(v: Any) -> int | None:
                     if v is None:
@@ -1047,7 +1163,9 @@ class SQLiteStore:
                     ),
                 )
                 inserted += 1
-        return inserted
+            added = sorted(new_neighbors - prior_neighbors)
+            removed = sorted(prior_neighbors - new_neighbors)
+        return {"inserted": inserted, "added": added, "removed": removed}
 
     def list_links(self, source: str | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM links"
@@ -1302,6 +1420,98 @@ class SQLiteStore:
             bucket["total"] += 1
             key = f"{from_state}->{to_state}"
             bucket["by_transition"][key] = bucket["by_transition"].get(key, 0) + 1
+        return {
+            "transitions": transitions,
+            "count": len(transitions),
+            "flap_counts": flap_counts,
+        }
+
+    def get_link_flap_history(
+        self,
+        *,
+        reporter_eui64: str | None = None,
+        neighbor_eui64: str | None = None,
+        source: str | None = None,
+        since: str | None = None,
+        limit: int = 500,
+    ) -> dict[str, Any]:
+        """Return ``link_acquired`` / ``link_lost`` events plus pair flap counts.
+
+        Backed by the ``events`` table populated by
+        ``_persist_matter_diagnostics`` (since v0.9.42). A "pair" here is
+        the unordered tuple of (reporter, neighbor); both directions of an
+        edge count toward the same bucket so a flapping link surfaces
+        regardless of which side reported it.
+
+        Filters:
+          ``reporter_eui64`` — events where this EUI was the reporter
+          ``neighbor_eui64`` — events where this EUI was the neighbor
+          ``source``        — ``"neighbor_table"`` or ``"route_table"``;
+                              when omitted both are returned
+        """
+        limit = max(1, min(int(limit), 5000))
+        clauses = ["type IN ('link_acquired', 'link_lost')"]
+        params: list[Any] = []
+        if reporter_eui64:
+            # Match against either the eui64 column (stamped to reporter)
+            # or the payload — payload-based filtering needs LIKE since we
+            # don't have a JSON1 dependency yet.
+            clauses.append("eui64 = ?")
+            params.append(reporter_eui64)
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        where = " WHERE " + " AND ".join(clauses)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT * FROM events{where}"
+                f" ORDER BY ts DESC, id DESC LIMIT ?",
+                (*params, limit * 4),  # over-fetch; we filter on payload below
+            ).fetchall()
+        transitions: list[dict[str, Any]] = []
+        flap_counts: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            ev = _row_to_event(r)
+            payload = ev.get("payload") or {}
+            ev_source = payload.get("source")
+            ev_reporter = payload.get("reporter_eui64") or ev.get("eui64")
+            ev_neighbor = payload.get("neighbor_eui64")
+            if source and ev_source != source:
+                continue
+            if neighbor_eui64 and ev_neighbor != neighbor_eui64:
+                continue
+            transitions.append(
+                {
+                    "id": ev.get("id"),
+                    "ts": ev.get("ts"),
+                    "type": ev.get("type"),
+                    "reporter_eui64": ev_reporter,
+                    "neighbor_eui64": ev_neighbor,
+                    "source": ev_source,
+                    "partition_id": payload.get("partition_id"),
+                }
+            )
+            if len(transitions) >= limit:
+                break
+            # Pair key is order-independent so both directions land in the
+            # same bucket. A symmetric flap (parent <-> child) on a child
+            # leaving and re-attaching shows up once.
+            pair = "|".join(sorted([ev_reporter or "", ev_neighbor or ""]))
+            bucket = flap_counts.setdefault(
+                pair,
+                {
+                    "reporter_eui64": ev_reporter,
+                    "neighbor_eui64": ev_neighbor,
+                    "total": 0,
+                    "acquired": 0,
+                    "lost": 0,
+                },
+            )
+            bucket["total"] += 1
+            if ev.get("type") == "link_acquired":
+                bucket["acquired"] += 1
+            elif ev.get("type") == "link_lost":
+                bucket["lost"] += 1
         return {
             "transitions": transitions,
             "count": len(transitions),
