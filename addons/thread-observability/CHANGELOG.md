@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.33 — First-class routing + server-side path walk
+
+- **Schema v8: richer link rows.** The `links` table now carries the Matter NeighborTable fields previously dropped — `rx_on_when_idle`, `full_thread_device`, `full_network_data`, `link_frame_counter`, `mle_frame_counter` — plus the RouteTable flags `link_established` and `allocated`, plus a `partition_id` stamp so stale rows from prior partitions are detectable. Every Matter cluster-53 field that matters for routing decisions is now persisted as a first-class column.
+- **Server-side route walker** (`pipeline/routing.py`). Walks `node → OTBR` via the RouteTable, with cycle detection, partition checks, and a structured `issues` list (`no_otbr`, `no_route_to_otbr`, `loop_detected`, `unknown_next_hop`, `different_partition`, `max_hops_exceeded`, `self_is_otbr`). Replaces the JS path walk previously done client-side — MCP / AI consumers now see the same hop chain the UI does.
+- **New endpoints**:
+  - `GET /v1/routes/{eui64}` — full hop chain to the OTBR with per-hop LQI, path cost, link-established state, and any path issues.
+  - `GET /v1/neighbors/{eui64}` — enriched NeighborTable + RouteTable rows for one reporter with names resolved and `next_hop_router_id` mapped back to its EUI64.
+- **`/v1/dev/status` enrichments** so the dashboard (and any other consumer) doesn't recompute data shape:
+  - `otbr_eui64` exposed at the top level (no more JS heuristics).
+  - `all_nodes` pre-sorted (phantoms last, then by display name).
+  - `node_counts` summary (`{total, online, offline, unregistered, phantom}`).
+  - `partitions.summary` human-readable string (`"single partition"`, `"network is split across 2 partitions"`).
+  - `pipeline.stages_failed` array pre-computed.
+- **`/v1/topology` link enrichment**: every link row now has an `edge_class` (`peer` / `child` / `route` / `other`). Router-router neighbor pairs reported by both ends are deduplicated server-side. The graph renderer just consumes; no more `nodeKind` / symmetric-key logic in JS.
+- **Separation of concerns**: data transformation moved out of the dashboard. Every transform that used to happen in JS (OTBR finding, route walking, node sorting, edge deduplication, partition summary, failed-stage filtering) now lives in the API. The UI renders; MCP and AI get parity for free.
+
+## 0.9.32 — Atomic pipeline + live status pill
+
+- **One pipeline, one tick.** Replaced the four independent background loops (otbr-ingest 10s, otbr-rest 60s, matter-discovery 300s, reasoner 120s) with a single atomic tick: `otbr_log_ingest → otbr_rest → matter_discovery → reasoner`. Each stage runs in dependency order, so the reasoner always reads data discovery just wrote. Per-stage failures are isolated; the rest of the tick still runs.
+- **Immediate-then-cadence.** The tick fires once at startup (no more 5-minute empty-table window after a restart) and then every `pipeline_interval_seconds` (default 30) after the previous tick *completes* — ticks never overlap.
+- **Live UI indicator.** New header pill shows `pipeline: idle / matter_discovery / tick #N · 1.2s / error`. Pulsing blue dot while running, green on success, yellow when a stage failed, red on runner error. Hover for stage timings.
+- **New endpoints**: `GET /v1/pipeline/state` (last tick summary, polled every 1s by the dashboard) and `POST /v1/pipeline/run` (force an out-of-band tick). `/v1/dev/status` now embeds `pipeline` for completeness.
+- **Config**: `scheduler.pipeline_interval_seconds` (10–600s, default 30). The old per-loop interval knobs remain in config for backwards compat but are no longer wired.
+- **Partition list fixes**: (a) dashboard was reading the wrong field name (`node_count` vs API's `member_count`), so every partition rendered "0 nodes" — now shows correct counts; (b) a single node with a stale `partition_id` and no leader no longer registers as a separate partition (always a stale-data artifact, not a real split).
+- **HA registry metadata in the UI**: the Thread Nodes table now has an **Area** column, a sub-line under each device name showing manufacturer / model / sw version, and a tooltip on the EUI cell with the HA `device_id`, hw version, and `ha_device_path`. All these fields were already in the API; the dashboard just wasn't surfacing them.
+
 ## 0.9.31 — Status enum + graph click-to-trace
 
 - **Node status enum** (replaces the binary `is_phantom` flag as the primary lifecycle signal):

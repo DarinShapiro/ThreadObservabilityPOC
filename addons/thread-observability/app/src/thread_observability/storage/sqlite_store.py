@@ -167,6 +167,24 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE nodes ADD COLUMN status_changed_at TEXT;
     CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
     """,
+    # v8: enrich `links` with the Matter NeighborTable + RouteTable fields
+    # that were previously dropped. These let consumers reason about routing
+    # mode (rx-on vs sleepy), full-thread-device vs MTD neighbors, route
+    # allocation/establishment state, and partition scoping. Also adds
+    # `partition_id` so a link row is always interpretable in the context
+    # of the partition it was observed in (link rows referencing a different
+    # partition are stale and should be ignored by the route walker).
+    """
+    ALTER TABLE links ADD COLUMN rx_on_when_idle    INTEGER;
+    ALTER TABLE links ADD COLUMN full_thread_device INTEGER;
+    ALTER TABLE links ADD COLUMN full_network_data  INTEGER;
+    ALTER TABLE links ADD COLUMN link_frame_counter INTEGER;
+    ALTER TABLE links ADD COLUMN mle_frame_counter  INTEGER;
+    ALTER TABLE links ADD COLUMN link_established   INTEGER;
+    ALTER TABLE links ADD COLUMN allocated          INTEGER;
+    ALTER TABLE links ADD COLUMN partition_id       INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_links_partition ON links(partition_id);
+    """,
 ]
 
 
@@ -659,12 +677,20 @@ class SQLiteStore:
         reporter_eui64: str,
         source: str,
         links: list[dict[str, Any]],
+        *,
+        partition_id: int | None = None,
     ) -> int:
         """Replace all links for a given (reporter, source) tuple atomically.
 
         Each link dict may include: neighbor_eui64 (required), rssi_avg,
         rssi_last, lqi_in, lqi_out, is_child, age_seconds, frame_error_rate,
-        message_error_rate, path_cost.
+        message_error_rate, path_cost, next_hop_router_id, rx_on_when_idle,
+        full_thread_device, full_network_data, link_frame_counter,
+        mle_frame_counter, link_established, allocated.
+
+        ``partition_id`` (if known) is stamped onto every row so stale rows
+        from a previous partition can be detected without re-scanning the
+        whole table.
 
         Returns the number of link rows inserted.
         """
@@ -679,6 +705,12 @@ class SQLiteStore:
                 neighbor = link.get("neighbor_eui64")
                 if not neighbor:
                     continue
+
+                def _b(v: Any) -> int | None:
+                    if v is None:
+                        return None
+                    return 1 if v else 0
+
                 conn.execute(
                     """
                     INSERT INTO links(
@@ -687,8 +719,11 @@ class SQLiteStore:
                         is_child, age_seconds,
                         frame_error_rate, message_error_rate, path_cost,
                         next_hop_router_id,
+                        rx_on_when_idle, full_thread_device, full_network_data,
+                        link_frame_counter, mle_frame_counter,
+                        link_established, allocated, partition_id,
                         observed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         reporter_eui64,
@@ -698,12 +733,20 @@ class SQLiteStore:
                         link.get("rssi_last"),
                         link.get("lqi_in"),
                         link.get("lqi_out"),
-                        1 if link.get("is_child") else (0 if link.get("is_child") is False else None),
+                        _b(link.get("is_child")),
                         link.get("age_seconds"),
                         link.get("frame_error_rate"),
                         link.get("message_error_rate"),
                         link.get("path_cost"),
                         link.get("next_hop_router_id"),
+                        _b(link.get("rx_on_when_idle")),
+                        _b(link.get("full_thread_device")),
+                        _b(link.get("full_network_data")),
+                        link.get("link_frame_counter"),
+                        link.get("mle_frame_counter"),
+                        _b(link.get("link_established")),
+                        _b(link.get("allocated")),
+                        partition_id,
                         now,
                     ),
                 )

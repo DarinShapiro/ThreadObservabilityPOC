@@ -264,8 +264,14 @@ def _decode_neighbor_table(raw: Any) -> list[dict[str, Any]]:
     """Decode a Matter NeighborTable attribute (cluster 53 attr 7).
 
     NeighborTableStruct fields per Matter spec:
-      0 ExtAddress, 1 Age, 2 Rloc16, 5 LQI, 6 AverageRssi, 7 LastRssi,
-      8 FrameErrorRate, 9 MessageErrorRate, 13 IsChild.
+      0 ExtAddress, 1 Age, 2 Rloc16, 3 LinkFrameCounter, 4 MleFrameCounter,
+      5 LQI, 6 AverageRssi, 7 LastRssi, 8 FrameErrorRate, 9 MessageErrorRate,
+      10 RxOnWhenIdle, 11 FullThreadDevice, 12 FullNetworkData, 13 IsChild.
+
+    We surface the full struct (minus Rloc16 which is partition-local and
+    ephemeral) so consumers can reason about neighbor capabilities, not just
+    link quality. ``rx_on_when_idle=False`` plus ``full_thread_device=False``
+    identifies SED/MED children that we should not expect to forward.
     """
     if not isinstance(raw, list):
         return []
@@ -277,17 +283,29 @@ def _decode_neighbor_table(raw: Any) -> list[dict[str, Any]]:
         if not eui:
             continue
         is_child_raw = _field(entry, 13, "isChild", "IsChild")
+        rx_on_raw = _field(entry, 10, "rxOnWhenIdle", "RxOnWhenIdle")
+        ftd_raw = _field(entry, 11, "fullThreadDevice", "FullThreadDevice")
+        fnd_raw = _field(entry, 12, "fullNetworkData", "FullNetworkData")
+        def _tri(v: Any) -> int | None:
+            if v is None:
+                return None
+            return 1 if v else 0
         out.append({
             "neighbor_eui64": eui,
             "rssi_avg": _coerce_int(_field(entry, 6, "averageRssi", "AverageRssi")),
             "rssi_last": _coerce_int(_field(entry, 7, "lastRssi", "LastRssi")),
             "lqi_in": _coerce_int(_field(entry, 5, "lqi", "LQI")),
             "lqi_out": None,
-            "is_child": 1 if is_child_raw else (0 if is_child_raw is not None else None),
+            "is_child": _tri(is_child_raw),
             "age_seconds": _coerce_int(_field(entry, 1, "age", "Age")),
             "frame_error_rate": _coerce_int(_field(entry, 8, "frameErrorRate", "FrameErrorRate")),
             "message_error_rate": _coerce_int(_field(entry, 9, "messageErrorRate", "MessageErrorRate")),
             "path_cost": None,
+            "rx_on_when_idle": _tri(rx_on_raw),
+            "full_thread_device": _tri(ftd_raw),
+            "full_network_data": _tri(fnd_raw),
+            "link_frame_counter": _coerce_int(_field(entry, 3, "linkFrameCounter", "LinkFrameCounter")),
+            "mle_frame_counter": _coerce_int(_field(entry, 4, "mleFrameCounter", "MleFrameCounter")),
         })
     return out
 
@@ -313,6 +331,12 @@ def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
         eui = _ext_address_to_eui64(_field(entry, 0, "extAddress", "ExtAddress"))
         if not eui:
             continue
+        alloc_raw = _field(entry, 8, "allocated", "Allocated")
+        est_raw = _field(entry, 9, "linkEstablished", "LinkEstablished")
+        def _tri(v: Any) -> int | None:
+            if v is None:
+                return None
+            return 1 if v else 0
         out.append({
             "neighbor_eui64": eui,
             "rssi_avg": None,
@@ -326,6 +350,8 @@ def _decode_route_table(raw: Any) -> list[dict[str, Any]]:
             "path_cost": _coerce_int(_field(entry, 4, "pathCost", "PathCost")),
             "router_id": _coerce_int(_field(entry, 2, "routerId", "RouterId")),
             "next_hop_router_id": _coerce_int(_field(entry, 3, "nextHop", "NextHop")),
+            "allocated": _tri(alloc_raw),
+            "link_established": _tri(est_raw),
         })
     return out
 
@@ -993,8 +1019,15 @@ def _persist_matter_diagnostics(
         # neither table populated; we still issue replace calls so stale
         # rows from prior cycles get cleared.
         try:
-            s.replace_links_for_reporter(eui, "neighbor_table", neighbor_table)
-            s.replace_links_for_reporter(eui, "route_table", route_table)
+            link_partition_id = diag.get("partition_id")
+            s.replace_links_for_reporter(
+                eui, "neighbor_table", neighbor_table,
+                partition_id=link_partition_id,
+            )
+            s.replace_links_for_reporter(
+                eui, "route_table", route_table,
+                partition_id=link_partition_id,
+            )
             links_recorded += len(neighbor_table) + len(route_table)
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to persist links for %s: %s", eui, exc)

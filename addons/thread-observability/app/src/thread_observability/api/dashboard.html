@@ -44,6 +44,13 @@
   .pill.warn { background:#422006; color:#fde68a; }
   .pill.bad  { background:#450a0a; color:#fca5a5; }
   .pill.muted{ background:#1e293b; color:var(--muted); }
+  .pill.running { background:#0c4a6e; color:#7dd3fc; }
+  .pill.running::before {
+    content:""; display:inline-block; width:7px; height:7px; border-radius:50%;
+    background:#38bdf8; margin-right:6px; vertical-align:middle;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.3 } }
   .muted { color: var(--muted); }
   code { background: #0b1220; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 
@@ -88,6 +95,7 @@
   <h1>Thread Observability</h1>
   <span class="meta">v<span id="addon-version">…</span></span>
   <span class="spacer"></span>
+  <span id="pipeline-pill" class="pill muted" title="Pipeline status">pipeline: —</span>
   <span class="last-refresh">updated <span id="last-refresh">never</span></span>
 </header>
 
@@ -142,6 +150,7 @@
           <thead>
             <tr>
               <th>Name</th>
+              <th>Area</th>
               <th>Role</th>
               <th title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
               <th title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
@@ -286,6 +295,12 @@ function fmtAge(iso) {
   if (s < 86400) return Math.round(s/3600) + 'h ago';
   return Math.round(s/86400) + 'd ago';
 }
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"']/g, c => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+  ));
+}
 function rssiClass(dbm) {
   if (dbm == null) return '';
   if (dbm >= -70) return 'rssi-good';
@@ -355,14 +370,17 @@ function renderNetwork(s) {
   $('#health-score').textContent = (h.score != null) ? h.score : '—';
   $('#health-sub').textContent = (h.status || 'unknown') + ' · ' + ((h.issues_active||0) + ' issues');
 
+  // Partition + node counts come pre-computed from the server. The UI
+  // never recomputes — same numbers are surfaced to MCP / AI consumers.
   const p = s.partitions || {};
   $('#partition-count').textContent = p.partition_count != null ? p.partition_count : '—';
-  $('#partition-sub').textContent = (p.partition_count > 1) ? 'network is split' : 'single partition';
+  $('#partition-sub').textContent = p.summary || '—';
 
   const nodes = s.all_nodes || [];
-  const alive = nodes.filter(n => !n.is_phantom).length;
+  const counts = s.node_counts || {};
+  const alive = (counts.online || 0) + (counts.offline || 0);
   $('#node-count').textContent = alive;
-  $('#node-sub').textContent = nodes.length + ' total (incl. phantoms)';
+  $('#node-sub').textContent = (counts.total || nodes.length) + ' total (incl. phantoms)';
 
   const phantoms = (s.phantoms && s.phantoms.phantoms) || [];
   $('#phantom-count').textContent = phantoms.length;
@@ -389,9 +407,10 @@ function renderNetwork(s) {
     const ul = el('ul', {style:'margin:0; padding-left:18px;'});
     for (const pp of parts) {
       const lead = pp.leader_eui64 ? '<code>' + pp.leader_eui64.slice(-4).toUpperCase() + '</code>' : '<span class="muted">no leader</span>';
+      const count = (pp.member_count != null ? pp.member_count : (pp.node_count || 0));
       ul.appendChild(el('li', {html:
         '<code>' + pp.partition_id + '</code> · leader ' + lead +
-        ' · ' + (pp.node_count || 0) + ' nodes'
+        ' · ' + count + ' nodes'
       }));
     }
     pBody.appendChild(ul);
@@ -404,20 +423,31 @@ function renderNodesTable(nodes) {
   const showPhantoms = $('#show-phantoms').checked;
   const tbody = $('#nodes-table tbody');
   tbody.innerHTML = '';
-  const sorted = [...nodes].sort((a,b) => {
-    const ap = a.is_phantom ? 1 : 0, bp = b.is_phantom ? 1 : 0;
-    if (ap !== bp) return ap - bp;
-    return (a.display_name || '').localeCompare(b.display_name || '');
-  });
-  for (const n of sorted) {
+  // Server delivers `all_nodes` pre-sorted (phantoms last, then by name).
+  // Do not re-sort — that's data shaping, which belongs on the server so
+  // MCP / AI consumers get the same order.
+  for (const n of nodes) {
     if (n.is_phantom && !showPhantoms) continue;
     const sig = n.signal_strength || {};
     const rssi = sig.rssi;
     const lqi  = sig.lqi;
     const tr = el('tr');
-    const nameCell = el('td', {html:
+    const nameMain =
       (n.display_name || '<span class="muted">unnamed</span>') +
-      (n.is_phantom ? ' <span class="pill warn">phantom</span>' : '')
+      (n.is_phantom ? ' <span class="pill warn">phantom</span>' : '');
+    // Sub-line surfaces HA registry metadata: manufacturer · model · sw v…
+    const metaBits = [];
+    if (n.manufacturer) metaBits.push(escapeHtml(n.manufacturer));
+    if (n.model) metaBits.push(escapeHtml(n.model));
+    if (n.sw_version) metaBits.push('sw ' + escapeHtml(n.sw_version));
+    const nameSub = metaBits.length
+      ? '<div class="parent-hint">' + metaBits.join(' · ') + '</div>'
+      : '';
+    const nameCell = el('td', {html: nameMain + nameSub});
+    const areaCell = el('td', {html:
+      n.area_name
+        ? escapeHtml(n.area_name)
+        : '<span class="muted">—</span>'
     });
     const roleCell = el('td');
     let roleHtml = roleBadge(n);
@@ -459,8 +489,18 @@ function renderNodesTable(nodes) {
     const statusCls = n.status === 'online' ? 'good' : (n.status === 'offline' ? 'bad' : 'muted');
     const statusCell = el('td', {html: '<span class="pill ' + statusCls + '">' + (n.status || '—') + '</span>'});
     const seenCell = el('td', {}, fmtAge(n.last_seen));
-    const euiCell = el('td', {html: n.eui64 ? '<code>' + n.eui64.slice(-6).toUpperCase() + '</code>' : '<span class="muted">—</span>'});
-    tr.append(nameCell, roleCell, rssiCell, lqiCell, statusCell, seenCell, euiCell);
+    // EUI cell: short EUI plus a tooltip with the full EUI, HA device_id,
+    // hw_version, and ha_device_path so users can correlate with HA itself.
+    const euiTipBits = [];
+    if (n.eui64) euiTipBits.push('EUI64: ' + n.eui64);
+    if (n.device_id) euiTipBits.push('HA device_id: ' + n.device_id);
+    if (n.hw_version) euiTipBits.push('hw ' + n.hw_version);
+    if (n.ha_device_path) euiTipBits.push(n.ha_device_path);
+    const euiTip = euiTipBits.join('\n');
+    const euiCell = el('td', {html: n.eui64
+      ? '<code title="' + escapeHtml(euiTip) + '">' + n.eui64.slice(-6).toUpperCase() + '</code>'
+      : '<span class="muted">—</span>'});
+    tr.append(nameCell, areaCell, roleCell, rssiCell, lqiCell, statusCell, seenCell, euiCell);
     tbody.appendChild(tr);
   }
 }
@@ -529,26 +569,20 @@ async function renderGraph() {
       size: isRouter ? 36 : 18,
     }});
   }
-  // Dedupe edges so a router-router pair reported by both ends becomes one line.
-  const seen = new Set();
+  // Edges arrive from /v1/topology already deduped and classified server-side
+  // (`edge_class` is 'peer'|'child'|'route'|'other'). We just render.
   for (const l of (topo.links || [])) {
     if (!l.from || !l.to) continue;
-    const isChild = !!l.is_child;
-    // Symmetric key for router-router pairs (both ends are routers and not a child link)
-    const aRouter = ['leader','router','reed'].includes(nodeKind[l.from]);
-    const bRouter = ['leader','router','reed'].includes(nodeKind[l.to]);
-    const peer = aRouter && bRouter && !isChild;
-    const key = peer
+    const cls = l.edge_class || 'other';
+    const key = (cls === 'peer')
       ? 'peer:' + [l.from, l.to].sort().join('|')
-      : 'edge:' + l.from + '->' + l.to + '#' + (l.source || '') + (isChild ? ':child' : '');
-    if (seen.has(key)) continue;
-    seen.add(key);
+      : 'edge:' + l.from + '->' + l.to + '#' + (l.source || '') + (l.is_child ? ':child' : '');
     elements.push({ data: {
       id: key,
       source: l.from,
       target: l.to,
       color: rssiEdgeColor(l.rssi_avg != null ? l.rssi_avg : l.rssi),
-      edge_class: peer ? 'peer' : (isChild ? 'child' : (l.source === 'route_table' ? 'route' : 'other')),
+      edge_class: cls,
       label: (l.rssi_avg != null ? (l.rssi_avg + ' dBm') : ''),
     }});
   }
@@ -621,50 +655,24 @@ async function renderGraph() {
   cy.on('tap', (evt) => { if (evt.target === cy) clearPathHighlight(); });
 }
 
-function _nextHopMapByEui() {
-  // Build {eui64 -> next_hop_eui64} from the cached /v1/dev/status response.
-  const m = new Map();
-  if (!lastStatus) return m;
-  for (const n of (lastStatus.all_nodes || [])) {
-    const nh = n.next_hop_to_otbr;
-    if (nh && nh.eui64 && n.eui64) m.set(n.eui64, nh.eui64);
-  }
-  return m;
-}
-
-function _findOtbrEui() {
-  if (!lastStatus) return null;
-  // OTBR is the partition leader of the partition that contains a node
-  // whose next_hop_to_otbr.is_direct points at it — but the simpler signal
-  // is: the node where next_hop_to_otbr is null AND routing_role === 'leader'
-  // (the OTBR itself is the leader of its partition in single-OTBR meshes).
-  for (const n of (lastStatus.all_nodes || [])) {
-    if (n.routing_role === 'leader' && !n.next_hop_to_otbr) return n.eui64;
-  }
-  return null;
-}
-
 function clearPathHighlight() {
   if (!cy) return;
   cy.elements().removeClass('path-faded path-hit path-otbr');
 }
 
-function highlightPathToOtbr(startEui) {
+async function highlightPathToOtbr(startEui) {
+  // Path walk lives on the server (/v1/routes/{eui}) so MCP / AI consumers
+  // see the same chain. The UI just renders what comes back.
   if (!cy || !startEui) return;
-  const hops = _nextHopMapByEui();
-  const otbrEui = _findOtbrEui();
-  // Walk the chain with cycle detection; bail at depth 32 just in case.
-  const pathNodes = [startEui];
-  const seen = new Set([startEui]);
-  let cur = startEui;
-  for (let i = 0; i < 32; i++) {
-    const nxt = hops.get(cur);
-    if (!nxt || seen.has(nxt)) break;
-    pathNodes.push(nxt);
-    seen.add(nxt);
-    cur = nxt;
-    if (otbrEui && cur === otbrEui) break;
+  let route;
+  try {
+    route = await fetchJSON('v1/routes/' + encodeURIComponent(startEui));
+  } catch (_) {
+    return;
   }
+  const pathNodes = (route.hops || []).map(h => h.eui64).filter(Boolean);
+  const otbrEui = route.otbr_eui64 || null;
+  if (!pathNodes.length) return;
   cy.elements().addClass('path-faded');
   for (const eui of pathNodes) {
     const n = cy.getElementById(eui);
@@ -693,6 +701,7 @@ async function refresh() {
     lastStatus = s;
     $('#addon-version').textContent = s.addon_version || '—';
     $('#last-refresh').textContent = new Date().toLocaleTimeString();
+    renderPipelinePill(s.pipeline);
     renderNetwork(s);
     renderDiagnostics(s);
     if (document.getElementById('tab-graph').classList.contains('active')) renderGraph();
@@ -700,6 +709,58 @@ async function refresh() {
     $('#last-refresh').textContent = 'error: ' + e.message;
   }
 }
+
+function renderPipelinePill(p) {
+  const pill = $('#pipeline-pill');
+  if (!pill) return;
+  if (!p || typeof p !== 'object') {
+    pill.className = 'pill muted';
+    pill.textContent = 'pipeline: idle';
+    pill.title = 'no pipeline data yet';
+    return;
+  }
+  if (p.error) {
+    pill.className = 'pill bad';
+    pill.textContent = 'pipeline: error';
+    pill.title = p.error;
+    return;
+  }
+  if (p.running) {
+    pill.className = 'pill running';
+    pill.textContent = 'pipeline: ' + (p.current_stage || 'running');
+    pill.title = 'tick #' + (p.tick_count + 1) + ' in progress';
+    return;
+  }
+  const tickN = p.tick_count || 0;
+  const dur = p.duration_seconds != null ? p.duration_seconds + 's' : '—';
+  // `stages_failed` is computed server-side in /v1/dev/status; the pipeline
+  // /v1/pipeline/state endpoint returns raw stages so fall back to a derive
+  // there for the 1-second poll.
+  const stageFailed = (p.stages_failed != null)
+    ? p.stages_failed
+    : Object.entries(p.stages || {}).filter(([_, st]) => st && st.ok === false).map(([n]) => n);
+  if (stageFailed.length) {
+    pill.className = 'pill warn';
+    pill.textContent = 'pipeline: tick #' + tickN + ' (' + stageFailed.length + ' stage err)';
+    pill.title = 'failed: ' + stageFailed.join(', ');
+    return;
+  }
+  pill.className = 'pill good';
+  pill.textContent = 'pipeline: tick #' + tickN + ' · ' + dur;
+  const stages = Object.entries(p.stages || {}).map(([n, st]) => n + '=' + st.duration_seconds + 's').join(', ');
+  const interval = p.interval_seconds ? ' · interval ' + p.interval_seconds + 's' : '';
+  pill.title = stages + interval;
+}
+
+// Poll fast (1s) so the running pill is responsive; full refresh stays on 10s.
+async function pipelinePoll() {
+  try {
+    const p = await fetchJSON('v1/pipeline/state');
+    renderPipelinePill(p);
+  } catch (_) { /* ignore */ }
+}
+setInterval(pipelinePoll, 1000);
+
 refresh();
 setInterval(refresh, 10000);
 </script>

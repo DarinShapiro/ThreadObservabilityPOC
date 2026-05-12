@@ -57,6 +57,27 @@ def test_decode_neighbor_table_struct_fields() -> None:
     assert out[1]["rssi_avg"] == -85
 
 
+def test_decode_neighbor_table_extra_fields() -> None:
+    # v0.9.32: also surface Mode-related and frame-counter fields per
+    # Matter NeighborTableStruct (fields 3, 4, 10, 11, 12).
+    raw = [
+        {
+            "0": "0011223344556677",
+            "3": 123456,  # LinkFrameCounter
+            "4": 65432,   # MleFrameCounter
+            "10": True,   # RxOnWhenIdle
+            "11": True,   # FullThreadDevice
+            "12": False,  # FullNetworkData
+        }
+    ]
+    out = _decode_neighbor_table(raw)
+    assert out[0]["rx_on_when_idle"] == 1
+    assert out[0]["full_thread_device"] == 1
+    assert out[0]["full_network_data"] == 0
+    assert out[0]["link_frame_counter"] == 123456
+    assert out[0]["mle_frame_counter"] == 65432
+
+
 def test_decode_neighbor_table_skips_invalid() -> None:
     assert _decode_neighbor_table(None) == []
     assert _decode_neighbor_table("not a list") == []

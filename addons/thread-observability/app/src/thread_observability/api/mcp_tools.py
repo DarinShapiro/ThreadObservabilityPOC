@@ -447,6 +447,19 @@ def _build_partition_state(include_phantoms: bool = False) -> dict[str, Any]:
             if any(m in live_euis for m in members)
         }
 
+    # A real Thread partition has a leader. A "partition" of 1 member with
+    # no leader is almost always a stale `partition_id` left over on a node
+    # whose router has departed — the node will be swept to phantom by the
+    # next cycle, but until then it makes the network look split. Drop it
+    # unless the caller explicitly asked for phantoms.
+    if not include_phantoms:
+        suspicious = [
+            pid for pid, members in partitions.items()
+            if leaders.get(pid) is None and len(members) <= 1
+        ]
+        for pid in suspicious:
+            partitions.pop(pid, None)
+
     events = s.query_events(event_type="partition_change", limit=10)
     last_change = events[0].get("ts") if events else None
 

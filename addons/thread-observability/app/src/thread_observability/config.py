@@ -37,6 +37,9 @@ class SchedulerConfig(BaseModel):
     discover_interval_seconds: int = Field(default=300, ge=60, le=3600)
     reasoner_interval_seconds: int = Field(default=120, ge=30, le=3600)
     otbr_rest_interval_seconds: int = Field(default=60, ge=15, le=3600)
+    # Unified pipeline cadence (0.9.32+): a single atomic tick replaces the
+    # four independent loops above. Rest-time between ticks, not wall clock.
+    pipeline_interval_seconds: int = Field(default=30, ge=10, le=600)
 
 
 class InfluxConfig(BaseModel):

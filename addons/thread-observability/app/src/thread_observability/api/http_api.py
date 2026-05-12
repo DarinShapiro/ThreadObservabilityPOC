@@ -24,6 +24,8 @@ from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import otbr_rest
 from ..pipeline import reasoner as reasoner_mod
+from ..pipeline import routing as routing_mod
+from ..pipeline import runner as pipeline_runner
 from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
@@ -72,32 +74,35 @@ DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding="
 
 
 async def _periodic(name: str, interval: int, coro_factory) -> None:
-    """Run ``coro_factory()`` every ``interval`` seconds, logging exceptions.
-
-    The first iteration runs after one ``interval`` so startup races settle.
+    """Deprecated. Kept only because tests import it; the live scheduler
+    now uses :mod:`thread_observability.pipeline.runner` instead. Runs the
+    factory once immediately, then on ``interval`` cadence.
     """
     while True:
         try:
-            await asyncio.sleep(interval)
             await coro_factory()
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
             log.exception("periodic task %s failed", name)
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            raise
 
 
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Start/stop background scheduler tasks alongside the FastAPI app.
+    """Start/stop the background pipeline alongside the FastAPI app.
 
-    Everything the UI shows is produced by these loops — there is no
-    user-initiated trigger for data collection.
+    The pipeline is a single atomic tick (OTBR log ingest → OTBR REST →
+    Matter discovery → reasoner) that runs immediately on startup and then
+    every ``pipeline_interval_seconds`` after the previous tick finishes.
+    There are no other background loops — everything the UI shows comes
+    from this one source.
     """
     cfg = get_config()
-    ingest_interval = int(getattr(cfg.scheduler, "ingestion_interval_seconds", 10))
-    discover_interval = int(getattr(cfg.scheduler, "discover_interval_seconds", 300))
-    reasoner_interval = int(getattr(cfg.scheduler, "reasoner_interval_seconds", 120))
-    otbr_rest_interval = int(getattr(cfg.scheduler, "otbr_rest_interval_seconds", 60))
+    pipeline_interval = int(getattr(cfg.scheduler, "pipeline_interval_seconds", 30))
 
     # The SQLite store is a live cache of what the Thread fabric currently
     # reports. Anything that survives across a restart but does not come back
@@ -114,30 +119,11 @@ async def _lifespan(app: FastAPI):
 
     tasks = [
         asyncio.create_task(
-            otbr_adapter.run_forever(interval_seconds=ingest_interval),
-            name="otbr-ingest-loop",
-        ),
-        asyncio.create_task(
-            otbr_rest.run_forever(interval_seconds=otbr_rest_interval),
-            name="otbr-rest-loop",
-        ),
-        asyncio.create_task(
-            _periodic("matter-discovery", discover_interval, device_discovery.discover_and_sync),
-            name="matter-discovery-loop",
-        ),
-        asyncio.create_task(
-            _periodic(
-                "reasoner",
-                reasoner_interval,
-                lambda: asyncio.to_thread(reasoner_mod.run_reasoner),
-            ),
-            name="reasoner-loop",
+            pipeline_runner.run_forever(interval_seconds=pipeline_interval),
+            name="pipeline-runner",
         ),
     ]
-    log.info(
-        "scheduler started: ingest=%ss otbr_rest=%ss discover=%ss reasoner=%ss",
-        ingest_interval, otbr_rest_interval, discover_interval, reasoner_interval,
-    )
+    log.info("pipeline scheduler started: interval=%ss (single atomic tick)", pipeline_interval)
     try:
         yield
     finally:
@@ -146,7 +132,7 @@ async def _lifespan(app: FastAPI):
         for t in tasks:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await t
-        log.info("scheduler stopped")
+        log.info("pipeline scheduler stopped")
 
 
 def create_core_app() -> FastAPI:
@@ -198,6 +184,34 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"partition_count": 0, "partitions": [], "error": str(exc)}
 
+    @app.get("/v1/routes/{eui64}")
+    def routes_to_otbr(eui64: str) -> dict[str, object]:
+        """Walk the multi-hop forwarding path from a node to the OTBR.
+
+        Returns the full hop chain (with per-hop LQI, path_cost, link
+        established), a completeness flag, and any issues (loop, partition
+        mismatch, unknown next hop). Replaces the client-side path walk
+        previously done in the dashboard JS so MCP/AI consumers get the
+        same view.
+        """
+        try:
+            return routing_mod.walk_route_to_otbr(eui64.lower())
+        except Exception as exc:  # noqa: BLE001
+            return {"source_eui64": eui64, "error": str(exc), "hops": []}
+
+    @app.get("/v1/neighbors/{eui64}")
+    def neighbors_for(eui64: str) -> dict[str, object]:
+        """Enriched NeighborTable + RouteTable rows for one reporter.
+
+        Names are resolved against the nodes table; next-hop RouterIds are
+        resolved to their EUI64s within the partition. Use this instead of
+        joining ``/v1/topology`` links client-side.
+        """
+        try:
+            return routing_mod.list_neighbors_enriched(eui64.lower())
+        except Exception as exc:  # noqa: BLE001
+            return {"reporter_eui64": eui64, "error": str(exc), "neighbors": [], "routes": []}
+
     @app.get("/v1/phantoms")
     def phantoms_snapshot() -> dict[str, object]:
         try:
@@ -245,20 +259,63 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             ingestion = {"error": str(exc)}
         try:
+            pipeline = pipeline_runner.get_runner_state()
+        except Exception as exc:  # noqa: BLE001
+            pipeline = {"error": str(exc)}
+        # Pre-compute the set of failed stages so the dashboard (and any MCP
+        # consumer) doesn't have to iterate stages client-side.
+        if isinstance(pipeline, dict):
+            stages = pipeline.get("stages") or {}
+            if isinstance(stages, dict):
+                pipeline["stages_failed"] = [
+                    name for name, st in stages.items()
+                    if isinstance(st, dict) and st.get("ok") is False
+                ]
+        try:
             all_nodes = nodes_mod.list_nodes_enriched(
                 include_signal_strength=True,
                 include_phantoms=include_phantoms,
             )
+            # Server-side sort: phantoms last, then by display_name.
+            # Consumers (UI, AI) should render in this order; do not re-sort.
+            all_nodes.sort(key=lambda n: (
+                1 if (n.get("status") == "phantom" or n.get("is_phantom")) else 0,
+                (n.get("display_name") or "").lower(),
+            ))
         except Exception as exc:  # noqa: BLE001
             all_nodes = []
+        # Counts by status — saves every consumer recomputing them.
+        node_counts: dict[str, int] = {"total": len(all_nodes)}
+        for n in all_nodes:
+            st = n.get("status") or ("phantom" if n.get("is_phantom") else "online")
+            node_counts[st] = node_counts.get(st, 0) + 1
+        node_counts.setdefault("online", 0)
+        node_counts.setdefault("offline", 0)
+        node_counts.setdefault("unregistered", 0)
+        node_counts.setdefault("phantom", 0)
         try:
             partitions = _build_partition_state(include_phantoms=include_phantoms)
+            # Human-readable summary so consumers don't string-format it.
+            if isinstance(partitions, dict) and "partition_count" in partitions:
+                pc = partitions.get("partition_count", 0)
+                if pc <= 0:
+                    partitions["summary"] = "no partitions discovered"
+                elif pc == 1:
+                    partitions["summary"] = "single partition"
+                else:
+                    partitions["summary"] = f"network is split across {pc} partitions"
         except Exception as exc:  # noqa: BLE001
             partitions = {"error": str(exc)}
         try:
             phantoms = _build_phantom_list()
         except Exception as exc:  # noqa: BLE001
             phantoms = {"error": str(exc), "phantoms": []}
+        # Resolve OTBR up-front so consumers don't infer it from heuristics.
+        try:
+            otbr = routing_mod.find_otbr()
+            otbr_eui64 = otbr.get("eui64") if otbr else None
+        except Exception:  # noqa: BLE001
+            otbr_eui64 = None
         return {
             "addon_version": ADDON_VERSION,
             "checked_at": _utc_now(),
@@ -273,8 +330,29 @@ def create_core_app() -> FastAPI:
             "timeseries": ts_health,
             "config": cfg,
             "ingestion": ingestion,
+            "pipeline": pipeline,
+            "otbr_eui64": otbr_eui64,
+            "node_counts": node_counts,
             "all_nodes": all_nodes,
         }
+
+    @app.get("/v1/pipeline/state")
+    def pipeline_state() -> dict[str, object]:
+        """Last pipeline tick summary (stages, durations, errors)."""
+        try:
+            return pipeline_runner.get_runner_state()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.post("/v1/pipeline/run")
+    async def pipeline_run() -> dict[str, object]:
+        """Force-trigger an immediate pipeline tick (out-of-band). The
+        regular cadence keeps running independently.
+        """
+        try:
+            return await pipeline_runner.run_tick()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     @app.get("/v1/dev/mcp-health")
     async def dev_mcp_health() -> dict[str, object]:

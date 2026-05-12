@@ -179,6 +179,12 @@ def build_topology(
         )
 
     # Project links with tags.
+    # Edge classification + dedup: router-router neighbor_table pairs reported
+    # by both ends collapse to a single 'peer' edge so renderers don't have
+    # to do it. Other edges keep their direction.
+    router_roles = {"leader", "router", "reed"}
+    role_by_eui = {n["eui64"]: n.get("routing_role") for n in nodes}
+    seen_peer_keys: set[str] = set()
     links: list[dict[str, Any]] = []
     for ln in all_links_raw:
         rep = ln["reporter_eui64"]
@@ -199,11 +205,34 @@ def build_topology(
         if isinstance(rssi_avg, int) and isinstance(reverse, int):
             if abs(rssi_avg - reverse) > ASYMMETRY_DB:
                 tags.append("asymmetric")
+
+        is_child = bool(ln.get("is_child"))
+        a_router = role_by_eui.get(rep) in router_roles
+        b_router = role_by_eui.get(nei) in router_roles
+        is_peer = (
+            src == "neighbor_table"
+            and a_router and b_router
+            and not is_child
+        )
+        if is_peer:
+            peer_key = "peer:" + "|".join(sorted([rep, nei]))
+            if peer_key in seen_peer_keys:
+                continue
+            seen_peer_keys.add(peer_key)
+            edge_class = "peer"
+        elif is_child:
+            edge_class = "child"
+        elif src == "route_table":
+            edge_class = "route"
+        else:
+            edge_class = "other"
+
         links.append(
             {
                 "from": rep,
                 "to": nei,
                 "source": src,
+                "edge_class": edge_class,
                 "rssi_avg": rssi_avg,
                 "rssi_last": ln.get("rssi_last"),
                 "lqi_in": ln.get("lqi_in"),
@@ -213,6 +242,9 @@ def build_topology(
                 "frame_error_rate": fer,
                 "message_error_rate": mer,
                 "path_cost": ln.get("path_cost"),
+                "link_established": ln.get("link_established"),
+                "rx_on_when_idle": ln.get("rx_on_when_idle"),
+                "full_thread_device": ln.get("full_thread_device"),
                 "tags": tags,
             }
         )
