@@ -31,9 +31,11 @@ import time
 from typing import Any
 
 from . import device_discovery
+from . import observer_events
 from . import otbr_adapter
 from . import otbr_rest
 from . import reasoner as reasoner_mod
+from . import topology_snapshot
 
 log = logging.getLogger(__name__)
 
@@ -98,6 +100,18 @@ async def run_tick() -> dict[str, Any]:
         "otbr_log_ingest", otbr_adapter.ingest_once
     )
 
+    # 1b) Observer events. Polls Supervisor for restart / outage windows of
+    # the upstream add-ons we depend on (OTBR, Matter Server). Runs before
+    # discovery + reasoner so any observer event we record this tick is
+    # visible to the reasoner's suppression-window check at the end of
+    # the same tick.
+    from ..storage.sqlite_store import get_store as _get_store
+
+    stages["observer_events"] = await _run_stage(
+        "observer_events",
+        lambda: observer_events.poll_supervisor_addons(_get_store()),
+    )
+
     # 2) OTBR REST. Upserts the border router as a node, gives us router_id
     # / partition / active routers without waiting for Matter.
     stages["otbr_rest"] = await _run_stage(
@@ -109,6 +123,14 @@ async def run_tick() -> dict[str, Any]:
     # status, purges expired non-HA-registered rows.
     stages["matter_discovery"] = await _run_stage(
         "matter_discovery", device_discovery.discover_and_sync
+    )
+
+    # 3b) Topology snapshot (Tier 4). Captures the live topology graph
+    # into the ``topology_snapshots`` table whenever it differs from the
+    # last write (or at heartbeat). Sync; runs in a thread.
+    stages["topology_snapshot"] = await _run_stage(
+        "topology_snapshot",
+        lambda: asyncio.to_thread(topology_snapshot.capture_snapshot),
     )
 
     # 4) Reasoner. Runs against the freshly-written DB so issue detection

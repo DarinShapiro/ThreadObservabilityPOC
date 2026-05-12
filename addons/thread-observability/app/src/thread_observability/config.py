@@ -69,6 +69,18 @@ class ThreadObsConfig(BaseModel):
     options_path: str = str(OPTIONS_PATH)
     options_loaded: bool = False
 
+    # v0.9.43 (Tier 2 #1): enable OTBR ``MGMT_DIAG_GET`` second-witness
+    # polling. Off by default — the call hits the BR's CoAP path and adds
+    # mesh load proportional to router count, so operators should opt in
+    # when they want the cross-check.
+    enable_otbr_diagnostics: bool = Field(default=False)
+    # v0.9.43 (Tier 2 #4 scaffold): enable DBus signal subscription on the
+    # Supervisor host for sub-second OTBR partition / role events. Off
+    # by default — requires ``host_dbus: true`` in config.yaml and the
+    # ``dbus_next`` package, both currently absent, so today this flag
+    # only flips logging in the stub module.
+    enable_otbr_dbus_push: bool = Field(default=False)
+
     @classmethod
     def load(cls, path: Path | str | None = None) -> "ThreadObsConfig":
         p = Path(path) if path else OPTIONS_PATH

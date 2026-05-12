@@ -1,0 +1,266 @@
+{
+  "version": 1,
+  "playbooks": [
+    {
+      "id": "parent_churn",
+      "title": "Repeated parent changes (parent churn)",
+      "applies_to": ["parent_churn"],
+      "summary": "A node keeps swapping parents in a short window. Usually a marginal RF link to its current parent, a parent that itself is unstable, or two routers with near-equal link cost causing flapping.",
+      "evidence_to_collect": [
+        "query_timeline for the node over the last 2 hours with kinds=['parent_change']",
+        "Per-edge RSSI/LQI from get_neighbors of each candidate parent",
+        "Whether the candidate parents are themselves in any active issue"
+      ],
+      "remediation_steps": [
+        "Inspect physical placement: is the device on the edge of two routers' coverage?",
+        "Check that each candidate parent has healthy uplink (RSSI > -75, no high_error tag).",
+        "If both parents are healthy and far apart, prefer adding a mesh router in between rather than tuning.",
+        "If one parent shows weak_link/high_error to the device, reposition or replace it."
+      ],
+      "references": [
+        "Thread 1.3 spec §4.5.2 (parent reselection)"
+      ]
+    },
+    {
+      "id": "attach_failures",
+      "title": "Repeated attach failures",
+      "applies_to": ["attach_failures"],
+      "summary": "Node is attempting to attach to the mesh but cannot complete the handshake. Usually credentials drift, partition fragmentation, or RF.",
+      "evidence_to_collect": [
+        "query_timeline kinds=['attach','attach_failed'] over last hour for the eui",
+        "Active partition state (get_partition_state) — multiple partitions is a red flag",
+        "Dataset rotation events in observer_events"
+      ],
+      "remediation_steps": [
+        "Confirm the device still has the active operational dataset (re-commission if a rotation happened).",
+        "Ensure at least one router is reachable from the device's physical location.",
+        "If multiple partitions exist, resolve the split first — attaches will fail across partitions."
+      ],
+      "references": []
+    },
+    {
+      "id": "offline_node",
+      "title": "Node went offline",
+      "applies_to": ["offline_node"],
+      "summary": "Node has not been seen for the offline threshold (default 30 min). May be powered off, out of range, on the wrong fabric, or — for SEDs — simply asleep with a parent timeout.",
+      "evidence_to_collect": [
+        "query_timeline kinds=['status_change','parent_change','link_lost'] for the eui, last 24h",
+        "Last known parent and that parent's current health",
+        "Observer disruption windows overlapping the last_seen → now interval (already auto-applied as suppression)"
+      ],
+      "remediation_steps": [
+        "If the node is an SED: check its parent's child-timeout configuration vs. the device's poll period.",
+        "If the parent went down at roughly the same time, fix the parent first.",
+        "If this fired during an OTBR/Matter outage, the issue has already been downgraded — verify recovery on next tick.",
+        "Otherwise, physical inspection: power, distance, interference."
+      ],
+      "references": []
+    },
+    {
+      "id": "re_attach_storm",
+      "title": "Re-attach storm",
+      "applies_to": ["re_attach_storm"],
+      "summary": "Multiple routers witness the same neighbor re-attaching repeatedly. Strong signal that the device's MLE state is being reset (firmware bug, watchdog reboot, or a duplicate credential collision).",
+      "evidence_to_collect": [
+        "query_events event_type='re_attached_node' for the eui",
+        "Whether other devices of the same manufacturer/model show the same pattern",
+        "Recent firmware update events in observer_events"
+      ],
+      "remediation_steps": [
+        "Check for a firmware update or rollback on the affected device.",
+        "Look for a duplicate operational identity (two devices with the same node id on different fabrics).",
+        "If a vendor firmware regression is suspected, downgrade one unit and compare."
+      ],
+      "references": []
+    },
+    {
+      "id": "mesh_disagreement",
+      "title": "Mesh disagreement (OTBR vs router counters)",
+      "applies_to": ["mesh_disagreement"],
+      "summary": "A router's self-reported MAC TX counter and the OTBR-witnessed counter differ by ≥25%. Indicates either a stale Matter cache, a frame ingress path the OTBR doesn't see (multi-BR), or a router with corrupted counters.",
+      "evidence_to_collect": [
+        "Latest otbr_diagnostics row for the eui",
+        "Last 6 ticks of MAC counters for the router",
+        "Multi-BR state (are there two OTBR slugs?)"
+      ],
+      "remediation_steps": [
+        "If there are two OTBRs on the network, this is expected; consider tagging the router with the BR it belongs to.",
+        "If only one BR, restart the affected router as a first probe.",
+        "Persistent disagreement after restart suggests firmware counter corruption — file with vendor."
+      ],
+      "references": []
+    },
+    {
+      "id": "observer_suppressed",
+      "title": "Issue annotated as observer-suppressed",
+      "applies_to": [
+        "parent_churn",
+        "attach_failures",
+        "offline_node",
+        "re_attach_storm",
+        "mesh_disagreement"
+      ],
+      "summary": "The issue fired during a window where we (the addon, OTBR, or Matter Server) were down or restarting. The reasoner downgraded crit → warn and attached suppressed_by evidence. Treat this as low-confidence until the next clean tick.",
+      "evidence_to_collect": [
+        "evidence.suppressed_by[] on the open issue",
+        "query_timeline sources=['observer_events'] over the trigger window"
+      ],
+      "remediation_steps": [
+        "Wait one full pipeline tick after the suppressing window ends.",
+        "If the issue auto-closes, it was an artifact of the observer outage.",
+        "If it persists, treat it as a real issue per the rule's playbook."
+      ],
+      "references": []
+    },
+    {
+      "id": "partition_split",
+      "title": "Thread partition split",
+      "applies_to": ["partition_split", "mesh_disagreement"],
+      "summary": "Two partitions exist where there should be one. Routers in different partitions cannot forward to each other; SEDs anchored on the minority partition will appear offline to a controller bound to the majority partition.",
+      "evidence_to_collect": [
+        "get_partition_state — both partition_ids and their member counts",
+        "list_topology_snapshots and diff_topology across the split moment",
+        "OTBR /node/router/{id} for the minority leader"
+      ],
+      "remediation_steps": [
+        "Confirm both partitions use the same active operational dataset.",
+        "Identify the physical RF gap between partitions and bridge it (add a router).",
+        "If one partition is stuck on a stale dataset, force-rejoin its leader."
+      ],
+      "references": []
+    },
+    {
+      "id": "sed_battery_drain",
+      "title": "Sleepy-end-device unexpected battery drain",
+      "applies_to": ["sed_battery_drain"],
+      "summary": "SED is waking more often than its poll period would predict. Causes: parent child-timeout too short (forces frequent re-keep-alives), unicast traffic storms, or a controller subscription that exceeds the device's sleep duty cycle.",
+      "evidence_to_collect": [
+        "Device's published poll period vs. parent's child-timeout",
+        "Number of Matter subscriptions targeting the device",
+        "MAC TX/RX counter rate-of-change per tick"
+      ],
+      "remediation_steps": [
+        "Increase the parent's child-timeout to at least 3× the device's poll period.",
+        "Consolidate or remove redundant subscriptions on the controller.",
+        "Verify the device firmware honors CSL or SSED if supported."
+      ],
+      "references": [
+        "Thread spec §4.5.1 (child timeout)"
+      ]
+    },
+    {
+      "id": "rf_coexistence",
+      "title": "Wi-Fi / Thread 2.4 GHz coexistence",
+      "applies_to": ["rf_coexistence", "parent_churn"],
+      "summary": "Persistent weak-link/high-error tags across many edges suggest 2.4 GHz airtime is saturated. Thread channels 11–14 overlap Wi-Fi ch 1; 15–20 overlap Wi-Fi ch 6; 25–26 are usually safe.",
+      "evidence_to_collect": [
+        "Current Thread channel (network_data)",
+        "Local Wi-Fi channel usage (out-of-band, if available)",
+        "Distribution of weak_link / high_error tags across links"
+      ],
+      "remediation_steps": [
+        "Move Thread to channel 25 or 26 if Wi-Fi is on ch 1/6/11.",
+        "Avoid co-locating the OTBR antenna within 1 m of a Wi-Fi router antenna.",
+        "Consider an external Thread radio with a directional or relocated antenna."
+      ],
+      "references": []
+    },
+    {
+      "id": "multi_br",
+      "title": "Multiple border routers, inconsistent BR table",
+      "applies_to": ["multi_br"],
+      "summary": "Multi-BR deployments are valid but require all BRs to publish consistent on-mesh prefixes, external routes, and BBR preference. Diverging tables cause SRP outages and unreachable services.",
+      "evidence_to_collect": [
+        "network_data row per partition_id (BR servers, on-mesh prefixes)",
+        "Each BR's /node/network-data (REST)",
+        "SRP service-mDNS visibility from a wired client"
+      ],
+      "remediation_steps": [
+        "Make sure both BRs are on the same Thread Network Name and Extended PAN ID.",
+        "Verify BBR preference is sane (only one should be high).",
+        "If divergence persists, demote one BR and re-commission it from scratch."
+      ],
+      "references": []
+    },
+    {
+      "id": "srp_outage",
+      "title": "SRP service outage",
+      "applies_to": ["srp_outage"],
+      "summary": "SRP server is unresponsive or has stale registrations. Matter discovery and service routing degrade; nodes appear 'online' on the mesh but invisible to controllers.",
+      "evidence_to_collect": [
+        "Latest network_data.services for each partition",
+        "OTBR log for 'srp_server' lines",
+        "Whether a recent BR restart correlates with the issue (observer_events)"
+      ],
+      "remediation_steps": [
+        "Restart the OTBR add-on; SRP server typically recovers within 60s.",
+        "If services don't re-register, force-clear and re-commission the offending devices.",
+        "Multi-BR networks must have exactly one SRP server elected — check election state."
+      ],
+      "references": []
+    },
+    {
+      "id": "channel_mismatch",
+      "title": "Active dataset channel mismatch",
+      "applies_to": ["channel_mismatch", "attach_failures"],
+      "summary": "Two devices believe the network is on different channels (e.g. a partial dataset rotation succeeded). Symptoms: attach_failures spike, partition_id_change_count rises.",
+      "evidence_to_collect": [
+        "Active dataset channel per partition (network_data.channel)",
+        "Per-node last-known channel from device_discovery diagnostics",
+        "Recent dataset rotation events"
+      ],
+      "remediation_steps": [
+        "Re-issue the dataset to the affected device via OTBR REST.",
+        "If many devices are affected, complete the in-flight rotation rather than reverting."
+      ],
+      "references": []
+    },
+    {
+      "id": "leader_churn",
+      "title": "Leader churn",
+      "applies_to": ["leader_churn"],
+      "summary": "Leader role is changing routers more than once per hour. Indicates an unstable mesh — usually a marginal leader candidate that drops out, forcing re-election.",
+      "evidence_to_collect": [
+        "query_events event_type='leader_change' over last 6 hours",
+        "Stability counters of each leader-eligible router (detached_role_count, attach_attempt_count)"
+      ],
+      "remediation_steps": [
+        "Pin a stable router as preferred leader if your stack supports it.",
+        "Disable router-eligibility on flaky devices."
+      ],
+      "references": []
+    },
+    {
+      "id": "dataset_rotation",
+      "title": "Active dataset rotation in progress",
+      "applies_to": ["dataset_rotation"],
+      "summary": "An operator or commissioner is rolling the active dataset. Expect transient attach_failures and partition transitions for the duration; do not treat any single issue as actionable until rotation completes.",
+      "evidence_to_collect": [
+        "Pending operational dataset present in network_data",
+        "active_timestamp deltas per partition",
+        "observer_events around the rotation start"
+      ],
+      "remediation_steps": [
+        "Wait for the rotation to complete (commissioner-defined timer).",
+        "Re-evaluate any open issues 10 minutes after the rotation timestamp passes."
+      ],
+      "references": []
+    },
+    {
+      "id": "phantom_nodes",
+      "title": "Phantom / stale-reference nodes",
+      "applies_to": ["phantom_nodes"],
+      "summary": "Routers are caching neighbor table entries to EUIs that no longer exist in the registry (decommissioned, re-credentialed, or never properly removed). Wastes cache slots and confuses topology analysis.",
+      "evidence_to_collect": [
+        "list_phantom_nodes",
+        "links.neighbor_known=0 rows per reporter"
+      ],
+      "remediation_steps": [
+        "Use the HA deep-link path returned by list_phantom_nodes to remove the device entry.",
+        "Restart the reporter router to flush its cache.",
+        "If the EUI keeps reappearing, an unattached device with that EUI is still in RF range."
+      ],
+      "references": []
+    }
+  ]
+}

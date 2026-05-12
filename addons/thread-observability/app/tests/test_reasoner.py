@@ -6,8 +6,11 @@ from datetime import UTC, datetime, timedelta
 
 from thread_observability.pipeline.reasoner import (
     ATTACH_FAIL_THRESHOLD,
+    MESH_DISAGREEMENT_PCT_THRESHOLD,
     OFFLINE_THRESHOLD_MIN,
     PARENT_CHURN_THRESHOLD,
+    RE_ATTACH_STORM_MIN_EVENTS,
+    RE_ATTACH_STORM_MIN_REPORTERS,
     run_reasoner,
 )
 from thread_observability.storage.sqlite_store import SQLiteStore
@@ -86,3 +89,182 @@ def test_offline_node_opens_crit_issue(store: SQLiteStore) -> None:
     issues = store.list_active_issues()
     assert issues[0]["kind"] == "offline_node"
     assert issues[0]["severity"] == "crit"
+
+
+# ---------------------------------------------------------------------------
+# v0.9.43 — Tier 2 rules
+# ---------------------------------------------------------------------------
+
+
+def test_re_attach_storm_requires_multiple_reporters(store: SQLiteStore) -> None:
+    """A single reporter shouldn't trip the storm rule no matter the count.
+
+    The whole point of the cross-reporter requirement is to filter out a
+    single flaky link and reserve the alarm for a partition-wide
+    identity problem (the Foyer-Light case).
+    """
+    neighbor = "aa" * 8
+    store.upsert_node_metadata(eui64=neighbor)
+    reporter_a = "bb" * 8
+    store.upsert_node_metadata(eui64=reporter_a)
+    for _ in range(5):
+        store.insert_event(
+            eui64=neighbor,
+            type="re_attached_node",
+            payload={
+                "neighbor_eui64": neighbor,
+                "reporter_eui64": reporter_a,
+                "counter": "link_frame_counter",
+                "old_value": 100, "new_value": 1,
+            },
+        )
+    out = run_reasoner(store=store)
+    assert not any(
+        i["kind"] == "re_attach_storm" for i in store.list_active_issues()
+    ), "single-reporter storm should NOT open an issue"
+    assert out["opened"] == []
+
+
+def test_re_attach_storm_opens_with_distinct_reporters(store: SQLiteStore) -> None:
+    neighbor = "aa" * 8
+    store.upsert_node_metadata(eui64=neighbor)
+    reporters = [f"{i:02x}" * 8 for i in range(0xb0, 0xb0 + RE_ATTACH_STORM_MIN_REPORTERS)]
+    for r in reporters:
+        store.upsert_node_metadata(eui64=r)
+    # One event per reporter — meets MIN_EVENTS (2) and MIN_REPORTERS (2).
+    assert RE_ATTACH_STORM_MIN_EVENTS <= len(reporters)
+    for r in reporters:
+        store.insert_event(
+            eui64=neighbor,
+            type="re_attached_node",
+            payload={
+                "neighbor_eui64": neighbor,
+                "reporter_eui64": r,
+                "counter": "link_frame_counter",
+                "old_value": 100, "new_value": 1,
+            },
+        )
+    out = run_reasoner(store=store)
+    storms = [i for i in store.list_active_issues() if i["kind"] == "re_attach_storm"]
+    assert len(storms) == 1
+    assert storms[0]["eui64"] == neighbor
+    assert len(out["opened"]) == 1
+    assert sorted(storms[0]["evidence"]["distinct_reporters"]) == sorted(reporters)
+
+
+def test_mesh_disagreement_opens_when_delta_over_threshold(store: SQLiteStore) -> None:
+    eui = "cc" * 8
+    # Seed a node with a self-reported MAC TX counter and a fresh diag ts.
+    store.upsert_node_metadata(eui64=eui)
+    # Set tx_total_count + diag_updated_at directly via the diagnostics
+    # setter used by the discovery pipeline.
+    store.set_node_diagnostics(eui, tx_total_count=1000)
+    # OTBR-witnessed value ≫ threshold below.
+    store.insert_otbr_diagnostic(
+        target_eui64=eui,
+        target_rloc16=0x4400,
+        mac_tx_total=500,  # 50% delta vs. 1000
+    )
+    assert MESH_DISAGREEMENT_PCT_THRESHOLD <= 50.0
+    run_reasoner(store=store)
+    disagreements = [
+        i for i in store.list_active_issues() if i["kind"] == "mesh_disagreement"
+    ]
+    assert len(disagreements) == 1
+    ev = disagreements[0]["evidence"]
+    assert ev["self_tx_total"] == 1000
+    assert ev["otbr_tx_total"] == 500
+    assert ev["delta_pct"] >= MESH_DISAGREEMENT_PCT_THRESHOLD
+
+
+def test_mesh_disagreement_skips_when_under_threshold(store: SQLiteStore) -> None:
+    eui = "dd" * 8
+    store.upsert_node_metadata(eui64=eui)
+    store.set_node_diagnostics(eui, tx_total_count=1000)
+    # 5% delta — well under default 25% threshold.
+    store.insert_otbr_diagnostic(target_eui64=eui, mac_tx_total=950)
+    run_reasoner(store=store)
+    assert not any(
+        i["kind"] == "mesh_disagreement" for i in store.list_active_issues()
+    )
+
+
+# ---------------------------------------------------------------------------
+# v0.9.44 — Tier 3 observer-suppression annotation
+# ---------------------------------------------------------------------------
+
+
+def test_offline_issue_downgrades_when_observer_was_down(store: SQLiteStore) -> None:
+    """A ``crit`` ``offline_node`` issue downgrades to ``warn`` and
+    carries ``suppressed_by`` evidence when an observer-side disruption
+    overlaps the (last_seen → now) trigger window.
+    """
+    eui = "ee" * 8
+    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
+    store.upsert_node_metadata(eui64=eui)
+    store.insert_event(eui64=eui, type="attach", ts=old)
+
+    # Observer outage that spans the gap between last_seen and now.
+    obs_started = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN)).isoformat()
+    obs_ended = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN - 2)).isoformat()
+    store.insert_observer_event(
+        source="addon:core_matter_server",
+        kind="outage",
+        started_at=obs_started,
+        ended_at=obs_ended,
+    )
+
+    run_reasoner(store=store)
+    issues = [i for i in store.list_active_issues() if i["kind"] == "offline_node"]
+    assert len(issues) == 1
+    issue = issues[0]
+    assert issue["severity"] == "warn", "crit should have been downgraded"
+    assert "suppressed_by" in issue["evidence"]
+    suppressors = issue["evidence"]["suppressed_by"]
+    assert len(suppressors) == 1
+    assert suppressors[0]["source"] == "addon:core_matter_server"
+    assert suppressors[0]["kind"] == "outage"
+
+
+def test_offline_issue_stays_crit_when_no_observer_disruption(store: SQLiteStore) -> None:
+    """Same scenario but without an overlapping observer event — the
+    issue remains at full ``crit`` severity with no suppression.
+    """
+    eui = "ff" * 8
+    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
+    store.upsert_node_metadata(eui64=eui)
+    store.insert_event(eui64=eui, type="attach", ts=old)
+
+    run_reasoner(store=store)
+    issues = [i for i in store.list_active_issues() if i["kind"] == "offline_node"]
+    assert len(issues) == 1
+    assert issues[0]["severity"] == "crit"
+    assert "suppressed_by" not in issues[0]["evidence"]
+
+
+def test_observer_event_strictly_before_trigger_does_not_suppress(
+    store: SQLiteStore,
+) -> None:
+    """An old observer event from yesterday must not suppress today's
+    issues. Suppression only applies within the trigger window plus grace.
+    """
+    eui = "ab" * 8
+    old = (_now() - timedelta(minutes=OFFLINE_THRESHOLD_MIN + 5)).isoformat()
+    store.upsert_node_metadata(eui64=eui)
+    store.insert_event(eui64=eui, type="attach", ts=old)
+
+    # An observer outage from 6 hours ago — well before last_seen.
+    long_ago_start = (_now() - timedelta(hours=6)).isoformat()
+    long_ago_end = (_now() - timedelta(hours=6, minutes=-1)).isoformat()
+    store.insert_observer_event(
+        source="addon:self", kind="restart",
+        started_at=long_ago_start, ended_at=long_ago_end,
+    )
+
+    run_reasoner(store=store)
+    issues = [i for i in store.list_active_issues() if i["kind"] == "offline_node"]
+    assert len(issues) == 1
+    assert issues[0]["severity"] == "crit"
+    assert "suppressed_by" not in issues[0]["evidence"]
+
+

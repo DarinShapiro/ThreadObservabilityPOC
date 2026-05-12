@@ -269,6 +269,66 @@ async def fetch_otbr_routers(
         return None
 
 
+# MGMT_DIAG_GET TLV IDs we care about (Thread spec § 8.4.3.2).
+# Defaults chosen to mirror the MAC-counter and ChildTable signals we
+# already collect from Matter cluster 53, so the two views are
+# directly comparable.
+OTBR_DIAG_TLV_MAC_COUNTERS = 17
+OTBR_DIAG_TLV_CHILD_TABLE = 14
+OTBR_DIAG_TLV_EXT_ADDR = 0
+OTBR_DIAG_TLV_RLOC16 = 1
+OTBR_DEFAULT_DIAG_TLVS: tuple[int, ...] = (
+    OTBR_DIAG_TLV_EXT_ADDR,
+    OTBR_DIAG_TLV_MAC_COUNTERS,
+    OTBR_DIAG_TLV_CHILD_TABLE,
+)
+
+
+async def fetch_otbr_diagnostics(
+    base_url: str,
+    rloc16: int,
+    *,
+    tlv_types: tuple[int, ...] = OTBR_DEFAULT_DIAG_TLVS,
+    timeout: float = 10.0,
+) -> dict[str, Any] | None:
+    """POST ``{base_url}/diagnostics`` and return the decoded TLV dict.
+
+    The OTBR REST endpoint wraps ``MGMT_DIAG_GET``: the BR sends a CoAP
+    diagnostic request to ``rloc16`` and returns the response TLVs as a
+    JSON object. Returns ``None`` on any failure (unreachable BR, target
+    didn't respond, malformed payload) — the caller treats this as a
+    soft miss and skips this tick.
+
+    We don't validate the TLV content here; downstream code in
+    ``otbr_diagnostics.py`` extracts the MAC counter + child table
+    fields it understands and stashes the rest in ``extra_json``.
+    """
+    try:
+        rloc16_hex = f"0x{rloc16 & 0xFFFF:04x}"
+        body = {"destination": rloc16_hex, "types": list(tlv_types)}
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{base_url}/diagnostics",
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+        if resp.status_code >= 400:
+            log.debug(
+                "otbr_rest: /diagnostics %s -> %d", rloc16_hex, resp.status_code
+            )
+            return None
+        payload = resp.json()
+        if isinstance(payload, dict):
+            return payload
+        return None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("otbr_rest: /diagnostics fetch failed: %s", exc)
+        return None
+
+
 def _otbr_field(entry: dict[str, Any], *keys: str) -> Any:
     """Return the first non-None value among ``keys`` (case variants)."""
     for k in keys:

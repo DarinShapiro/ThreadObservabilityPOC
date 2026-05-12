@@ -1019,6 +1019,24 @@ async def _persist_matter_diagnostics(
     """
     rich = _LAST_MATTER_RICH_INFO
     if not rich:
+        # v0.9.43: even with no rich info this cycle (matter-server WS hiccup
+        # or a single empty poll), we MUST still reconcile the
+        # ``partition_split`` issue. Otherwise an issue opened on a prior
+        # cycle becomes immortal — it never sees a non-split observation
+        # again because the empty-rich early-return below would skip the
+        # close branch. Latent bug observed live as issue #54 hanging open
+        # after the partition had long since healed.
+        try:
+            active = [
+                i for i in s.list_active_issues()
+                if i.get("kind") == "partition_split"
+            ]
+            for issue in active:
+                s.close_issue(int(issue["id"]))
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "partition_split close-on-empty failed: %s", exc,
+            )
         return {
             "nodes_with_diagnostics": 0,
             "links_recorded": 0,
@@ -1028,6 +1046,8 @@ async def _persist_matter_diagnostics(
             "parent_change_events": 0,
             "link_acquired_events": 0,
             "link_lost_events": 0,
+            "re_attached_events": 0,
+            "rloc16_change_events": 0,
         }
 
     prior_by_eui = {n.get("eui64"): n for n in prior_nodes if n.get("eui64")}
@@ -1039,6 +1059,8 @@ async def _persist_matter_diagnostics(
     parent_change_events = 0
     link_acquired_events = 0
     link_lost_events = 0
+    re_attached_events = 0
+    rloc16_change_events = 0
     leaders_by_partition: dict[int, str] = {}
 
     # Collect every EUI we observe this cycle, either as a reporter or as a
@@ -1122,6 +1144,57 @@ async def _persist_matter_diagnostics(
                         },
                     )
                     link_lost_events += 1
+                # v0.9.43: emit re_attached_node when a neighbor's frame
+                # counter drops between consecutive observations. Matter
+                # MLE / link frame counters are monotonic for the
+                # lifetime of a session; a strictly-smaller new value is
+                # the cryptographic signal of a fresh attach (new
+                # session keys, counters reinitialised). This is the
+                # primary tell for the Foyer-Light triple-identity case:
+                # an old EUI keeps appearing in the parent's
+                # NeighborTable with counters that keep resetting to 1
+                # because the operational identity behind it is being
+                # re-created every commissioning cycle.
+                #
+                # We only check kept neighbours (present both before and
+                # after). Newly-added ones have no prior counter; removed
+                # ones already emitted link_lost.
+                prior_fcs = diff.get("prior_frame_counters") or {}
+                table_by_neighbor = {
+                    e.get("neighbor_eui64"): e for e in table
+                    if e.get("neighbor_eui64")
+                }
+                for neighbor, prior_pair in prior_fcs.items():
+                    if neighbor in diff.get("removed", []):
+                        continue
+                    new_entry = table_by_neighbor.get(neighbor)
+                    if not new_entry:
+                        continue
+                    for counter_name in ("link_frame_counter", "mle_frame_counter"):
+                        old_v = prior_pair.get(counter_name)
+                        new_v = new_entry.get(counter_name)
+                        if (
+                            isinstance(old_v, int)
+                            and isinstance(new_v, int)
+                            and new_v < old_v
+                        ):
+                            s.insert_event(
+                                eui64=neighbor,
+                                type="re_attached_node",
+                                payload={
+                                    "reporter_eui64": eui,
+                                    "neighbor_eui64": neighbor,
+                                    "source": source,
+                                    "counter": counter_name,
+                                    "old_value": old_v,
+                                    "new_value": new_v,
+                                    "partition_id": link_partition_id,
+                                },
+                            )
+                            re_attached_events += 1
+                            # Only emit once per (neighbor, source) per
+                            # cycle even if both counters reset.
+                            break
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to persist links for %s: %s", eui, exc)
 
@@ -1129,10 +1202,34 @@ async def _persist_matter_diagnostics(
         # A router's own RouteTable always contains a row where ExtAddress
         # equals its own EUI64; that row's RouterId field is the reporter's
         # ID within the partition. Needed to resolve next-hop references.
+        #
+        # v0.9.43: ``set_node_router_id`` now returns the prior + new
+        # router_id / rloc16 so we can emit an ``rloc16_change`` event
+        # when the assignment changes. The first observation (prior was
+        # None) is suppressed — that's a baseline, not a change.
         try:
             for entry in route_table:
                 if entry.get("neighbor_eui64") == eui and entry.get("router_id") is not None:
-                    s.set_node_router_id(eui, int(entry["router_id"]))
+                    diff = s.set_node_router_id(eui, int(entry["router_id"]))
+                    old_r = diff.get("old_router_id")
+                    new_r = diff.get("new_router_id")
+                    if (
+                        isinstance(old_r, int)
+                        and isinstance(new_r, int)
+                        and old_r != new_r
+                    ):
+                        s.insert_event(
+                            eui64=eui,
+                            type="rloc16_change",
+                            payload={
+                                "from_router_id": old_r,
+                                "to_router_id": new_r,
+                                "from_rloc16": diff.get("old_rloc16"),
+                                "to_rloc16": diff.get("new_rloc16"),
+                                "partition_id": diag.get("partition_id"),
+                            },
+                        )
+                        rloc16_change_events += 1
                     break
         except Exception as exc:  # noqa: BLE001
             log.debug("router_id self-detect failed for %s: %s", eui, exc)
@@ -1371,11 +1468,12 @@ async def _persist_matter_diagnostics(
     log.info(
         "diagnostics persisted: nodes=%d links=%d partitions=%d split=%s "
         "changes=%d phantoms_marked=%d phantoms_cleared=%d excluded_partitions=%d "
-        "parent_changes=%d link_acq=%d link_lost=%d",
+        "parent_changes=%d link_acq=%d link_lost=%d re_attached=%d rloc16_changes=%d",
         diag_nodes, links_recorded, len(live_partitions), split,
         partition_change_events, phantom_marked, phantom_cleared,
         len(excluded_partitions),
         parent_change_events, link_acquired_events, link_lost_events,
+        re_attached_events, rloc16_change_events,
     )
     return {
         "nodes_with_diagnostics": diag_nodes,
@@ -1386,6 +1484,8 @@ async def _persist_matter_diagnostics(
         "parent_change_events": parent_change_events,
         "link_acquired_events": link_acquired_events,
         "link_lost_events": link_lost_events,
+        "re_attached_events": re_attached_events,
+        "rloc16_change_events": rloc16_change_events,
         "phantom_marked": phantom_marked,
         "phantom_cleared": phantom_cleared,
         "excluded_phantom_partitions": excluded_partitions,

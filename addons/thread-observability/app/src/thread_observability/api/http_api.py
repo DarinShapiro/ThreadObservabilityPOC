@@ -117,6 +117,17 @@ async def _lifespan(app: FastAPI):
     else:
         log.info("reset_db_on_start=false: preserving previous DB contents")
 
+    # v0.9.44 — record our own cold start as an ``addon:self`` observer
+    # event. The reasoner uses this to suppress / downgrade ``offline_node``
+    # and similar issues that fire in the seconds right after boot, where
+    # the cache has no last_seen for anyone yet. Best-effort: a failed
+    # write must not block startup.
+    try:
+        from ..pipeline.observer_events import record_self_start  # local import
+        record_self_start(get_store(), version=ADDON_VERSION)
+    except Exception:  # noqa: BLE001
+        log.exception("observer_events: failed to record self-start")
+
     tasks = [
         asyncio.create_task(
             pipeline_runner.run_forever(interval_seconds=pipeline_interval),

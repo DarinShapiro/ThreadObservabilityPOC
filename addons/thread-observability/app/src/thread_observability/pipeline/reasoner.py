@@ -23,6 +23,8 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import json
+
 from ..storage.sqlite_store import SQLiteStore, get_store
 
 PARENT_CHURN_WINDOW_MIN = 30
@@ -32,6 +34,38 @@ ATTACH_FAIL_WINDOW_MIN = 15
 ATTACH_FAIL_THRESHOLD = 2
 
 OFFLINE_THRESHOLD_MIN = 30
+
+# v0.9.43 — Tier 2 #2.
+# A "re-attach storm" is what the Foyer Light case looked like in
+# production: the same EUI keeps showing up in NeighborTable rows
+# across multiple reporters, with its link frame counter resetting
+# each cycle. The single-reporter-noise floor is high (a child
+# legitimately re-attaches occasionally), so we only fire when at
+# least two distinct reporters witness it — that cross-check is
+# what makes the rule specific to the partition-wide identity bug
+# rather than a flaky child.
+RE_ATTACH_STORM_WINDOW_MIN = 30
+RE_ATTACH_STORM_MIN_EVENTS = 2
+RE_ATTACH_STORM_MIN_REPORTERS = 2
+
+# v0.9.43 — Tier 2 #1. ``mesh_disagreement`` compares the latest
+# Matter cluster-53 self-counter (``nodes.tx_total_count``) against
+# the most-recent OTBR ``MGMT_DIAG_GET`` witness for the same target.
+# A %-delta over the threshold is the operator-visible signal that
+# the router and the BR disagree about how much traffic the router
+# has actually sent.
+MESH_DISAGREEMENT_PCT_THRESHOLD = 25.0
+# Snapshots must be observed within this window of each other to be
+# considered comparable. Otherwise we're comparing apples to a stale
+# orange and the %-delta is meaningless.
+MESH_DISAGREEMENT_MAX_AGE_MIN = 30
+
+# v0.9.44 (Tier 3): observer-suppression grace.
+# When an observer-side disruption (our addon, OTBR, Matter Server)
+# closes, downstream issues can still fire for a few cycles before
+# stale data clears. We extend the suppression window past
+# ``ended_at`` by this grace so those tail-fires get annotated too.
+OBSERVER_SUPPRESSION_GRACE_SEC = 90
 
 
 def _iso(dt: datetime) -> str:
@@ -59,6 +93,10 @@ def run_reasoner(
     churn_window = _iso(now_dt - timedelta(minutes=PARENT_CHURN_WINDOW_MIN))
     attach_window = _iso(now_dt - timedelta(minutes=ATTACH_FAIL_WINDOW_MIN))
     offline_cutoff = _iso(now_dt - timedelta(minutes=OFFLINE_THRESHOLD_MIN))
+    re_attach_window = _iso(now_dt - timedelta(minutes=RE_ATTACH_STORM_WINDOW_MIN))
+    mesh_disagree_cutoff = _iso(
+        now_dt - timedelta(minutes=MESH_DISAGREEMENT_MAX_AGE_MIN)
+    )
 
     with s._lock:  # noqa: SLF001
         churn_rows = s._conn.execute(  # noqa: SLF001
@@ -79,16 +117,166 @@ def run_reasoner(
             "SELECT eui64, last_seen FROM nodes WHERE last_seen IS NOT NULL"
         ).fetchall()
 
+        # v0.9.43 — re_attach_storm raw input.
+        # We pull each event's payload JSON and let Python parse out
+        # neighbor + reporter; doing it in SQL would require either
+        # JSON1 (not guaranteed on all Python sqlite builds) or
+        # generated columns we don't have.
+        re_attach_rows = s._conn.execute(  # noqa: SLF001
+            "SELECT eui64, payload_json FROM events"
+            " WHERE type = 're_attached_node' AND ts >= ?",
+            (re_attach_window,),
+        ).fetchall()
+
+        # v0.9.43 — mesh_disagreement raw input. Pull each router's
+        # self-reported MAC TX counter and its most recent OTBR
+        # second-witness, joined on EUI. We use a window function so
+        # this is one round-trip instead of N. Wrapped defensively:
+        # the table only exists on schemas >= v14, and a cold-start
+        # SQLite without it should not break the reasoner.
+        try:
+            mesh_rows = s._conn.execute(  # noqa: SLF001
+                """
+                WITH latest_otbr AS (
+                    SELECT target_eui64, mac_tx_total, observed_at,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY target_eui64
+                               ORDER BY observed_at DESC, id DESC
+                           ) AS rn
+                    FROM otbr_diagnostics
+                    WHERE observed_at >= ?
+                )
+                SELECT n.eui64, n.tx_total_count, n.diag_updated_at,
+                       o.mac_tx_total, o.observed_at AS otbr_observed_at
+                FROM nodes n
+                JOIN latest_otbr o
+                  ON o.target_eui64 = n.eui64 AND o.rn = 1
+                WHERE n.tx_total_count IS NOT NULL
+                  AND o.mac_tx_total IS NOT NULL
+                  AND n.diag_updated_at >= ?
+                """,
+                (mesh_disagree_cutoff, mesh_disagree_cutoff),
+            ).fetchall()
+        except Exception:  # noqa: BLE001
+            mesh_rows = []
+
     churn_counts: Counter[str] = Counter({r["eui64"]: int(r["c"]) for r in churn_rows})
     attach_counts: Counter[str] = Counter({r["eui64"]: int(r["c"]) for r in attach_rows})
     offline_nodes = {r["eui64"]: r["last_seen"] for r in node_rows if r["last_seen"] < offline_cutoff}
+
+    # ---- aggregate re_attach events per (neighbor) with distinct reporters ----
+    # ``neighbor_eui64`` is the device that re-attached (the subject of the
+    # issue); ``reporter_eui64`` is who witnessed the counter reset. The
+    # cross-reporter check is what filters out a single flapping link
+    # and keeps the alarm specific to identity churn.
+    re_attach_by_neighbor: dict[str, dict[str, Any]] = {}
+    for row in re_attach_rows:
+        try:
+            payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
+        except Exception:  # noqa: BLE001
+            payload = {}
+        if not isinstance(payload, dict):
+            continue
+        neighbor = payload.get("neighbor_eui64") or row["eui64"]
+        reporter = payload.get("reporter_eui64")
+        if not neighbor:
+            continue
+        bucket = re_attach_by_neighbor.setdefault(
+            neighbor, {"count": 0, "reporters": set()}
+        )
+        bucket["count"] += 1
+        if reporter:
+            bucket["reporters"].add(reporter)
+
+    # ---- aggregate mesh_disagreement per router ----
+    # We compute the relative delta against the larger of the two
+    # counters so a target near zero doesn't divide-by-zero or produce
+    # absurd percentages. A negative delta (BR sees fewer than the
+    # router claims) is just as interesting as positive, so we use abs.
+    mesh_disagreements: dict[str, dict[str, Any]] = {}
+    for row in mesh_rows:
+        eui = row["eui64"]
+        self_count = row["tx_total_count"]
+        otbr_count = row["mac_tx_total"]
+        if not isinstance(self_count, int) or not isinstance(otbr_count, int):
+            continue
+        denom = max(self_count, otbr_count)
+        if denom <= 0:
+            continue
+        pct = abs(self_count - otbr_count) * 100.0 / denom
+        if pct >= MESH_DISAGREEMENT_PCT_THRESHOLD:
+            mesh_disagreements[eui] = {
+                "self_tx_total": self_count,
+                "otbr_tx_total": otbr_count,
+                "delta_pct": round(pct, 2),
+                "self_observed_at": row["diag_updated_at"],
+                "otbr_observed_at": row["otbr_observed_at"],
+            }
 
     active = s.list_active_issues()
     active_by_key: dict[tuple[str, str | None], dict[str, Any]] = {
         (i["kind"], i.get("eui64")): i for i in active
     }
 
-    def _emit(kind: str, severity: str, eui64: str | None, evidence: dict[str, Any]) -> None:
+    def _check_suppression(
+        since: str | None, until: str | None
+    ) -> list[dict[str, Any]]:
+        """Return observer events overlapping [since, until + grace].
+
+        Tier 3: a candidate issue is annotated (and ``crit`` downgraded
+        to ``warn``) when an observer-side disruption overlaps its
+        trigger window. We extend the upper bound by
+        ``OBSERVER_SUPPRESSION_GRACE_SEC`` so an issue that fires in the
+        seconds immediately after a restart still picks up the prior
+        outage as context.
+
+        Returns an empty list (no suppression) when the inputs are not
+        usable (missing timestamps, lookup errors).
+        """
+        if not since:
+            return []
+        try:
+            upper_dt = (
+                datetime.fromisoformat(until) if until else now_dt
+            ) + timedelta(seconds=OBSERVER_SUPPRESSION_GRACE_SEC)
+            return s.list_observer_events_in_window(
+                since=since, until=upper_dt.isoformat()
+            )
+        except Exception:  # noqa: BLE001
+            return []
+
+    def _emit(
+        kind: str,
+        severity: str,
+        eui64: str | None,
+        evidence: dict[str, Any],
+        *,
+        trigger_since: str | None = None,
+        trigger_until: str | None = None,
+    ) -> None:
+        # Tier 3 suppression: annotate + downgrade when an observer-side
+        # disruption overlaps the trigger window. We never drop the
+        # issue — that would lose a real outage that coincides with a
+        # routine restart. Downgrading ``crit`` → ``warn`` is enough
+        # to keep noise out of pager-grade alerts while preserving the
+        # record.
+        suppressors = _check_suppression(trigger_since, trigger_until)
+        if suppressors:
+            evidence = {
+                **evidence,
+                "suppressed_by": [
+                    {
+                        "id": ev["id"],
+                        "source": ev["source"],
+                        "kind": ev["kind"],
+                        "started_at": ev["started_at"],
+                        "ended_at": ev.get("ended_at"),
+                    }
+                    for ev in suppressors
+                ],
+            }
+            if severity == "crit":
+                severity = "warn"
         issue_id = s.open_issue(kind=kind, severity=severity, eui64=eui64, evidence=evidence)
         if (kind, eui64) in active_by_key:
             skipped.append(issue_id)
@@ -109,6 +297,7 @@ def run_reasoner(
                     "window_minutes": PARENT_CHURN_WINDOW_MIN,
                     "threshold": PARENT_CHURN_THRESHOLD,
                 },
+                trigger_since=churn_window,
             )
 
     # ---- attach_failures ----
@@ -124,9 +313,14 @@ def run_reasoner(
                     "window_minutes": ATTACH_FAIL_WINDOW_MIN,
                     "threshold": ATTACH_FAIL_THRESHOLD,
                 },
+                trigger_since=attach_window,
             )
 
     # ---- offline_node ----
+    # Trigger window for suppression spans from ``last_seen`` (when we
+    # last had ground truth for this node) to now. This is the most
+    # important suppression case: an addon restart between last_seen
+    # and now is precisely the false-positive we want to annotate.
     for eui, last_seen in offline_nodes.items():
         seen_keys.add(("offline_node", eui))
         _emit(
@@ -134,10 +328,64 @@ def run_reasoner(
             "crit",
             eui,
             {"last_seen": last_seen, "threshold_minutes": OFFLINE_THRESHOLD_MIN},
+            trigger_since=last_seen,
+        )
+
+    # ---- re_attach_storm ----
+    # Fires when the same neighbor has re-attached at least N times in
+    # the window AND been witnessed by at least M distinct reporters.
+    # The cross-reporter requirement is what makes this a partition-
+    # wide identity signal rather than a single-link flap.
+    for neighbor, bucket in re_attach_by_neighbor.items():
+        reporters = bucket["reporters"]
+        if (
+            bucket["count"] >= RE_ATTACH_STORM_MIN_EVENTS
+            and len(reporters) >= RE_ATTACH_STORM_MIN_REPORTERS
+        ):
+            seen_keys.add(("re_attach_storm", neighbor))
+            _emit(
+                "re_attach_storm",
+                "warn",
+                neighbor,
+                {
+                    "count": bucket["count"],
+                    "distinct_reporters": sorted(reporters),
+                    "window_minutes": RE_ATTACH_STORM_WINDOW_MIN,
+                    "threshold_events": RE_ATTACH_STORM_MIN_EVENTS,
+                    "threshold_reporters": RE_ATTACH_STORM_MIN_REPORTERS,
+                },
+                trigger_since=re_attach_window,
+            )
+
+    # ---- mesh_disagreement ----
+    for eui, evidence in mesh_disagreements.items():
+        seen_keys.add(("mesh_disagreement", eui))
+        # Compare the two observation timestamps to pick the earlier as
+        # the suppression-window start.
+        self_ts = evidence.get("self_observed_at")
+        otbr_ts = evidence.get("otbr_observed_at")
+        candidates = [t for t in (self_ts, otbr_ts) if t]
+        trigger = min(candidates) if candidates else None
+        _emit(
+            "mesh_disagreement",
+            "warn",
+            eui,
+            {
+                **evidence,
+                "threshold_pct": MESH_DISAGREEMENT_PCT_THRESHOLD,
+                "max_age_minutes": MESH_DISAGREEMENT_MAX_AGE_MIN,
+            },
+            trigger_since=trigger,
         )
 
     # ---- auto-close issues whose trigger no longer holds ----
-    managed_kinds = {"parent_churn", "attach_failures", "offline_node"}
+    managed_kinds = {
+        "parent_churn",
+        "attach_failures",
+        "offline_node",
+        "re_attach_storm",
+        "mesh_disagreement",
+    }
     for (kind, eui), issue in active_by_key.items():
         if kind not in managed_kinds:
             continue
@@ -161,5 +409,14 @@ def run_reasoner(
                 "threshold": ATTACH_FAIL_THRESHOLD,
             },
             "offline_node": {"threshold_minutes": OFFLINE_THRESHOLD_MIN},
+            "re_attach_storm": {
+                "window_minutes": RE_ATTACH_STORM_WINDOW_MIN,
+                "threshold_events": RE_ATTACH_STORM_MIN_EVENTS,
+                "threshold_reporters": RE_ATTACH_STORM_MIN_REPORTERS,
+            },
+            "mesh_disagreement": {
+                "threshold_pct": MESH_DISAGREEMENT_PCT_THRESHOLD,
+                "max_age_minutes": MESH_DISAGREEMENT_MAX_AGE_MIN,
+            },
         },
     }

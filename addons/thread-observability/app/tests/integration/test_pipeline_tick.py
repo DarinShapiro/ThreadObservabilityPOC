@@ -22,7 +22,14 @@ from thread_observability.pipeline import (
 )
 
 
-STAGE_NAMES = ("otbr_log_ingest", "otbr_rest", "matter_discovery", "reasoner")
+STAGE_NAMES = (
+    "otbr_log_ingest",
+    "observer_events",
+    "otbr_rest",
+    "matter_discovery",
+    "topology_snapshot",
+    "reasoner",
+)
 
 
 @pytest.fixture()

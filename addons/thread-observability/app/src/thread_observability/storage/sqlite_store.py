@@ -322,6 +322,96 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE nodes ADD COLUMN rx_err_sec_count                        INTEGER;
     ALTER TABLE nodes ADD COLUMN rx_err_fcs_count                        INTEGER;
     """,
+    # v14: rloc16 column + observed-at timestamps for OTBR-side cross-check.
+    #
+    # The 16-bit RLOC (mesh-local short address) is derived from a router's
+    # 6-bit RouterId as ``router_id << 10``. Tracking it explicitly serves
+    # two goals:
+    #   1. ``rloc16_change`` event emission when a router gets re-assigned
+    #      a new RouterId within the same partition (router ID churn —
+    #      typically signals a leader-side reassignment after a brief
+    #      drop). Storing the previous value is the only way to detect
+    #      this; an in-memory cache wouldn't survive addon restarts.
+    #   2. Future OTBR ``/diagnostics`` cross-checks key targets by RLOC16
+    #      rather than by EUI64 (the MGMT_DIAG_GET destination is an
+    #      RLOC). Having the mapping pre-computed avoids a router-table
+    #      scan on every diagnostic poll.
+    #
+    # ``otbr_diagnostics`` is the v14 landing table for the OTBR-side
+    # second-witness counters. We key by target EUI + observed_at so an
+    # operator can replay history; aggregations roll up at query time.
+    """
+    ALTER TABLE nodes ADD COLUMN rloc16 INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_nodes_rloc16 ON nodes(rloc16);
+
+    CREATE TABLE IF NOT EXISTS otbr_diagnostics (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        target_eui64      TEXT NOT NULL,
+        target_rloc16     INTEGER,
+        observed_at       TEXT NOT NULL,
+        partition_id      INTEGER,
+        -- Selected MGMT_DIAG_GET TLVs (raw integer counts; serialized
+        -- larger TLVs as JSON in ``extra_json`` to keep the schema thin).
+        mac_tx_total      INTEGER,
+        mac_tx_retry      INTEGER,
+        mac_tx_err        INTEGER,
+        mac_rx_total      INTEGER,
+        mac_rx_err        INTEGER,
+        mac_rx_dup        INTEGER,
+        mle_counters_json TEXT,
+        child_table_json  TEXT,
+        extra_json        TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_otbr_diag_target_ts
+        ON otbr_diagnostics(target_eui64, observed_at DESC);
+    """,
+    # v15: observer_events — track restart / outage windows of the
+    # ingestion-side software stack so the reasoner can annotate
+    # (and downgrade) issues that fire while WE were temporarily blind.
+    #
+    # ``source`` identifies the component (e.g. ``addon:self``,
+    # ``addon:core_openthread_border_router``, ``addon:core_matter_server``).
+    # ``kind`` is one of ``start``, ``stop``, ``restart``, ``outage``.
+    # ``started_at`` always set; ``ended_at`` set when the event is a
+    # bounded window (a restart whose recovery we observed) and NULL
+    # while the gap is still open. The reasoner treats an event as
+    # "currently suppressing" until ``ended_at + suppression_grace``.
+    """
+    CREATE TABLE IF NOT EXISTS observer_events (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        source       TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        started_at   TEXT NOT NULL,
+        ended_at     TEXT,
+        details_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_observer_events_source_ts
+        ON observer_events(source, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_observer_events_window
+        ON observer_events(started_at, ended_at);
+    """,
+    # v16: topology_snapshots — periodic JSON-blob captures of the
+    # full topology so the reasoner / consultant tools can diff "what
+    # changed in the last hour" without reconstructing the past from
+    # raw events. ``snapshot_hash`` is a stable fingerprint of the
+    # snapshot content so the capture stage can skip writing duplicate
+    # rows. ``partition_id`` and node/link counts are denormalized
+    # summary columns for fast listing.
+    """
+    CREATE TABLE IF NOT EXISTS topology_snapshots (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        captured_at   TEXT NOT NULL,
+        snapshot_hash TEXT NOT NULL,
+        partition_id  INTEGER,
+        node_count    INTEGER NOT NULL,
+        link_count    INTEGER NOT NULL,
+        snapshot_json TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_topology_snapshots_ts
+        ON topology_snapshots(captured_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_topology_snapshots_hash
+        ON topology_snapshots(snapshot_hash);
+    """,
 ]
 
 
@@ -672,18 +762,318 @@ class SQLiteStore:
             )
             return cur.rowcount > 0
 
-    def set_node_router_id(self, eui64: str, router_id: int | None) -> bool:
-        """Persist a node's Thread Router ID (6-bit value within its partition).
+    def set_node_router_id(self, eui64: str, router_id: int | None) -> dict[str, Any]:
+        """Persist a node's Thread Router ID + derived RLOC16.
 
         Used to resolve next-hop RouterId references in RouteTable entries
         back to a named node. Pass ``None`` to clear.
+
+        v0.9.43: also derives RLOC16 (= ``router_id << 10``) and stamps it
+        on the row. Returns a diff dict ``{updated, old_router_id,
+        new_router_id, old_rloc16, new_rloc16}`` so callers can emit
+        ``rloc16_change`` events when the router ID changes between two
+        observations within the same partition (a leader-side
+        reassignment, typically after a brief detach). The legacy bool
+        return is preserved as ``updated``.
+        """
+        new_rloc16 = (router_id << 10) if isinstance(router_id, int) else None
+        with self._tx() as conn:
+            prior = conn.execute(
+                "SELECT router_id, rloc16 FROM nodes WHERE eui64 = ?",
+                (eui64,),
+            ).fetchone()
+            old_router_id = prior["router_id"] if prior else None
+            old_rloc16 = prior["rloc16"] if prior else None
+            cur = conn.execute(
+                "UPDATE nodes SET router_id = ?, rloc16 = ? WHERE eui64 = ?",
+                (router_id, new_rloc16, eui64),
+            )
+            updated = cur.rowcount > 0
+        return {
+            "updated": updated,
+            "old_router_id": old_router_id,
+            "new_router_id": router_id,
+            "old_rloc16": old_rloc16,
+            "new_rloc16": new_rloc16,
+        }
+
+    def insert_otbr_diagnostic(
+        self,
+        *,
+        target_eui64: str,
+        target_rloc16: int | None = None,
+        partition_id: int | None = None,
+        mac_tx_total: int | None = None,
+        mac_tx_retry: int | None = None,
+        mac_tx_err: int | None = None,
+        mac_rx_total: int | None = None,
+        mac_rx_err: int | None = None,
+        mac_rx_dup: int | None = None,
+        mle_counters: dict[str, Any] | None = None,
+        child_table: list[dict[str, Any]] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> int:
+        """Persist one OTBR ``MGMT_DIAG_GET`` snapshot for a target router.
+
+        Each call is a new row (history retained); the caller is
+        responsible for rate-limiting and for pruning. Returns the new
+        row's id, or 0 on insert failure.
         """
         with self._tx() as conn:
             cur = conn.execute(
-                "UPDATE nodes SET router_id = ? WHERE eui64 = ?",
-                (router_id, eui64),
+                """
+                INSERT INTO otbr_diagnostics(
+                    target_eui64, target_rloc16, observed_at, partition_id,
+                    mac_tx_total, mac_tx_retry, mac_tx_err,
+                    mac_rx_total, mac_rx_err, mac_rx_dup,
+                    mle_counters_json, child_table_json, extra_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    target_eui64, target_rloc16, _utc_now(), partition_id,
+                    mac_tx_total, mac_tx_retry, mac_tx_err,
+                    mac_rx_total, mac_rx_err, mac_rx_dup,
+                    json.dumps(mle_counters) if mle_counters is not None else None,
+                    json.dumps(child_table) if child_table is not None else None,
+                    json.dumps(extra) if extra is not None else None,
+                ),
+            )
+            return int(cur.lastrowid or 0)
+
+    def get_latest_otbr_diagnostic(
+        self, target_eui64: str
+    ) -> dict[str, Any] | None:
+        """Return the most-recent OTBR diagnostic snapshot for a target."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM otbr_diagnostics"
+                " WHERE target_eui64 = ?"
+                " ORDER BY observed_at DESC, id DESC LIMIT 1",
+                (target_eui64,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for field in ("mle_counters_json", "child_table_json", "extra_json"):
+            raw = d.pop(field, None)
+            key = field.removesuffix("_json")
+            if raw:
+                try:
+                    d[key] = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    d[key] = None
+            else:
+                d[key] = None
+        return d
+
+    # -- observer events (v15) ----------------------------------------
+
+    def insert_observer_event(
+        self,
+        *,
+        source: str,
+        kind: str,
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> int:
+        """Record one observer-side disruption window.
+
+        ``source`` is free-form (e.g. ``addon:self``); ``kind`` is one of
+        ``start``, ``stop``, ``restart``, ``outage``. ``started_at``
+        defaults to ``now()``. Returns the new row id.
+        """
+        ts = started_at or _utc_now()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO observer_events(
+                    source, kind, started_at, ended_at, details_json
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    source, kind, ts, ended_at,
+                    json.dumps(details) if details is not None else None,
+                ),
+            )
+            return int(cur.lastrowid or 0)
+
+    def close_observer_event(
+        self, event_id: int, *, ended_at: str | None = None
+    ) -> bool:
+        """Stamp ``ended_at`` on an open event window."""
+        ts = ended_at or _utc_now()
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE observer_events SET ended_at = ?"
+                " WHERE id = ? AND ended_at IS NULL",
+                (ts, event_id),
             )
             return cur.rowcount > 0
+
+    def get_latest_observer_event(self, source: str) -> dict[str, Any] | None:
+        """Return the most-recent observer event for ``source``."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM observer_events"
+                " WHERE source = ?"
+                " ORDER BY started_at DESC, id DESC LIMIT 1",
+                (source,),
+            ).fetchone()
+        if not row:
+            return None
+        return self._row_to_observer_event(row)
+
+    def list_observer_events_in_window(
+        self, *, since: str, until: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Return observer events that overlap ``[since, until]``.
+
+        An event overlaps if its ``started_at < until`` AND
+        (``ended_at IS NULL`` OR ``ended_at >= since``). Used by the
+        reasoner to find blackouts that overlap an issue's trigger
+        window.
+        """
+        upper = until or _utc_now()
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM observer_events
+                 WHERE started_at <= ?
+                   AND (ended_at IS NULL OR ended_at >= ?)
+                 ORDER BY started_at DESC, id DESC
+                """,
+                (upper, since),
+            ).fetchall()
+        return [self._row_to_observer_event(r) for r in rows]
+
+    @staticmethod
+    def _row_to_observer_event(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        raw = d.pop("details_json", None)
+        if raw:
+            try:
+                d["details"] = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                d["details"] = {"_raw": raw}
+        else:
+            d["details"] = None
+        return d
+
+    # -- topology snapshots (v16) -------------------------------------
+
+    def insert_topology_snapshot(
+        self,
+        *,
+        snapshot: dict[str, Any],
+        snapshot_hash: str,
+        captured_at: str | None = None,
+    ) -> int:
+        """Insert a topology snapshot row. Returns the new row id.
+
+        The caller computes ``snapshot_hash`` over the canonical
+        normalized snapshot content so the capture stage can skip
+        writing rows when nothing has changed.
+        """
+        ts = captured_at or _utc_now()
+        # Pull denormalized summary columns from the snapshot dict so
+        # ``list_topology_snapshots`` doesn't have to parse JSON.
+        node_count = int(snapshot.get("node_count") or len(snapshot.get("nodes") or []))
+        link_count = int(snapshot.get("link_count") or len(snapshot.get("links") or []))
+        pid: int | None = None
+        partitions = snapshot.get("partitions") or []
+        if len(partitions) == 1:
+            try:
+                pid = int(partitions[0].get("partition_id"))
+            except (TypeError, ValueError):
+                pid = None
+        with self._tx() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO topology_snapshots(
+                    captured_at, snapshot_hash, partition_id,
+                    node_count, link_count, snapshot_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (ts, snapshot_hash, pid, node_count, link_count, json.dumps(snapshot)),
+            )
+            return int(cur.lastrowid or 0)
+
+    def get_topology_snapshot(self, snapshot_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM topology_snapshots WHERE id = ?",
+                (snapshot_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return self._row_to_topology_snapshot(row)
+
+    def get_latest_topology_snapshot(
+        self, *, at: str | None = None
+    ) -> dict[str, Any] | None:
+        """Return the most-recent snapshot whose ``captured_at <= at``.
+
+        If ``at`` is None, returns the newest snapshot overall.
+        """
+        with self._lock:
+            if at:
+                row = self._conn.execute(
+                    "SELECT * FROM topology_snapshots"
+                    " WHERE captured_at <= ?"
+                    " ORDER BY captured_at DESC, id DESC LIMIT 1",
+                    (at,),
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT * FROM topology_snapshots"
+                    " ORDER BY captured_at DESC, id DESC LIMIT 1"
+                ).fetchone()
+        if not row:
+            return None
+        return self._row_to_topology_snapshot(row)
+
+    def list_topology_snapshots(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """List snapshot summaries (no JSON body) for fast browsing."""
+        limit = max(1, min(int(limit), 1000))
+        clauses: list[str] = []
+        params: list[Any] = []
+        if since:
+            clauses.append("captured_at >= ?")
+            params.append(since)
+        if until:
+            clauses.append("captured_at <= ?")
+            params.append(until)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            "SELECT id, captured_at, snapshot_hash, partition_id,"
+            " node_count, link_count"
+            f" FROM topology_snapshots{where}"
+            " ORDER BY captured_at DESC, id DESC LIMIT ?"
+        )
+        params.append(limit)
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    @staticmethod
+    def _row_to_topology_snapshot(row: sqlite3.Row) -> dict[str, Any]:
+        d = dict(row)
+        raw = d.pop("snapshot_json", None)
+        if raw:
+            try:
+                d["snapshot"] = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                d["snapshot"] = {"_raw": raw}
+        else:
+            d["snapshot"] = None
+        return d
 
     # -- network data (v10) -------------------------------------------
 
@@ -1075,6 +1465,16 @@ class SQLiteStore:
           ``removed``: list[str]  — neighbor EUI64s that were present in
                                     the previous snapshot but are absent
                                     now
+          ``prior_frame_counters``: dict[str, dict[str, int | None]]
+                                  — for each neighbor present in the
+                                    PRIOR snapshot, the previously-stored
+                                    ``{link_frame_counter, mle_frame_counter}``.
+                                    Frame counters are monotonic on a
+                                    given Matter session: a drop between
+                                    two consecutive observations means
+                                    the device re-attached (new session
+                                    keys). Caller uses this to emit
+                                    ``re_attached_node`` events.
 
         v13: the added/removed diffs are what ``link_acquired`` /
         ``link_lost`` events are derived from. Computing the diff inside
@@ -1082,19 +1482,33 @@ class SQLiteStore:
         a transient flap (e.g. a child that detaches and re-attaches
         within a single tick would show up as removed+added on the parent
         but the new row would still be present after the call).
+
+        v0.9.43: ``prior_frame_counters`` was added for the
+        ``re_attached_node`` rule. Snapshotting the counters inside the
+        same transaction as the swap is the only way to guarantee no
+        race — a second concurrent sweep on the same reporter would
+        otherwise destroy the evidence before we read it.
         """
         now = _utc_now()
         inserted = 0
         with self._tx() as conn:
-            # Snapshot the previous neighbour set BEFORE deleting so we can
-            # diff it against the incoming set. Cheap: indexed lookup on
-            # (reporter_eui64, source).
-            prior_neighbors: set[str] = {
-                r[0] for r in conn.execute(
-                    "SELECT neighbor_eui64 FROM links"
-                    " WHERE reporter_eui64 = ? AND source = ?",
-                    (reporter_eui64, source),
-                ).fetchall()
+            # Snapshot the previous neighbour set + frame counters BEFORE
+            # deleting so we can diff against the incoming set. Cheap:
+            # indexed lookup on (reporter_eui64, source).
+            prior_rows = conn.execute(
+                "SELECT neighbor_eui64, link_frame_counter, mle_frame_counter"
+                "  FROM links"
+                " WHERE reporter_eui64 = ? AND source = ?",
+                (reporter_eui64, source),
+            ).fetchall()
+            prior_neighbors: set[str] = {r[0] for r in prior_rows}
+            prior_frame_counters: dict[str, dict[str, int | None]] = {
+                r[0]: {
+                    "link_frame_counter": r[1],
+                    "mle_frame_counter": r[2],
+                }
+                for r in prior_rows
+                if r[0]
             }
             conn.execute(
                 "DELETE FROM links WHERE reporter_eui64 = ? AND source = ?",
@@ -1165,7 +1579,12 @@ class SQLiteStore:
                 inserted += 1
             added = sorted(new_neighbors - prior_neighbors)
             removed = sorted(prior_neighbors - new_neighbors)
-        return {"inserted": inserted, "added": added, "removed": removed}
+        return {
+            "inserted": inserted,
+            "added": added,
+            "removed": removed,
+            "prior_frame_counters": prior_frame_counters,
+        }
 
     def list_links(self, source: str | None = None) -> list[dict[str, Any]]:
         sql = "SELECT * FROM links"
@@ -1524,6 +1943,45 @@ class SQLiteStore:
                 "SELECT * FROM issues WHERE closed_at IS NULL"
                 " ORDER BY opened_at DESC, id DESC"
             ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            evj = d.pop("evidence_json", None)
+            if evj:
+                try:
+                    d["evidence"] = json.loads(evj)
+                except Exception:  # noqa: BLE001
+                    d["evidence"] = {"_raw": evj}
+            out.append(d)
+        return out
+
+    def list_issues_in_window(
+        self,
+        *,
+        since: str,
+        until: str | None = None,
+        eui64: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return issues whose lifecycle overlaps ``[since, until]``.
+
+        An issue overlaps if it opened on/before ``until`` AND either is
+        still open or closed on/after ``since``. Used by the Tier 4
+        unified timeline to synthesize open/close events for a node or
+        for the whole mesh.
+        """
+        upper = until or _utc_now()
+        clauses = ["opened_at <= ?", "(closed_at IS NULL OR closed_at >= ?)"]
+        params: list[Any] = [upper, since]
+        if eui64:
+            clauses.append("eui64 = ?")
+            params.append(eui64)
+        sql = (
+            "SELECT * FROM issues WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY opened_at DESC, id DESC"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
         out: list[dict[str, Any]] = []
         for r in rows:
             d = dict(r)

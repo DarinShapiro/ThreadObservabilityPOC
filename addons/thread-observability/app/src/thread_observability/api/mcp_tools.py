@@ -303,6 +303,172 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "query_timeline",
+        "description": (
+            "Tier 4 unified timeline. Return a single newest-first stream that "
+            "merges canonical events, issue open/close lifecycle, and observer "
+            "(addon/OTBR/Matter Server) outage windows over a time range. Each "
+            "row is normalized to {ts, source, kind, eui64?, severity?, "
+            "details, ref_id} so an AI consultant can correlate Thread-side, "
+            "issue-side and observer-side activity in one round-trip. Filter "
+            "by eui64, kind list, or source list."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "since": {
+                    "type": "string",
+                    "description": "ISO-8601 lower bound (inclusive). Required.",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "ISO-8601 upper bound (inclusive). Defaults to now.",
+                },
+                "eui64": {"type": "string"},
+                "kinds": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional kind allow-list. Examples: "
+                        "['attach','parent_change'], ['issue.opened','issue.closed'], "
+                        "['observer.outage','observer.outage.ended']."
+                    ),
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": list(["events", "issues", "observer_events"])},
+                    "description": "Optional source allow-list. Defaults to all three.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "default": 500,
+                    "minimum": 1,
+                    "maximum": 5000,
+                },
+            },
+            "required": ["since"],
+        },
+    },
+    {
+        "name": "get_topology_snapshot",
+        "description": (
+            "Tier 4. Return a persisted topology snapshot row. Pass "
+            "``snapshot_id`` to fetch one by id, or ``at`` (ISO-8601) "
+            "to fetch the most-recent snapshot captured on or before "
+            "that time. With no arguments, returns the newest snapshot."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "snapshot_id": {"type": "integer", "minimum": 1},
+                "at": {"type": "string", "description": "ISO-8601 timestamp"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_topology_snapshots",
+        "description": (
+            "Tier 4. List topology snapshot summaries (id, captured_at, "
+            "hash, partition_id, node_count, link_count) newest-first. "
+            "Snapshot bodies are NOT returned — use ``get_topology_snapshot`` "
+            "or ``diff_topology`` to drill in."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO-8601 lower bound"},
+                "until": {"type": "string", "description": "ISO-8601 upper bound"},
+                "limit": {
+                    "type": "integer",
+                    "default": 100,
+                    "minimum": 1,
+                    "maximum": 1000,
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "diff_topology",
+        "description": (
+            "Tier 4. Return a structured diff between two topology "
+            "snapshots: added/removed nodes, per-node role/partition/parent "
+            "transitions, and added/removed links. ``snapshot_id_a`` is the "
+            "older / baseline, ``snapshot_id_b`` is the newer / candidate."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "snapshot_id_a": {"type": "integer", "minimum": 1},
+                "snapshot_id_b": {"type": "integer", "minimum": 1},
+            },
+            "required": ["snapshot_id_a", "snapshot_id_b"],
+        },
+    },
+    {
+        "name": "list_playbooks",
+        "description": (
+            "Tier 4. Return summaries (id, title, applies_to) of every "
+            "Thread/Matter playbook in the bundled corpus. Use "
+            "``lookup_playbook`` to fetch full entries."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "lookup_playbook",
+        "description": (
+            "Tier 4. Return playbook entries matching one of: an exact "
+            "``playbook_id``; an issue ``kind`` (returns every playbook "
+            "whose applies_to includes the kind); or a free-text "
+            "``query`` (case-insensitive substring across id/title/"
+            "summary). Each entry includes summary, evidence_to_collect, "
+            "remediation_steps, references."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "playbook_id": {"type": "string"},
+                "kind": {"type": "string"},
+                "query": {"type": "string"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "analyze_node",
+        "description": (
+            "Tier 4 consultant tool. One-call structured payload for a "
+            "single EUI-64: node metadata, parent + neighbors, open "
+            "issues, recent closed issues, unified Tier 4 timeline "
+            "(events + issue lifecycle + observer events), simple "
+            "per-node baselines (parent_change rate this period vs. "
+            "previous, status_change count), and full playbook entries "
+            "matching the union of issue kinds. Use this instead of "
+            "calling get_node_metadata + list_active_issues + "
+            "query_events + lookup_playbook separately."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {"type": "string"},
+                "timeline_hours": {
+                    "type": "integer",
+                    "default": 24,
+                    "minimum": 1,
+                    "maximum": 720,
+                },
+                "baseline_days": {
+                    "type": "integer",
+                    "default": 7,
+                    "minimum": 1,
+                    "maximum": 90,
+                },
+            },
+            "required": ["eui64"],
+        },
+    },
+    {
         "name": "get_node_flap_history",
         "description": (
             "Return the per-node status_change history (online/offline/phantom "
@@ -740,6 +906,96 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 limit=int(arguments.get("limit", 100)),
             )
             return {"events": events, "count": len(events)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "query_timeline":
+        try:
+            from ..pipeline import timeline as timeline_mod
+
+            since = arguments.get("since")
+            if not since:
+                return {"error": "missing required argument: since"}
+            return timeline_mod.query_timeline(
+                get_store(),
+                since=since,
+                until=arguments.get("until"),
+                eui64=arguments.get("eui64"),
+                kinds=arguments.get("kinds") or None,
+                sources=arguments.get("sources") or None,
+                limit=int(arguments.get("limit", 500)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_topology_snapshot":
+        try:
+            sid = arguments.get("snapshot_id")
+            if sid is not None:
+                snap = get_store().get_topology_snapshot(int(sid))
+            else:
+                snap = get_store().get_latest_topology_snapshot(
+                    at=arguments.get("at")
+                )
+            return snap or {"snapshot": None}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "list_topology_snapshots":
+        try:
+            snaps = get_store().list_topology_snapshots(
+                since=arguments.get("since"),
+                until=arguments.get("until"),
+                limit=int(arguments.get("limit", 100)),
+            )
+            return {"snapshots": snaps, "count": len(snaps)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "diff_topology":
+        try:
+            from ..pipeline import topology_snapshot as ts_mod
+
+            a = arguments.get("snapshot_id_a")
+            b = arguments.get("snapshot_id_b")
+            if a is None or b is None:
+                return {
+                    "error": "missing required arguments: snapshot_id_a, snapshot_id_b"
+                }
+            return ts_mod.diff_topology(
+                get_store(),
+                snapshot_id_a=int(a),
+                snapshot_id_b=int(b),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "list_playbooks":
+        try:
+            from ..pipeline import playbooks as pb_mod
+
+            return pb_mod.list_playbooks()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "lookup_playbook":
+        try:
+            from ..pipeline import playbooks as pb_mod
+
+            return pb_mod.lookup_playbook(
+                kind=arguments.get("kind"),
+                playbook_id=arguments.get("playbook_id"),
+                query=arguments.get("query"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "analyze_node":
+        try:
+            from ..pipeline import analyze_node as an_mod
+
+            eui = arguments.get("eui64")
+            if not eui:
+                return {"error": "missing required argument: eui64"}
+            return an_mod.analyze_node(
+                eui,
+                store=get_store(),
+                timeline_hours=int(arguments.get("timeline_hours", 24)),
+                baseline_days=int(arguments.get("baseline_days", 7)),
+            )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "get_node_flap_history":

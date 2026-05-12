@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 13
+    assert store.schema_version == 16
     stats = store.stats()
-    assert stats["schema_version"] == 13
+    assert stats["schema_version"] == 16
     assert stats["row_counts"]["events"] == 0
 
 
@@ -189,7 +189,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 13
+    assert store.schema_version == 16
 
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
@@ -680,4 +680,172 @@ def test_get_link_flap_history_aggregates_pairs(store: SQLiteStore) -> None:
     # neighbor_eui64 filter
     only_c = store.get_link_flap_history(neighbor_eui64=c, limit=50)
     assert only_c["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# v0.9.43 — Tier 2 storage-layer additions
+# ---------------------------------------------------------------------------
+
+
+def test_replace_links_returns_prior_frame_counters(store: SQLiteStore) -> None:
+    """Storage transactionally snapshots prior frame counters on replace.
+
+    Without this guarantee, a concurrent sweep could DELETE the prior
+    row before the consumer can compare counters, making
+    ``re_attached_node`` detection unreliable.
+    """
+    reporter = "aa" * 8
+    neighbor = "bb" * 8
+    store.upsert_node_metadata(eui64=reporter, friendly_name="Reporter")
+    store.upsert_node_metadata(eui64=neighbor, friendly_name="Neighbor")
+
+    first = store.replace_links_for_reporter(
+        reporter,
+        "neighbor_table",
+        [{
+            "neighbor_eui64": neighbor,
+            "link_frame_counter": 100,
+            "mle_frame_counter": 50,
+        }],
+        partition_id=1,
+    )
+    # First call has empty prior; the dict key still exists.
+    assert "prior_frame_counters" in first
+    assert first["prior_frame_counters"] == {}
+
+    second = store.replace_links_for_reporter(
+        reporter,
+        "neighbor_table",
+        [{
+            "neighbor_eui64": neighbor,
+            "link_frame_counter": 200,
+            "mle_frame_counter": 75,
+        }],
+        partition_id=1,
+    )
+    assert neighbor in second["prior_frame_counters"]
+    assert second["prior_frame_counters"][neighbor] == {
+        "link_frame_counter": 100,
+        "mle_frame_counter": 50,
+    }
+
+
+def test_set_node_router_id_returns_diff_and_derives_rloc16(store: SQLiteStore) -> None:
+    eui = "cc" * 8
+    store.upsert_node_metadata(eui64=eui, friendly_name="Router")
+
+    first = store.set_node_router_id(eui, 5)
+    assert first["updated"] is True
+    assert first["old_router_id"] is None
+    assert first["new_router_id"] == 5
+    assert first["old_rloc16"] is None
+    assert first["new_rloc16"] == 5 << 10  # = 5120
+
+    second = store.set_node_router_id(eui, 9)
+    assert second["old_router_id"] == 5
+    assert second["new_router_id"] == 9
+    assert second["old_rloc16"] == 5 << 10
+    assert second["new_rloc16"] == 9 << 10
+
+    cleared = store.set_node_router_id(eui, None)
+    assert cleared["new_router_id"] is None
+    assert cleared["new_rloc16"] is None
+
+
+def test_otbr_diagnostics_insert_and_fetch_latest(store: SQLiteStore) -> None:
+    target = "dd" * 8
+    store.upsert_node_metadata(eui64=target, friendly_name="Target")
+
+    row_id = store.insert_otbr_diagnostic(
+        target_eui64=target,
+        target_rloc16=0x4400,
+        partition_id=42,
+        mac_tx_total=1000,
+        mac_tx_retry=10,
+        mac_tx_err=2,
+        mac_rx_total=900,
+        mac_rx_err=1,
+        mac_rx_dup=3,
+        child_table=[{"child_id": 1}],
+        extra={"raw": "tlv"},
+    )
+    assert row_id > 0
+
+    latest = store.get_latest_otbr_diagnostic(target)
+    assert latest is not None
+    assert latest["target_rloc16"] == 0x4400
+    assert latest["mac_tx_total"] == 1000
+    assert latest["child_table"] == [{"child_id": 1}]
+    assert latest["extra"] == {"raw": "tlv"}
+
+    # Second insert returns the newer row from get_latest_*.
+    store.insert_otbr_diagnostic(
+        target_eui64=target,
+        target_rloc16=0x4400,
+        mac_tx_total=1500,
+    )
+    latest2 = store.get_latest_otbr_diagnostic(target)
+    assert latest2 is not None
+    assert latest2["mac_tx_total"] == 1500
+
+
+# ---------------------------------------------------------------------------
+# v0.9.44 — Tier 3 observer_events
+# ---------------------------------------------------------------------------
+
+
+def test_observer_event_insert_close_and_overlap(store: SQLiteStore) -> None:
+    """Insert an open window, close it, and confirm overlap query semantics."""
+    base = datetime(2026, 5, 12, 14, 0, 0, tzinfo=UTC)
+    started = base.isoformat()
+    ev_id = store.insert_observer_event(
+        source="addon:core_matter_server",
+        kind="outage",
+        started_at=started,
+        details={"prev_state": "started", "new_state": "stopped"},
+    )
+    assert ev_id > 0
+
+    latest = store.get_latest_observer_event("addon:core_matter_server")
+    assert latest is not None
+    assert latest["kind"] == "outage"
+    assert latest["ended_at"] is None
+    assert latest["details"] == {"prev_state": "started", "new_state": "stopped"}
+
+    # Overlap query: window that fully contains the event start.
+    overlaps = store.list_observer_events_in_window(
+        since=(base - timedelta(minutes=5)).isoformat(),
+        until=(base + timedelta(minutes=5)).isoformat(),
+    )
+    assert any(e["id"] == ev_id for e in overlaps)
+
+    # Window strictly before the event — should NOT overlap.
+    none_overlaps = store.list_observer_events_in_window(
+        since=(base - timedelta(hours=2)).isoformat(),
+        until=(base - timedelta(hours=1)).isoformat(),
+    )
+    assert all(e["id"] != ev_id for e in none_overlaps)
+
+    # Close the event and re-query: a window AFTER ended_at should not overlap.
+    ended = (base + timedelta(seconds=30)).isoformat()
+    assert store.close_observer_event(ev_id, ended_at=ended) is True
+    closed = store.get_latest_observer_event("addon:core_matter_server")
+    assert closed is not None
+    assert closed["ended_at"] == ended
+
+    after = store.list_observer_events_in_window(
+        since=(base + timedelta(minutes=10)).isoformat(),
+        until=(base + timedelta(minutes=20)).isoformat(),
+    )
+    assert all(e["id"] != ev_id for e in after)
+
+
+def test_observer_event_close_is_idempotent(store: SQLiteStore) -> None:
+    ev_id = store.insert_observer_event(source="addon:self", kind="start")
+    assert store.close_observer_event(ev_id) is True
+    # Second close on the same id is a no-op (already-closed events
+    # are skipped by the WHERE clause).
+    assert store.close_observer_event(ev_id) is False
+
+
 
