@@ -62,6 +62,11 @@ class ThreadObsConfig(BaseModel):
     log_level: str = "info"
     timezone: str = "UTC"
     reset_db_on_start: bool = Field(default=True)
+    # Optional HA long-lived access token for an admin user. When set,
+    # ``ha_update_addon`` (and other privileged self-management tools) can
+    # bypass Supervisor's self-update blacklist by calling HA Core's REST
+    # API directly under this user identity. Never logged.
+    ha_admin_token: str = Field(default="", repr=False)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)

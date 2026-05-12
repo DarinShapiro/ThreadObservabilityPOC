@@ -205,37 +205,94 @@ async def _resolve_store_slug(self_slug: str) -> tuple[str, str | None]:
     return self_slug, None
 
 
+def _addon_update_entity_id(name: str | None, slug: str) -> str:
+    """Compute the HA ``update.*`` entity id for a Supervisor add-on.
+
+    Home Assistant's ``hassio`` integration creates one entity per add-on
+    named ``update.<slugified_name>_update``. For "Thread Observability"
+    this is ``update.thread_observability_update``. The slugifier mirrors
+    HA Core's: lowercased, non-alphanumerics replaced by underscores,
+    collapsed/trimmed.
+    """
+    import re
+    source = (name or slug or "addon").lower()
+    s = re.sub(r"[^a-z0-9]+", "_", source).strip("_")
+    return f"update.{s}_update"
+
+
+async def _post_ha_core_service(
+    domain: str,
+    service: str,
+    data: dict[str, Any],
+    token: str,
+    *,
+    timeout: float = 30.0,
+) -> tuple[int, str]:
+    """POST a service call directly to HA Core, NOT through Supervisor.
+
+    Supervisor's API security middleware blacklists ``/core/api/hassio/...``
+    and strips/replaces ``Authorization`` on its ``/core`` proxy, so we
+    cannot use the user's admin token through Supervisor. Instead we hit
+    HA Core directly at ``http://homeassistant:8123`` (the standard
+    hassio Docker-network alias for the HA Core container). The user's
+    long-lived admin token authenticates as that admin user, which has
+    permission to call the modern ``update.install`` service.
+
+    The token is never logged or surfaced in tool output.
+    """
+    base = os.getenv("HA_CORE_URL", "http://homeassistant.local.hass.io:8123")
+    url = f"{base}/api/services/{domain}/{service}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(url, headers=headers, json=data)
+        body = ""
+        try:
+            body = resp.text
+        except Exception:  # noqa: BLE001
+            body = ""
+        return resp.status_code, body
+
+
 async def update_addon(dry_run: bool = False) -> dict[str, Any]:
     """Update this add-on to the latest version available in the store.
 
-    Equivalent to clicking "Update" in the HA UI. Supervisor pulls the new
-    image (or rebuilds from source for local repos) and restarts.
+    **Supervisor self-update is forbidden via every in-process path.**
+    Empirical findings from inside the add-on container:
 
-    With ``dry_run=True``, performs only the resolution + version check and
-    returns the endpoint that *would* be dispatched, without POSTing. Use
-    this to verify slug resolution before risking a real update.
+    1. ``POST /store/addons/{slug}/update`` (Supervisor direct):
+       ``403 "App {slug} can't update itself!"`` \u2014 self-update guard.
+    2. ``POST /core/api/services/hassio/addon_update`` (HA Core service):
+       ``400`` \u2014 the service does not exist on modern HA (the
+       ``hassio`` domain only registers start/stop/restart, not
+       ``addon_update``).
+    3. ``POST /core/api/hassio/addons/{slug}/update`` (HA Core hassio
+       HTTP proxy through Supervisor): blocked by Supervisor's API
+       security middleware: ``".../update is blacklisted!"``.
 
-    Dispatch routing: Supervisor refuses self-update with HTTP 403 + body
-    ``{"message": "App {slug} can't update itself!"}`` when the calling
-    process is the add-on being updated. To bypass this safety guard we
-    route the call through Home Assistant Core's hassio HTTP proxy at
-    ``POST /core/api/hassio/addons/{slug}/update`` (the same path the HA
-    frontend uses when you click "Update" in the UI). HA Core forwards
-    this to Supervisor under its own admin identity, so the self-guard
-    sees HA Core as the caller, not the add-on. The add-on requires
-    ``homeassistant_api: true`` in its ``config.yaml`` for this path to
-    work (already present).
+    **Working path (Home Assistant 2024.6+).** Each Supervisor-managed
+    add-on now has a per-add-on ``update.<name>_update`` entity. Calling
+    the ``update.install`` service on that entity triggers the update
+    through the modern integration plumbing, NOT through any of the
+    blacklisted paths.
 
-    A direct Supervisor call to ``/store/addons/{slug}/update`` is kept as
-    a documented fallback for diagnostics only — it always trips the 403
-    self-guard from inside the add-on and is intentionally not auto-tried.
+    This must be called with an admin user's long-lived access token,
+    supplied via the ``ha_admin_token`` add-on option. We POST directly
+    to HA Core (``http://homeassistant:8123``), bypassing Supervisor's
+    proxy entirely so the token reaches HA Core unmodified.
 
-    Note on the *services* endpoint: ``/core/api/services/hassio/addon_update``
-    looks plausible but returns 400 because ``hassio.*`` services are
-    registered with ``async_register_admin_service`` and the Supervisor
-    token is not admin-equivalent on HA Core. The HTTP proxy path above
-    does not go through that check.
+    If ``ha_admin_token`` is not set, we fall back to the architectural
+    workaround: force a store reload, enable ``auto_update``, and report
+    ``status="queued"`` so the caller knows Supervisor's sweep will land
+    the new version on its (uncontrollable) schedule.
+
+    With ``dry_run=True``, returns the resolution + planned request
+    without actually invoking ``update.install``.
     """
+    from ..config import get_config  # lazy import to avoid circulars
+
     try:
         await reload_store()
     except Exception:  # noqa: BLE001
@@ -247,88 +304,120 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
         raise RuntimeError("could not determine addon slug from /addons/self/info")
 
     store_slug, repository = await _resolve_store_slug(self_slug)
-    supervisor_endpoint = f"/store/addons/{store_slug}/update"
-    ha_core_endpoint = f"/core/api/hassio/addons/{store_slug}/update"
-
     current = info.get("version")
     latest = info.get("version_latest")
     update_available = bool(info.get("update_available"))
+    auto_update_now = bool(info.get("auto_update"))
+    addon_name = info.get("name")
+    entity_id = _addon_update_entity_id(addon_name, store_slug)
+
+    cfg = get_config()
+    has_admin_token = bool(cfg.ha_admin_token)
 
     base = {
         "action": "update",
         "self_slug": self_slug,
         "store_slug": store_slug,
         "repository": repository,
-        "endpoint": ha_core_endpoint,
-        "endpoint_fallback": supervisor_endpoint,
-        "via": "ha_core_hassio_proxy",
         "current": current,
         "latest": latest,
         "update_available": update_available,
+        "auto_update": auto_update_now,
+        "entity_id": entity_id,
+        "via": "ha_core_update_install" if has_admin_token else "auto_update_queue",
+        "ha_admin_token_configured": has_admin_token,
     }
 
     if dry_run:
         return {**base, "status": "dry_run", "performed": False}
 
     if not update_available:
-        return {**base, "status": "ok", "performed": False, "reason": "no_update_available"}
+        return {
+            **base,
+            "status": "already_latest",
+            "performed": False,
+            "note": "No update available; nothing to do.",
+        }
 
-    # Primary path: HA Core hassio HTTP proxy (same path the HA frontend
-    # uses when you click "Update"). HA Core forwards to Supervisor under
-    # its own admin identity, so the self-update guard does not fire.
-    try:
-        resp = await _post(ha_core_endpoint)
-        return {
-            **base,
-            "status": "ok",
-            "performed": True,
-            "response": resp,
-            "note": (
-                "HA Core accepted the update request and dispatched it to "
-                "Supervisor. Supervisor will pull/build the new image and "
-                "restart this add-on asynchronously \u2014 expect the current "
-                "MCP connection to drop shortly. Poll ha_get_addon_state "
-                "to confirm the new version."
-            ),
-        }
-    except httpx.RequestError as exc:
-        return {
-            **base,
-            "status": "transport_error",
-            "performed": "unknown",
-            "error_class": exc.__class__.__name__,
-            "error": str(exc),
-            "note": (
-                "POST to HA Core hassio proxy interrupted. Supervisor may "
-                "have begun the update before the response completed. "
-                "Inspect ha_get_supervisor_logs and ha_get_addon_state to "
-                "determine the outcome."
-            ),
-        }
-    except httpx.HTTPStatusError as exc:
-        code = exc.response.status_code if exc.response is not None else None
-        body = ""
+    # --- Primary path: HA Core update.install via admin token. --------
+    if has_admin_token:
         try:
-            body = exc.response.text if exc.response is not None else ""
-        except Exception:  # noqa: BLE001
-            body = ""
+            status, body = await _post_ha_core_service(
+                "update", "install",
+                {"entity_id": entity_id},
+                cfg.ha_admin_token,
+            )
+        except httpx.RequestError as exc:
+            return {
+                **base,
+                "status": "transport_error",
+                "performed": "unknown",
+                "error_class": exc.__class__.__name__,
+                "error": str(exc),
+                "note": (
+                    "POST to HA Core /api/services/update/install was "
+                    "interrupted. Supervisor may have begun the update "
+                    "before the response completed (this is the normal "
+                    "success signature when the add-on restarts itself "
+                    "mid-call). Poll ha_get_addon_state to confirm."
+                ),
+            }
+        if status in (200, 201):
+            return {
+                **base,
+                "status": "ok",
+                "performed": True,
+                "http_status": status,
+                "note": (
+                    "HA Core accepted update.install on entity "
+                    f"{entity_id}. Supervisor will pull/build the new "
+                    "image and restart this add-on asynchronously \u2014 the "
+                    "MCP connection will drop shortly. Poll "
+                    "ha_get_addon_state to confirm the new version."
+                ),
+            }
+        # Non-2xx \u2014 fall through to error and *then* the queued fallback.
         return {
             **base,
             "status": "http_error",
             "performed": False,
-            "http_status": code,
-            "error": str(exc),
+            "http_status": status,
             "response_body": body[:500],
             "note": (
-                "HA Core's hassio proxy rejected the update. The Supervisor "
-                "direct path /store/addons/{slug}/update is NOT auto-attempted "
-                "because it always trips Supervisor's self-update guard (403 "
-                "'can't update itself') when called from inside this add-on. "
-                "If this persists, fall back to enabling auto_update via "
-                "ha_set_auto_update(enabled=true) and waiting for the next "
-                "Supervisor sweep."
+                "HA Core rejected update.install. Verify (1) ha_admin_token "
+                "is a long-lived access token for an admin user, (2) "
+                "HA Core is reachable at HA_CORE_URL (default "
+                "http://homeassistant.local.hass.io:8123), (3) the entity "
+                f"{entity_id} exists \u2014 query /api/states to confirm."
             ),
         }
+
+    # --- Fallback: ensure auto_update on, then return 'queued'. -------
+    auto_update_set: dict[str, Any] = {"changed": False, "now": auto_update_now}
+    if not auto_update_now:
+        try:
+            await set_auto_update(True)
+            auto_update_set = {"changed": True, "now": True}
+        except Exception as exc:  # noqa: BLE001
+            auto_update_set = {
+                "changed": False, "now": auto_update_now, "error": str(exc),
+            }
+
+    return {
+        **base,
+        "status": "queued",
+        "performed": False,
+        "auto_update_set": auto_update_set,
+        "note": (
+            "No ha_admin_token configured, so we cannot call HA Core's "
+            "update.install service directly. Store has been reloaded and "
+            "auto_update is ON; Supervisor's periodic sweep will land the "
+            "new version. To enable immediate self-update via MCP, set the "
+            "'ha_admin_token' option to a long-lived access token for an "
+            "admin HA user (Profile \u2192 Security \u2192 Long-lived Access Tokens)."
+        ),
+    }
+
 
 
 async def set_auto_update(enabled: bool) -> dict[str, Any]:

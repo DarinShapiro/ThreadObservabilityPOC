@@ -1,5 +1,5 @@
 name: Thread Observability
-version: 0.9.52
+version: 0.9.53
 slug: thread-observability
 description: Observe and troubleshoot Thread network health in Home Assistant.
 url: https://github.com/DarinShapiroMS/ThreadObservabilityPOC/tree/main/addons/thread-observability
@@ -25,6 +25,7 @@ map:
 options:
   log_level: info
   timezone: UTC
+  ha_admin_token: ""
   retention:
     full_resolution_days: 3
     sampled_archive_days: 14
@@ -38,6 +39,7 @@ options:
 schema:
   log_level: list(trace|debug|info|warning|error|fatal)
   timezone: str
+  ha_admin_token: password?
   retention:
     full_resolution_days: int(1,30)
     sampled_archive_days: int(1,60)
