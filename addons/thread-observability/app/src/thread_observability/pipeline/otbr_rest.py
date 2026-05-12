@@ -162,6 +162,127 @@ async def fetch_otbr_node(base_url: str, *, timeout: float = 10.0) -> dict[str, 
     return payload
 
 
+async def fetch_otbr_dataset_active(
+    base_url: str, *, timeout: float = 10.0
+) -> dict[str, Any] | None:
+    """GET the OTBR's active operational dataset.
+
+    Newer OTBR REST builds expose this at ``/node/dataset/active`` as JSON
+    (with fields like ``NetworkName``, ``PanId``, ``ExtPanId``, ``Channel``,
+    ``ChannelMask``, ``MeshLocalPrefix``, ``ActiveTimestamp``). Older builds
+    return raw TLV hex; in that case we just return ``None`` and let the
+    caller fall back to what ``/node`` already gave us.
+
+    Returns ``None`` on any error or non-JSON response — this is best-effort
+    enrichment; the OTBR ingest stage must not fail because of it.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"{base_url}/node/dataset/active",
+                headers={"Accept": "application/json"},
+            )
+        if resp.status_code >= 400:
+            return None
+        payload = resp.json()
+        return payload if isinstance(payload, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("otbr_rest: /node/dataset/active fetch failed: %s", exc)
+        return None
+
+
+async def fetch_otbr_network_data(
+    base_url: str, *, timeout: float = 10.0
+) -> dict[str, Any] | None:
+    """GET ``{base_url}/node/network`` (leader-side Thread Network Data).
+
+    Contains on-mesh prefixes, external routes, BR Server entries, and SRP
+    services for the partition. Best-effort: returns ``None`` on any error.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                f"{base_url}/node/network",
+                headers={"Accept": "application/json"},
+            )
+        if resp.status_code >= 400:
+            return None
+        payload = resp.json()
+        return payload if isinstance(payload, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("otbr_rest: /node/network fetch failed: %s", exc)
+        return None
+
+
+def _dataset_to_network_data(
+    dataset: dict[str, Any] | None,
+    network: dict[str, Any] | None,
+    node: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge active dataset + network data + /node fallbacks into one dict.
+
+    Returns the kwargs to feed ``store.upsert_network_data``. Only the keys
+    with non-None values are returned. Callers must always supply
+    ``partition_id`` separately; this helper only fills the descriptive
+    fields.
+    """
+    def _from(src: dict[str, Any] | None, *keys: str) -> Any:
+        if not src:
+            return None
+        for k in keys:
+            v = src.get(k)
+            if v is not None:
+                return v
+        return None
+
+    ds = dataset or {}
+    nd = network or {}
+
+    out: dict[str, Any] = {}
+    pan = _from(ds, "PanId", "panId", "pan_id") or _from(node, "PanId", "panId")
+    if pan is not None:
+        out["pan_id"] = str(pan)
+    ext_pan = _from(ds, "ExtPanId", "extPanId", "extended_pan_id") or _from(node, "ExtPanId")
+    if ext_pan is not None:
+        out["extended_pan_id"] = str(ext_pan)
+    name = _from(ds, "NetworkName", "networkName", "network_name") or _from(node, "NetworkName")
+    if name is not None:
+        out["network_name"] = str(name)
+    channel = _from(ds, "Channel", "channel") or _from(node, "Channel", "channel")
+    if channel is not None:
+        try:
+            out["channel"] = int(channel)
+        except (TypeError, ValueError):
+            pass
+    chan_mask = _from(ds, "ChannelMask", "channelMask", "channel_mask")
+    if chan_mask is not None:
+        out["channel_mask"] = str(chan_mask)
+    mlp = _from(ds, "MeshLocalPrefix", "meshLocalPrefix", "mesh_local_prefix")
+    if mlp is not None:
+        out["mesh_local_prefix"] = str(mlp)
+    ts = _from(ds, "ActiveTimestamp", "activeTimestamp", "active_timestamp")
+    if ts is not None:
+        out["active_timestamp"] = str(ts)
+    # Network Data structure (varies by OTBR build). Pass through whatever
+    # we got under the standard names; consumers parse the JSON.
+    for src_key, dst_key in (
+        ("OnMeshPrefixes", "on_mesh_prefixes"),
+        ("on_mesh_prefixes", "on_mesh_prefixes"),
+        ("ExternalRoutes", "external_routes"),
+        ("external_routes", "external_routes"),
+        ("Services", "services"),
+        ("services", "services"),
+        ("BrServers", "br_servers"),
+        ("br_servers", "br_servers"),
+    ):
+        if dst_key in out:
+            continue
+        v = nd.get(src_key) if isinstance(nd, dict) else None
+        if v is not None:
+            out[dst_key] = v
+    return out
+
+
 async def _probe_for_otbr() -> tuple[str, dict[str, Any]] | None:
     """Try each candidate URL until one returns a usable /node response.
 
@@ -248,9 +369,28 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
     # Mark referenced so phantom-sweep treats it as live.
     s.bump_last_referenced([eui64])
 
+    # v10: persist Thread Network Data (partition-wide identity + routes /
+    # services / BR servers). Best-effort: missing dataset endpoints are
+    # logged at debug and skipped — OTBR ingest itself must not regress.
+    network_data_persisted = False
+    if partition_id is not None:
+        try:
+            dataset = await fetch_otbr_dataset_active(base_url)
+            network = await fetch_otbr_network_data(base_url)
+            kwargs = _dataset_to_network_data(dataset, network, node)
+            s.upsert_network_data(
+                partition_id=partition_id,
+                otbr_eui64=eui64,
+                **kwargs,
+            )
+            network_data_persisted = True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("otbr_rest: network data persist failed: %s", exc)
+
     log.info(
-        "otbr_rest: ingested OTBR eui=%s state=%s partition=%s router_id=%s leader_router=%s active_routers=%s",
+        "otbr_rest: ingested OTBR eui=%s state=%s partition=%s router_id=%s leader_router=%s active_routers=%s network_data=%s",
         eui64, state, partition_id, router_id, leader_router_id, active_routers,
+        "ok" if network_data_persisted else "skipped",
     )
     return {
         "error": None,
@@ -263,6 +403,7 @@ async def ingest_once(store: SQLiteStore | None = None) -> dict[str, Any]:
         "active_routers": active_routers,
         "router_id": router_id,
         "rloc16": rloc16,
+        "network_data_persisted": network_data_persisted,
     }
 
 

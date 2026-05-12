@@ -370,6 +370,18 @@ def _extract_thread_diagnostics(attrs: dict[str, Any]) -> dict[str, Any]:
         return None
 
     role_int = _get_int("1")
+    # v10: stability counters from cluster 53. Spec attribute IDs noted in
+    # parens; these are monotonic device-side counters that survive across
+    # our snapshots. A fast climb in detached_role_count or
+    # parent_change_count is the textbook signal of an unstable sleepy.
+    #
+    # Note: we intentionally skip attribute 15 here. Per Matter spec it is
+    # ChildRoleCount (0x000F), but the python-matter-server build we target
+    # surfaces ExtAddress at "/53/15" (see comment block at top of file),
+    # so reading 15 as a counter would conflict with EUI64 resolution. The
+    # other RoleCount attributes are unambiguous; ChildRoleCount can be
+    # back-derived from the parent's NeighborTable child entries when
+    # needed (and ``/v1/children/{eui64}`` exposes exactly that view).
     return {
         "channel": _get_int("0"),
         "routing_role_int": role_int,
@@ -377,6 +389,11 @@ def _extract_thread_diagnostics(attrs: dict[str, Any]) -> dict[str, Any]:
         "partition_id": _get_int("9"),
         "weighting": _get_int("10"),
         "leader_router_id": _get_int("13"),
+        "detached_role_count": _get_int("14"),   # 0x000E
+        "router_role_count": _get_int("16"),     # 0x0010
+        "leader_role_count": _get_int("17"),     # 0x0011
+        "attach_attempt_count": _get_int("18"),  # 0x0012
+        "parent_change_count": _get_int("21"),   # 0x0015
     }
 
 
@@ -1055,6 +1072,11 @@ def _persist_matter_diagnostics(
                 active_routers=len(route_table) or None,
                 channel=diag.get("channel"),
                 weighting=diag.get("weighting"),
+                detached_role_count=diag.get("detached_role_count"),
+                router_role_count=diag.get("router_role_count"),
+                leader_role_count=diag.get("leader_role_count"),
+                attach_attempt_count=diag.get("attach_attempt_count"),
+                parent_change_count=diag.get("parent_change_count"),
             )
             if updated_diag:
                 diag_nodes += 1

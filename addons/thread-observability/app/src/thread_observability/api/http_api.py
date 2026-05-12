@@ -228,6 +228,49 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"count": 0, "links": [], "error": str(exc)}
 
+    @app.get("/v1/children/{eui64}")
+    def children_for(eui64: str) -> dict[str, object]:
+        """Child roster as seen from this parent router.
+
+        Sleepy / MTD children only appear in their parent's NeighborTable,
+        so this is the canonical view of "which end devices have attached
+        to this router right now". Returns per-child link quality
+        (RSSI/LQI/frame error rate), sleepiness (``rx_on_when_idle``),
+        capacity headroom against the practical 10-child cap, and a
+        ``registered`` flag indicating whether the child EUI is in the
+        HA registry (false = stale child cache from a recommissioned or
+        unpaired device).
+        """
+        try:
+            return routing_mod.list_children_enriched(eui64.lower())
+        except Exception as exc:  # noqa: BLE001
+            return {"parent_eui64": eui64, "error": str(exc), "children": []}
+
+    @app.get("/v1/network-data")
+    def network_data_list() -> dict[str, object]:
+        """All known partition Network Data rows, freshest first.
+
+        Each row is the OTBR-sourced Thread Network Data for one partition
+        — PAN ID, channel, on-mesh prefixes, external routes, BR Server
+        entries, SRP services. Two rows = the network is partitioned.
+        """
+        try:
+            rows = get_store().list_network_data()
+            return {"count": len(rows), "partitions": rows}
+        except Exception as exc:  # noqa: BLE001
+            return {"count": 0, "partitions": [], "error": str(exc)}
+
+    @app.get("/v1/network-data/{partition_id}")
+    def network_data_one(partition_id: int) -> dict[str, object]:
+        """Network Data for a specific partition."""
+        try:
+            row = get_store().get_network_data(int(partition_id))
+            if row is None:
+                return {"partition_id": partition_id, "error": "not found"}
+            return row
+        except Exception as exc:  # noqa: BLE001
+            return {"partition_id": partition_id, "error": str(exc)}
+
     @app.get("/v1/phantoms")
     def phantoms_snapshot() -> dict[str, object]:
         try:

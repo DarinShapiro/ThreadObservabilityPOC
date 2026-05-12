@@ -358,3 +358,98 @@ def list_neighbors_enriched(
         "neighbors": neighbors,
         "routes": routes,
     }
+
+
+# Thread spec: a router can host at most 16 children; the standard practical
+# cap most implementations advertise is 10. Used only as a "headroom" hint —
+# the actual limit varies by stack.
+_THREAD_CHILD_CAP_HINT = 10
+
+
+def list_children_enriched(
+    parent_eui: str,
+    *,
+    store: SQLiteStore | None = None,
+) -> dict[str, Any]:
+    """Return the child-attachment roster as seen from a parent router.
+
+    Sleepy / minimal end devices only show up in their *parent's*
+    NeighborTable with ``IsChild=1`` — they don't broadcast their own
+    diagnostics, so this is the only place their link quality is visible.
+
+    Shape::
+
+        {
+            "parent_eui64":     str,
+            "parent_name":      str | None,
+            "partition_id":     int | None,
+            "child_count":      int,
+            "capacity_hint":    int,   # spec-practical cap; informational
+            "is_at_capacity":   bool,  # child_count >= capacity_hint
+            "children": [
+                {
+                    "eui64": str,
+                    "name":  str | None,
+                    "registered": bool,     # True if neighbor_known=1
+                    "rssi_avg": int|None,
+                    "rssi_last": int|None,
+                    "lqi_in": int|None,
+                    "rx_on_when_idle": int|None,  # 0 = sleepy
+                    "full_thread_device": int|None,
+                    "age_seconds": int|None,
+                    "frame_error_rate": int|None,
+                    "message_error_rate": int|None,
+                    "link_frame_counter": int|None,
+                    "mle_frame_counter": int|None,
+                },
+                ...
+            ],
+        }
+
+    The rows come from ``links`` where ``reporter_eui64=parent_eui``,
+    ``source='neighbor_table'``, ``is_child=1``. Name resolution mirrors
+    :func:`list_neighbors_enriched`.
+    """
+    s = store or get_store()
+    nodes = s.list_nodes()
+    name_by_eui = {n["eui64"]: (n.get("friendly_name") or get_node_display_name(n))
+                   for n in nodes if n.get("eui64")}
+    parent_node = next((n for n in nodes if n.get("eui64") == parent_eui), None)
+    partition_id = parent_node.get("partition_id") if parent_node else None
+
+    with s._lock:  # noqa: SLF001
+        rows = s._conn.execute(  # noqa: SLF001
+            "SELECT * FROM links WHERE reporter_eui64 = ? AND source = 'neighbor_table'"
+            " AND is_child = 1 ORDER BY neighbor_eui64",
+            (parent_eui,),
+        ).fetchall()
+
+    children: list[dict[str, Any]] = []
+    for r in rows:
+        d = dict(r)
+        nei = d.get("neighbor_eui64")
+        children.append({
+            "eui64": nei,
+            "name": name_by_eui.get(nei) if nei else None,
+            "registered": bool(d.get("neighbor_known", 1)),
+            "rssi_avg": d.get("rssi_avg"),
+            "rssi_last": d.get("rssi_last"),
+            "lqi_in": d.get("lqi_in"),
+            "rx_on_when_idle": d.get("rx_on_when_idle"),
+            "full_thread_device": d.get("full_thread_device"),
+            "age_seconds": d.get("age_seconds"),
+            "frame_error_rate": d.get("frame_error_rate"),
+            "message_error_rate": d.get("message_error_rate"),
+            "link_frame_counter": d.get("link_frame_counter"),
+            "mle_frame_counter": d.get("mle_frame_counter"),
+        })
+
+    return {
+        "parent_eui64": parent_eui,
+        "parent_name": name_by_eui.get(parent_eui),
+        "partition_id": partition_id,
+        "child_count": len(children),
+        "capacity_hint": _THREAD_CHILD_CAP_HINT,
+        "is_at_capacity": len(children) >= _THREAD_CHILD_CAP_HINT,
+        "children": children,
+    }

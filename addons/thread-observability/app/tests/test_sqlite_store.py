@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 9
+    assert store.schema_version == 10
     stats = store.stats()
-    assert stats["schema_version"] == 9
+    assert stats["schema_version"] == 10
     assert stats["row_counts"]["events"] == 0
 
 
@@ -210,7 +210,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 9
+    assert store.schema_version == 10
 
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
@@ -338,3 +338,90 @@ def test_purge_expired_nodes_preserves_ha_registered(store: SQLiteStore) -> None
     # HA-registered preserved.
     assert store.get_node(keep) is not None
     assert store.get_node(purge) is None
+
+
+# ---------------------------------------------------------------------------
+# v10: role-count counters and network_data
+# ---------------------------------------------------------------------------
+
+def test_set_node_diagnostics_role_counts(store: SQLiteStore) -> None:
+    """v10: cluster-53 stability counters land on the node row."""
+    A = "aa" * 8
+    store.upsert_node_metadata(eui64=A)
+    ok = store.set_node_diagnostics(
+        A,
+        partition_id=42,
+        routing_role="router",
+        detached_role_count=2,
+        router_role_count=5,
+        leader_role_count=0,
+        attach_attempt_count=3,
+        parent_change_count=1,
+    )
+    assert ok is True
+    n = store.get_node(A)
+    assert n is not None
+    assert n["detached_role_count"] == 2
+    assert n["router_role_count"] == 5
+    assert n["leader_role_count"] == 0
+    assert n["attach_attempt_count"] == 3
+    assert n["parent_change_count"] == 1
+
+
+def test_upsert_network_data_roundtrip(store: SQLiteStore) -> None:
+    """v10: network_data persists JSON columns and lists newest-first."""
+    store.upsert_network_data(
+        partition_id=1111,
+        otbr_eui64="ff" * 8,
+        pan_id="0x1234",
+        extended_pan_id="dead00beef00cafe",
+        network_name="MyMesh",
+        channel=15,
+        channel_mask="0x07fff800",
+        mesh_local_prefix="fd00:db8::/64",
+        on_mesh_prefixes=[{"prefix": "fd11::/64", "preferred": True}],
+        external_routes=[{"prefix": "::/0"}],
+        services=[],
+        br_servers=[{"rloc16": "0x0400"}],
+        active_timestamp="1",
+    )
+    got = store.get_network_data(1111)
+    assert got is not None
+    assert got["pan_id"] == "0x1234"
+    assert got["network_name"] == "MyMesh"
+    assert got["channel"] == 15
+    assert got["on_mesh_prefixes"] == [{"prefix": "fd11::/64", "preferred": True}]
+    assert got["br_servers"] == [{"rloc16": "0x0400"}]
+    rows = store.list_network_data()
+    assert len(rows) == 1 and rows[0]["partition_id"] == 1111
+
+    # Second partition (split-brain detection surface).
+    store.upsert_network_data(partition_id=2222, otbr_eui64="ee" * 8, network_name="Other")
+    rows = store.list_network_data()
+    assert {r["partition_id"] for r in rows} == {1111, 2222}
+
+
+def test_list_children_filters_neighbors(store: SQLiteStore) -> None:
+    """``links.is_child`` lets us split the NeighborTable into child/peer."""
+    from thread_observability.pipeline.routing import list_children_enriched
+
+    parent = "aa" * 8
+    child = "bb" * 8
+    peer = "cc" * 8
+    store.upsert_node_metadata(eui64=parent, friendly_name="Parent")
+    store.upsert_node_metadata(eui64=child, friendly_name="Sleepy Sensor")
+    store.upsert_node_metadata(eui64=peer, friendly_name="Router Peer")
+
+    store.replace_links_for_reporter(parent, "neighbor_table", [
+        {"neighbor_eui64": child, "is_child": 1, "rx_on_when_idle": 0,
+         "lqi_in": 200, "rssi_avg": -55},
+        {"neighbor_eui64": peer, "is_child": 0, "rx_on_when_idle": 1,
+         "lqi_in": 240, "rssi_avg": -40},
+    ])
+
+    out = list_children_enriched(parent, store=store)
+    assert out["parent_eui64"] == parent
+    assert out["child_count"] == 1
+    assert out["children"][0]["eui64"] == child
+    assert out["children"][0]["rx_on_when_idle"] == 0
+    assert out["is_at_capacity"] is False

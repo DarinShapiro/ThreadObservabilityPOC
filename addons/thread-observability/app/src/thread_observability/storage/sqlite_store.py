@@ -201,6 +201,46 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_nodes_is_thread ON nodes(is_thread);
     CREATE INDEX IF NOT EXISTS idx_links_stale ON links(neighbor_known) WHERE neighbor_known = 0;
     """,
+    # v10: stability telemetry + Thread Network Data.
+    #
+    # `nodes` gains the cluster 53 RoleCount counters (0x000E–0x0011) plus
+    # AttachAttemptCount (0x0012) and ParentChangeCount (0x0015). These are
+    # monotonically-increasing device-side counters that survive across our
+    # snapshots — a child cycling between attached/detached every hour is
+    # visible as DetachedRoleCount climbing fast, regardless of whether
+    # our discovery cycle happened to catch the event itself.
+    #
+    # `network_data` is a new table: one row per partition_id holding the
+    # OTBR-side Thread Network Data (PAN ID, channel, on-mesh prefixes,
+    # external routes, BR servers, SRP services). Partition-wide facts
+    # don't belong on the OTBR's node row; they're the network's identity,
+    # not the device's. Stored as the partition's most-recent active
+    # dataset; older partitions (from a split that healed) age out.
+    """
+    ALTER TABLE nodes ADD COLUMN detached_role_count   INTEGER;
+    ALTER TABLE nodes ADD COLUMN router_role_count     INTEGER;
+    ALTER TABLE nodes ADD COLUMN leader_role_count     INTEGER;
+    ALTER TABLE nodes ADD COLUMN attach_attempt_count  INTEGER;
+    ALTER TABLE nodes ADD COLUMN parent_change_count   INTEGER;
+
+    CREATE TABLE IF NOT EXISTS network_data (
+        partition_id      INTEGER PRIMARY KEY,
+        otbr_eui64        TEXT,
+        pan_id            TEXT,
+        extended_pan_id   TEXT,
+        network_name      TEXT,
+        channel           INTEGER,
+        channel_mask      TEXT,
+        mesh_local_prefix TEXT,
+        on_mesh_prefixes  TEXT,
+        external_routes   TEXT,
+        services          TEXT,
+        br_servers        TEXT,
+        active_timestamp  TEXT,
+        observed_at       TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_network_data_observed ON network_data(observed_at DESC);
+    """,
 ]
 
 
@@ -461,24 +501,48 @@ class SQLiteStore:
         active_routers: int | None = None,
         channel: int | None = None,
         weighting: int | None = None,
+        detached_role_count: int | None = None,
+        router_role_count: int | None = None,
+        leader_role_count: int | None = None,
+        attach_attempt_count: int | None = None,
+        parent_change_count: int | None = None,
     ) -> bool:
-        """Update Thread diagnostic scalars for a node. Returns True if row updated."""
+        """Update Thread diagnostic scalars for a node. Returns True if row updated.
+
+        All scalars are sourced from the same matter-server poll, so a NULL
+        in any field means "device did not report it this cycle" — overwrite
+        is the correct behaviour (no COALESCE).
+
+        v10 additions: role-count counters (Matter cluster 53 attrs
+        0x000E–0x0011, 0x0012, 0x0015). These are monotonically increasing
+        on the device; a sustained climb in ``detached_role_count`` or
+        ``parent_change_count`` is the textbook signal of an unstable
+        sleepy device, surfaced without us having to catch the events live.
+        """
         with self._tx() as conn:
             cur = conn.execute(
                 """
                 UPDATE nodes SET
-                    partition_id     = ?,
-                    leader_router_id = ?,
-                    routing_role     = ?,
-                    active_routers   = ?,
-                    channel          = ?,
-                    weighting        = ?,
-                    diag_updated_at  = ?
+                    partition_id         = ?,
+                    leader_router_id     = ?,
+                    routing_role         = ?,
+                    active_routers       = ?,
+                    channel              = ?,
+                    weighting            = ?,
+                    detached_role_count  = ?,
+                    router_role_count    = ?,
+                    leader_role_count    = ?,
+                    attach_attempt_count = ?,
+                    parent_change_count  = ?,
+                    diag_updated_at      = ?
                 WHERE eui64 = ?
                 """,
                 (
                     partition_id, leader_router_id, routing_role,
                     active_routers, channel, weighting,
+                    detached_role_count,
+                    router_role_count, leader_role_count,
+                    attach_attempt_count, parent_change_count,
                     _utc_now(), eui64,
                 ),
             )
@@ -496,6 +560,104 @@ class SQLiteStore:
                 (router_id, eui64),
             )
             return cur.rowcount > 0
+
+    # -- network data (v10) -------------------------------------------
+
+    def upsert_network_data(
+        self,
+        *,
+        partition_id: int,
+        otbr_eui64: str | None = None,
+        pan_id: str | None = None,
+        extended_pan_id: str | None = None,
+        network_name: str | None = None,
+        channel: int | None = None,
+        channel_mask: str | None = None,
+        mesh_local_prefix: str | None = None,
+        on_mesh_prefixes: list[dict[str, Any]] | None = None,
+        external_routes: list[dict[str, Any]] | None = None,
+        services: list[dict[str, Any]] | None = None,
+        br_servers: list[dict[str, Any]] | None = None,
+        active_timestamp: str | None = None,
+    ) -> None:
+        """Upsert the OTBR-sourced Network Data for a partition.
+
+        These are partition-wide facts (PAN ID, channel, on-mesh prefixes,
+        BR Server entries, SRP services) — the network's identity, not any
+        single device's. Keyed on ``partition_id`` so a partition split is
+        visible as two rows side-by-side.
+        """
+        def _j(v: Any) -> str | None:
+            return None if v is None else json.dumps(v)
+
+        with self._tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO network_data(
+                    partition_id, otbr_eui64, pan_id, extended_pan_id,
+                    network_name, channel, channel_mask, mesh_local_prefix,
+                    on_mesh_prefixes, external_routes, services, br_servers,
+                    active_timestamp, observed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(partition_id) DO UPDATE SET
+                    otbr_eui64        = COALESCE(excluded.otbr_eui64,        network_data.otbr_eui64),
+                    pan_id            = COALESCE(excluded.pan_id,            network_data.pan_id),
+                    extended_pan_id   = COALESCE(excluded.extended_pan_id,   network_data.extended_pan_id),
+                    network_name      = COALESCE(excluded.network_name,      network_data.network_name),
+                    channel           = COALESCE(excluded.channel,           network_data.channel),
+                    channel_mask      = COALESCE(excluded.channel_mask,      network_data.channel_mask),
+                    mesh_local_prefix = COALESCE(excluded.mesh_local_prefix, network_data.mesh_local_prefix),
+                    on_mesh_prefixes  = COALESCE(excluded.on_mesh_prefixes,  network_data.on_mesh_prefixes),
+                    external_routes   = COALESCE(excluded.external_routes,   network_data.external_routes),
+                    services          = COALESCE(excluded.services,          network_data.services),
+                    br_servers        = COALESCE(excluded.br_servers,        network_data.br_servers),
+                    active_timestamp  = COALESCE(excluded.active_timestamp,  network_data.active_timestamp),
+                    observed_at       = excluded.observed_at
+                """,
+                (
+                    partition_id, otbr_eui64, pan_id, extended_pan_id,
+                    network_name, channel, channel_mask, mesh_local_prefix,
+                    _j(on_mesh_prefixes), _j(external_routes),
+                    _j(services), _j(br_servers),
+                    active_timestamp, _utc_now(),
+                ),
+            )
+
+    def list_network_data(self) -> list[dict[str, Any]]:
+        """Return all known partition Network Data rows, freshest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM network_data ORDER BY observed_at DESC"
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            for k in ("on_mesh_prefixes", "external_routes", "services", "br_servers"):
+                if d.get(k):
+                    try:
+                        d[k] = json.loads(d[k])
+                    except Exception:  # noqa: BLE001
+                        pass
+            out.append(d)
+        return out
+
+    def get_network_data(self, partition_id: int) -> dict[str, Any] | None:
+        """Return one partition's Network Data row, or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM network_data WHERE partition_id = ?",
+                (partition_id,),
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        for k in ("on_mesh_prefixes", "external_routes", "services", "br_servers"):
+            if d.get(k):
+                try:
+                    d[k] = json.loads(d[k])
+                except Exception:  # noqa: BLE001
+                    pass
+        return d
 
     # -- links ---------------------------------------------------------
 
@@ -870,7 +1032,7 @@ class SQLiteStore:
         with self._lock:
             counts = {
                 t: int(self._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
-                for t in ("nodes", "events", "issues", "metadata_cache", "ingest_state", "links")
+                for t in ("nodes", "events", "issues", "metadata_cache", "ingest_state", "links", "network_data")
             }
             oldest = self._conn.execute("SELECT MIN(ts) FROM events").fetchone()[0]
             newest = self._conn.execute("SELECT MAX(ts) FROM events").fetchone()[0]
@@ -911,6 +1073,7 @@ class SQLiteStore:
             "events",
             "issues",
             "nodes",
+            "network_data",
             "metadata_cache",
             "ingest_state",
         )
