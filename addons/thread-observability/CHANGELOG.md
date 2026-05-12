@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.52 — Round-trip test for HA-Core hassio proxy `ha_update_addon`
+
+No-op bump to verify the 0.9.51 routing end-to-end from MCP. If
+`ha_update_addon` lands 0.9.52 cleanly without a UI click, the in-loop
+deploy cycle is fully unblocked and the standing rule blocking
+`ha_update_addon` is lifted.
+
 ## 0.9.51 — Switch `ha_update_addon` to HA Core hassio HTTP proxy
 
 **Discovery from 0.9.50 test.** The HA Core *service* path
