@@ -60,7 +60,9 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "name": "get_network_topology",
         "description": (
             "Return current Thread network topology snapshot (nodes and links) "
-            "computed deterministically from the SQLite event log."
+            "computed deterministically from the SQLite event log. By default, "
+            "phantom nodes (no recent reference in any router's tables) are "
+            "excluded."
         ),
         "inputSchema": {
             "type": "object",
@@ -71,7 +73,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
                     "default": 60,
                     "minimum": 1,
                     "maximum": 1440,
-                }
+                },
+                "include_phantoms": {
+                    "type": "boolean",
+                    "description": "If true, include phantom (stale-reference) nodes in the snapshot. Default false.",
+                    "default": False,
+                },
             },
             "required": [],
         },
@@ -81,7 +88,30 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "description": (
             "Return current Thread partition state. A healthy network has a single "
             "partition_id across all routers; multiple distinct partition_ids "
-            "indicate a network split (mesh has fragmented into isolated groups)."
+            "indicate a network split (mesh has fragmented into isolated groups). "
+            "Phantom-only partitions are excluded by default."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "include_phantoms": {
+                    "type": "boolean",
+                    "description": "If true, include phantom nodes / phantom-only partitions. Default false.",
+                    "default": False,
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "list_phantom_nodes",
+        "description": (
+            "List nodes flagged as phantom — they exist in the SQLite nodes table "
+            "(usually because they're in the HA device registry) but have not been "
+            "observed in any router's NeighborTable or RouteTable within the staleness "
+            "window. Returned rows include everything needed to find the device in "
+            "Home Assistant for manual deletion: friendly_name, device_id, "
+            "area, last_referenced_at, and a constructed HA deep-link path."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
@@ -396,10 +426,17 @@ TOOL_DEFS: list[dict[str, Any]] = [
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
 
 
-def _build_partition_state() -> dict[str, Any]:
-    """Summarize current Thread partition state from the nodes table."""
+def _build_partition_state(include_phantoms: bool = False) -> dict[str, Any]:
+    """Summarize current Thread partition state from the nodes table.
+
+    Phantom-only partitions are excluded by default so a long-stale
+    re-commissioned EUI doesn't trigger a false "network split" reading.
+    """
     s = get_store()
     nodes = s.list_nodes()
+    live_euis = {
+        n["eui64"] for n in nodes if n.get("eui64") and not n.get("is_phantom")
+    }
     partitions: dict[int, list[str]] = {}
     leaders: dict[int, str] = {}
     diag_seen: list[str] = []
@@ -410,12 +447,21 @@ def _build_partition_state() -> dict[str, Any]:
         eui = n.get("eui64")
         if not eui:
             continue
+        if not include_phantoms and n.get("is_phantom"):
+            continue
         partitions.setdefault(pid, []).append(eui)
         if n.get("routing_role") == "leader":
             leaders.setdefault(pid, eui)
         ts = n.get("diag_updated_at")
         if ts:
             diag_seen.append(ts)
+
+    # Drop partitions that ended up with no live members.
+    if not include_phantoms:
+        partitions = {
+            pid: members for pid, members in partitions.items()
+            if any(m in live_euis for m in members)
+        }
 
     events = s.query_events(event_type="partition_change", limit=10)
     last_change = events[0].get("ts") if events else None
@@ -439,12 +485,50 @@ def _build_partition_state() -> dict[str, Any]:
     }
 
 
+def _build_phantom_list() -> dict[str, Any]:
+    """Return phantom nodes with everything a human needs to find them in HA."""
+    s = get_store()
+    rows = s.list_phantom_nodes()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        device_id = r.get("device_id")
+        # HA's devices UI is reachable at /config/devices/device/<device_id>
+        # (relative — the user pastes it into their HA URL).
+        ha_path = f"/config/devices/device/{device_id}" if device_id else None
+        out.append({
+            "eui64": r.get("eui64"),
+            "friendly_name": r.get("friendly_name"),
+            "device_id": device_id,
+            "area": r.get("area"),
+            "role": r.get("role"),
+            "routing_role": r.get("routing_role"),
+            "partition_id": r.get("partition_id"),
+            "last_seen": r.get("last_seen"),
+            "last_referenced_at": r.get("last_referenced_at"),
+            "ha_device_path": ha_path,
+        })
+    return {
+        "count": len(out),
+        "phantoms": out,
+        "cleanup_hint": (
+            "These nodes have not been seen in any router's NeighborTable or "
+            "RouteTable for >24h. To remove from Home Assistant: Settings → "
+            "Devices & Services → Devices → (find by friendly_name) → 3-dot "
+            "menu → Delete. Or paste ha_device_path into your HA URL."
+        ),
+    }
+
+
 async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool and return its result payload."""
     if name == "get_network_topology":
         try:
             freshness = int(arguments.get("freshness_minutes", 60))
-            return topology_mod.build_topology(freshness_minutes=freshness)
+            include_phantoms = bool(arguments.get("include_phantoms", False))
+            return topology_mod.build_topology(
+                freshness_minutes=freshness,
+                include_phantoms=include_phantoms,
+            )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "list_active_issues":
@@ -455,7 +539,13 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return {"error": str(exc)}
     if name == "get_partition_state":
         try:
-            return _build_partition_state()
+            include_phantoms = bool(arguments.get("include_phantoms", False))
+            return _build_partition_state(include_phantoms=include_phantoms)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "list_phantom_nodes":
+        try:
+            return _build_phantom_list()
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "get_health_snapshot":

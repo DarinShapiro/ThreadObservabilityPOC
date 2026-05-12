@@ -33,6 +33,12 @@ MATTER_WS_URL = os.getenv(
 )
 MATTER_WS_TIMEOUT = float(os.getenv("MATTER_WS_TIMEOUT", "5.0"))
 
+# A node is considered phantom if it hasn't been referenced (as reporter or
+# as a neighbor in any router's table) within this window. The default of
+# 24h is forgiving enough to survive transient sleepy-end-device gaps while
+# still flagging long-stale device-registry leftovers.
+PHANTOM_THRESHOLD_HOURS = float(os.getenv("PHANTOM_THRESHOLD_HOURS", "24"))
+
 # Matter General Diagnostics cluster id (0x0033 = 51), NetworkInterfaces
 # attribute (0x0000 = 0). python-matter-server keys attribute values as
 # "<endpoint>/<cluster>/<attribute>" strings.
@@ -867,7 +873,13 @@ def _persist_matter_diagnostics(
     """
     rich = _LAST_MATTER_RICH_INFO
     if not rich:
-        return {"nodes_with_diagnostics": 0, "links_recorded": 0, "partition_split": False}
+        return {
+            "nodes_with_diagnostics": 0,
+            "links_recorded": 0,
+            "partition_split": False,
+            "phantom_marked": 0,
+            "phantom_cleared": 0,
+        }
 
     prior_by_eui = {n.get("eui64"): n for n in prior_nodes if n.get("eui64")}
 
@@ -877,13 +889,26 @@ def _persist_matter_diagnostics(
     partition_change_events = 0
     leaders_by_partition: dict[int, str] = {}
 
+    # Collect every EUI we observe this cycle, either as a reporter or as a
+    # neighbor in any router's table. This drives the phantom sweep below.
+    referenced: set[str] = set()
+
     for _node_id, info in rich.items():
         eui = info.get("eui64")
         if not eui:
             continue
+        referenced.add(eui)
         diag = info.get("diagnostics") or {}
         neighbor_table = info.get("neighbor_table") or []
         route_table = info.get("route_table") or []
+        for entry in neighbor_table:
+            nei = entry.get("neighbor_eui64")
+            if nei:
+                referenced.add(nei)
+        for entry in route_table:
+            nei = entry.get("neighbor_eui64")
+            if nei:
+                referenced.add(nei)
 
         # Persist links (replace per source). End devices typically have
         # neither table populated; we still issue replace calls so stale
@@ -931,7 +956,37 @@ def _persist_matter_diagnostics(
                 except Exception as exc:  # noqa: BLE001
                     log.warning("Failed to insert partition_change event for %s: %s", eui, exc)
 
-    split = len(partitions) > 1
+    # Bump last_referenced_at for everything we observed, then run the
+    # phantom sweep against the configured staleness threshold.
+    try:
+        s.bump_last_referenced(referenced)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to bump last_referenced_at: %s", exc)
+    try:
+        sweep = s.sweep_phantoms(int(PHANTOM_THRESHOLD_HOURS * 3600))
+        phantom_marked = sweep["marked"]
+        phantom_cleared = sweep["cleared"]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Phantom sweep failed: %s", exc)
+        phantom_marked = phantom_cleared = 0
+
+    # Filter out partitions whose only members are currently phantom (the
+    # soil-sensor / re-commissioned-Foyer-Light case). A real split must
+    # involve at least one live node beyond a single phantom.
+    live_euis = {
+        n["eui64"] for n in s.list_nodes()
+        if n.get("eui64") and not n.get("is_phantom")
+    }
+    live_partitions: dict[int, list[str]] = {}
+    excluded_partitions: list[int] = []
+    for pid, members in partitions.items():
+        live_members = [m for m in members if m in live_euis]
+        if live_members:
+            live_partitions[pid] = members
+        else:
+            excluded_partitions.append(pid)
+
+    split = len(live_partitions) > 1
     partition_summary = [
         {
             "partition_id": pid,
@@ -939,10 +994,10 @@ def _persist_matter_diagnostics(
             "member_count": len(members),
             "members": members,
         }
-        for pid, members in sorted(partitions.items())
+        for pid, members in sorted(live_partitions.items())
     ]
 
-    # Open/close partition_split issue.
+    # Open/close partition_split issue (now reasoning over live partitions only).
     try:
         active = [i for i in s.list_active_issues() if i.get("kind") == "partition_split"]
         if split:
@@ -951,7 +1006,7 @@ def _persist_matter_diagnostics(
                 severity="warning",
                 evidence={
                     "partitions": partition_summary,
-                    "partition_count": len(partitions),
+                    "partition_count": len(live_partitions),
                 },
             )
         else:
@@ -961,8 +1016,11 @@ def _persist_matter_diagnostics(
         log.warning("Failed to update partition_split issue: %s", exc)
 
     log.info(
-        "diagnostics persisted: nodes=%d links=%d partitions=%d split=%s changes=%d",
-        diag_nodes, links_recorded, len(partitions), split, partition_change_events,
+        "diagnostics persisted: nodes=%d links=%d partitions=%d split=%s "
+        "changes=%d phantoms_marked=%d phantoms_cleared=%d excluded_partitions=%d",
+        diag_nodes, links_recorded, len(live_partitions), split,
+        partition_change_events, phantom_marked, phantom_cleared,
+        len(excluded_partitions),
     )
     return {
         "nodes_with_diagnostics": diag_nodes,
@@ -970,6 +1028,9 @@ def _persist_matter_diagnostics(
         "partition_split": split,
         "partitions": partition_summary,
         "partition_change_events": partition_change_events,
+        "phantom_marked": phantom_marked,
+        "phantom_cleared": phantom_cleared,
+        "excluded_phantom_partitions": excluded_partitions,
     }
 
 

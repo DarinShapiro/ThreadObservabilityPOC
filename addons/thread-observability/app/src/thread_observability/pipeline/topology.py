@@ -67,16 +67,24 @@ ASYMMETRY_DB = 10        # |A->B rssi - B->A rssi| > this is asymmetric
 def build_topology(
     *,
     freshness_minutes: int = FRESHNESS_DEFAULT_MINUTES,
+    include_phantoms: bool = False,
     store: SQLiteStore | None = None,
 ) -> dict[str, Any]:
-    """Return a topology snapshot computed from nodes + links tables."""
+    """Return a topology snapshot computed from nodes + links tables.
+
+    By default, phantom nodes (no recent reference in any router's neighbor
+    or route table) are excluded along with any links touching them. Set
+    ``include_phantoms=True`` to see them, e.g. for manual cleanup workflows.
+    """
     s = store or get_store()
     now = datetime.now(tz=UTC)
     cutoff = (now - timedelta(minutes=freshness_minutes)).isoformat()
 
+    phantom_filter = "" if include_phantoms else " WHERE n.is_phantom = 0"
+
     with s._lock:  # noqa: SLF001 - intentional: same package
         rows = s._conn.execute(  # noqa: SLF001
-            """
+            f"""
             SELECT
               n.eui64,
               n.friendly_name,
@@ -85,6 +93,8 @@ def build_topology(
               n.partition_id,
               n.leader_router_id,
               n.last_seen,
+              n.is_phantom,
+              n.last_referenced_at,
               (SELECT e.parent_eui64
                  FROM events e
                 WHERE e.eui64 = n.eui64
@@ -105,12 +115,22 @@ def build_topology(
                 ORDER BY e.ts DESC, e.id DESC
                 LIMIT 1) AS last_lqi
             FROM nodes n
+            {phantom_filter}
             ORDER BY n.eui64
             """,
             (cutoff,),
         ).fetchall()
 
     all_links_raw = s.list_links()
+    # When filtering phantoms, drop links touching them so the graph stays
+    # coherent (no edges into nonexistent nodes).
+    if not include_phantoms:
+        visible_euis = {dict(r)["eui64"] for r in rows}
+        all_links_raw = [
+            ln for ln in all_links_raw
+            if ln.get("reporter_eui64") in visible_euis
+            and ln.get("neighbor_eui64") in visible_euis
+        ]
 
     # Build asymmetry lookup: (reporter, neighbor, source) -> rssi_avg
     rssi_by_edge: dict[tuple[str, str, str], int] = {}
@@ -153,6 +173,8 @@ def build_topology(
                 "last_rssi": d.get("last_rssi"),
                 "last_lqi": d.get("last_lqi"),
                 "stale": stale,
+                "is_phantom": bool(d.get("is_phantom")),
+                "last_referenced_at": d.get("last_referenced_at"),
             }
         )
 

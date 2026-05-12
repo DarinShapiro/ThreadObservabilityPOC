@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.20 — Phantom-node detection (stale-reference filtering)
+
+- **Schema v4** adds `nodes.last_referenced_at` and `nodes.is_phantom` plus supporting indexes
+- Every `discover_and_sync` cycle now bumps `last_referenced_at` for every EUI seen as a reporter **or** as an entry in any router's NeighborTable / RouteTable (single source of truth: the Thread fabric itself)
+- After bumping, a sweep flips `is_phantom=1` on rows whose `last_referenced_at` is older than `PHANTOM_THRESHOLD_HOURS` (env var, default `24`); rows that come back fresh are automatically cleared
+- `build_topology` and `get_partition_state` hide phantoms by default; pass `include_phantoms=true` to see them. Phantom-only partitions no longer trigger the `partition_split` issue (fixes false-positive splits caused by re-commissioned EUIs and dead devices still in the HA registry)
+- New MCP tool **`list_phantom_nodes`** returns `eui64`, `friendly_name`, `device_id`, `area`, `last_seen`, `last_referenced_at`, and a `ha_device_path` deep-link so the user can manually remove the device via *Settings → Devices & Services → Devices*
+- Storage layer also gains `purge_phantom_nodes()` (not exposed via MCP in this release — manual cleanup only)
+- Tests: +4 new (`bump_last_referenced`, `sweep_phantoms`, `purge_phantom_nodes`, topology phantom filtering); 67 total passing
+
 ## 0.9.19 — Thread topology from Matter cluster 53 + partition split detection
 
 - New `links` table (schema v2) persists per-reporter neighbor/route adjacencies

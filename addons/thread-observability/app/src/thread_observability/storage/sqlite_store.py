@@ -23,7 +23,7 @@ import os
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
@@ -121,6 +121,16 @@ _MIGRATIONS: list[str] = [
     ALTER TABLE nodes ADD COLUMN channel          INTEGER;
     ALTER TABLE nodes ADD COLUMN weighting        INTEGER;
     ALTER TABLE nodes ADD COLUMN diag_updated_at  TEXT;
+    """,
+    # v4: phantom / liveness tracking. `last_referenced_at` is bumped every
+    # time the EUI is observed as a reporter or as a neighbor in any router's
+    # table this cycle. `is_phantom` is the derived flag (1 = no recent
+    # reference within the configured threshold).
+    """
+    ALTER TABLE nodes ADD COLUMN last_referenced_at TEXT;
+    ALTER TABLE nodes ADD COLUMN is_phantom         INTEGER NOT NULL DEFAULT 0;
+    CREATE INDEX IF NOT EXISTS idx_nodes_phantom ON nodes(is_phantom);
+    CREATE INDEX IF NOT EXISTS idx_nodes_referenced ON nodes(last_referenced_at DESC);
     """,
 ]
 
@@ -374,6 +384,82 @@ class SQLiteStore:
             return cur.rowcount > 0
 
     # -- links ---------------------------------------------------------
+
+    def bump_last_referenced(self, euis: Iterable[str]) -> int:
+        """Mark each EUI as referenced now. Returns count of rows touched.
+
+        Inserts a placeholder node row if the EUI isn't known yet, so
+        every observed neighbor gets a presence record even without
+        device-registry metadata.
+        """
+        ts = _utc_now()
+        n = 0
+        with self._tx() as conn:
+            for eui in euis:
+                if not eui:
+                    continue
+                conn.execute(
+                    "INSERT INTO nodes(eui64, first_seen, last_seen, last_referenced_at)"
+                    " VALUES (?, ?, ?, ?)"
+                    " ON CONFLICT(eui64) DO UPDATE SET last_referenced_at = excluded.last_referenced_at",
+                    (eui, ts, ts, ts),
+                )
+                n += 1
+        return n
+
+    def sweep_phantoms(self, threshold_seconds: int) -> dict[str, int]:
+        """Set is_phantom on rows whose last_referenced_at is older than the
+        threshold (or NULL). Returns counts of {marked, cleared}.
+        """
+        cutoff = (datetime.now(tz=UTC) - timedelta(seconds=threshold_seconds)).isoformat()
+        with self._tx() as conn:
+            cur = conn.execute(
+                "UPDATE nodes SET is_phantom = 1"
+                " WHERE is_phantom = 0"
+                "   AND (last_referenced_at IS NULL OR last_referenced_at < ?)",
+                (cutoff,),
+            )
+            marked = cur.rowcount
+            cur = conn.execute(
+                "UPDATE nodes SET is_phantom = 0"
+                " WHERE is_phantom = 1 AND last_referenced_at >= ?",
+                (cutoff,),
+            )
+            cleared = cur.rowcount
+        return {"marked": int(marked or 0), "cleared": int(cleared or 0)}
+
+    def list_phantom_nodes(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM nodes WHERE is_phantom = 1"
+                " ORDER BY last_referenced_at IS NULL DESC, last_referenced_at ASC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def purge_phantom_nodes(self) -> dict[str, Any]:
+        """Delete phantom nodes and any links referencing them. Returns counts."""
+        with self._tx() as conn:
+            rows = conn.execute(
+                "SELECT eui64 FROM nodes WHERE is_phantom = 1"
+            ).fetchall()
+            euis = [r[0] for r in rows]
+            if not euis:
+                return {"deleted_nodes": 0, "deleted_links": 0, "euis": []}
+            placeholders = ",".join("?" for _ in euis)
+            cur_links = conn.execute(
+                f"DELETE FROM links WHERE reporter_eui64 IN ({placeholders})"
+                f"    OR neighbor_eui64 IN ({placeholders})",
+                (*euis, *euis),
+            )
+            cur_nodes = conn.execute(
+                f"DELETE FROM nodes WHERE eui64 IN ({placeholders})",
+                euis,
+            )
+            return {
+                "deleted_nodes": int(cur_nodes.rowcount or 0),
+                "deleted_links": int(cur_links.rowcount or 0),
+                "euis": euis,
+            }
 
     def replace_links_for_reporter(
         self,

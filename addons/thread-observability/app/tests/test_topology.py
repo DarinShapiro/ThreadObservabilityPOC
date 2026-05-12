@@ -162,3 +162,31 @@ def test_topology_parent_inferred_from_is_child(store: SQLiteStore) -> None:
     snap = build_topology(store=store)
     child = next(n for n in snap["nodes"] if n["eui64"] == D)
     assert child["parent_eui64"] == A
+
+
+def test_topology_hides_phantoms_by_default(store: SQLiteStore) -> None:
+    """Phantoms should be filtered out of nodes and links by default."""
+    store.bump_last_referenced([A, B])
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -55, "is_child": 1},
+    ])
+    # Backdate B to make it a phantom.
+    stale = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (stale, B))
+    store.sweep_phantoms(threshold_seconds=24 * 3600)
+
+    snap = build_topology(store=store)
+    euis = {n["eui64"] for n in snap["nodes"]}
+    assert A in euis
+    assert B not in euis
+    # No link should touch B.
+    for ln in snap["links"]:
+        assert B not in (ln.get("reporter_eui64"), ln.get("neighbor_eui64"))
+
+    # With include_phantoms=True, B reappears.
+    snap2 = build_topology(store=store, include_phantoms=True)
+    euis2 = {n["eui64"] for n in snap2["nodes"]}
+    assert B in euis2
+    b_row = next(n for n in snap2["nodes"] if n["eui64"] == B)
+    assert b_row["is_phantom"] is True

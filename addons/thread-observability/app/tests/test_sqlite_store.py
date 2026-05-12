@@ -8,9 +8,9 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 3
+    assert store.schema_version == 4
     stats = store.stats()
-    assert stats["schema_version"] == 3
+    assert stats["schema_version"] == 4
     assert stats["row_counts"]["events"] == 0
 
 
@@ -100,3 +100,53 @@ def test_set_node_diagnostics(store: SQLiteStore) -> None:
     assert nodes[A]["routing_role"] == "leader"
     assert nodes[A]["channel"] == 15
     assert nodes[A]["diag_updated_at"] is not None
+
+
+def test_bump_last_referenced_creates_node(store: SQLiteStore) -> None:
+    eui = "bb" * 8
+    n = store.bump_last_referenced([eui])
+    assert n == 1
+    node = store.get_node(eui)
+    assert node is not None
+    assert node["last_referenced_at"] is not None
+    assert node["is_phantom"] == 0
+
+
+def test_sweep_phantoms_marks_old_and_clears_fresh(store: SQLiteStore) -> None:
+    old_eui = "cc" * 8
+    fresh_eui = "dd" * 8
+    store.bump_last_referenced([old_eui, fresh_eui])
+    # Backdate one row to look stale.
+    stale_ts = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute(
+            "UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?",
+            (stale_ts, old_eui),
+        )
+    result = store.sweep_phantoms(threshold_seconds=24 * 3600)
+    assert result["marked"] >= 1
+    assert {n["eui64"] for n in store.list_phantom_nodes()} == {old_eui}
+
+    # Bump the stale one back; it should clear.
+    store.bump_last_referenced([old_eui])
+    result2 = store.sweep_phantoms(threshold_seconds=24 * 3600)
+    assert result2["cleared"] >= 1
+    assert store.list_phantom_nodes() == []
+
+
+def test_purge_phantom_nodes_removes_links(store: SQLiteStore) -> None:
+    A = "ee" * 8
+    B = "ff" * 8
+    store.bump_last_referenced([A, B])
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -55, "is_child": True},
+    ])
+    # Mark A as phantom via stale ts.
+    stale = (datetime.now(tz=UTC) - timedelta(hours=48)).isoformat()
+    with store._tx() as conn:  # noqa: SLF001
+        conn.execute("UPDATE nodes SET last_referenced_at = ? WHERE eui64 = ?", (stale, A))
+    store.sweep_phantoms(threshold_seconds=24 * 3600)
+    result = store.purge_phantom_nodes()
+    assert result["deleted_nodes"] >= 1
+    assert result["deleted_links"] >= 1
+    assert store.get_node(A) is None
