@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.9.56 — Phase 2: tool catalog reshape (BREAKING)
+
+Tightens the MCP surface area from 40 to 31 tools. **Hard cut, no shim.**
+
+**Removed (9 tools)** — functionality preserved internally or via other tools:
+- `get_partition_state` — partition info is in `get_mesh_state` response
+- `list_phantom_nodes` — use `list_all_nodes` with `status_filter="phantom"`
+- `run_reasoner` — runs automatically on every pipeline tick
+- `query_events` — superseded by `query_history` (unified timeline)
+- `get_node_flap_history`, `get_link_flap_history` — covered by `analyze_node`
+- `insert_test_event` — was a dev-only helper, no production callers
+- `get_node_metadata` — covered by `analyze_node` and `list_all_nodes`
+- `set_node_friendly_name` — friendly names sync via `sync_ha_devices`
+
+**Renamed (6 tools)** — clearer names for AI-agent first-pass discovery:
+- `get_network_topology` → `get_mesh_state`
+- `query_timeline` → `query_history`
+- `get_topology_snapshot` → `get_topology_history_entry`
+- `list_topology_snapshots` → `list_topology_history`
+- `diff_topology` → `diff_topology_history`
+- `discover_thread_devices` → `sync_ha_devices`
+
+**Enhanced**:
+- `list_all_nodes` accepts `status_filter` (healthy/stale/offline/phantom)
+- Descriptions for renamed tools follow Use-when / Returns / Caveats format
+
+Internal helper functions `_build_partition_state` and `_build_phantom_list`
+remain (consumed by the dashboard endpoints in `http_api.py`).
+
 ## 0.9.55 — Redact `ha_admin_token` in `get_config` response
 
 Security fix. `get_config` was returning `ha_admin_token` in plaintext,

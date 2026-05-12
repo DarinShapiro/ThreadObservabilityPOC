@@ -16,7 +16,6 @@ from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
-from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import topology as topology_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
@@ -56,12 +55,15 @@ class ToolCallRequest(BaseModel):
 
 TOOL_DEFS: list[dict[str, Any]] = [
     {
-        "name": "get_network_topology",
+        "name": "get_mesh_state",
         "description": (
-            "Return current Thread network topology snapshot (nodes and links) "
-            "computed deterministically from the SQLite event log. By default, "
-            "phantom nodes (no recent reference in any router's tables) are "
-            "excluded."
+            "Use when: starting a triage session or answering 'what does the mesh look like right now?'. "
+            "Returns the live Thread mesh: nodes + links + partition_id, computed deterministically from "
+            "the SQLite event log and most-recent Matter discovery tick. Phantom nodes are excluded by default. "
+            "Returns: {nodes:[{eui64, role, partition_id, parent_eui64, last_rssi, last_lqi, status, ...}], "
+            "links:[...], partition_id, computed_at, node_count, link_count}. "
+            "Caveats: SQLite-cached. Check meta.cache_age_s on the response; if stale, call ingest_now to force "
+            "a refresh."
         ),
         "inputSchema": {
             "type": "object",
@@ -83,38 +85,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_partition_state",
-        "description": (
-            "Return current Thread partition state. A healthy network has a single "
-            "partition_id across all routers; multiple distinct partition_ids "
-            "indicate a network split (mesh has fragmented into isolated groups). "
-            "Phantom-only partitions are excluded by default."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "include_phantoms": {
-                    "type": "boolean",
-                    "description": "If true, include phantom nodes / phantom-only partitions. Default false.",
-                    "default": False,
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "list_phantom_nodes",
-        "description": (
-            "List nodes flagged as phantom — they exist in the SQLite nodes table "
-            "(usually because they're in the HA device registry) but have not been "
-            "observed in any router's NeighborTable or RouteTable within the staleness "
-            "window. Returned rows include everything needed to find the device in "
-            "Home Assistant for manual deletion: friendly_name, device_id, "
-            "area, last_referenced_at, and a constructed HA deep-link path."
-        ),
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
         "name": "list_active_issues",
         "description": "Return all currently-open Thread network issues from the SQLite issues table.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
@@ -123,15 +93,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "description": (
             "Return current health snapshot: node counts by status (healthy / stale / offline), "
             "active issue counts, and data freshness age."
-        ),
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "run_reasoner",
-        "description": (
-            "Run the deterministic anomaly reasoner once over the SQLite event log. "
-            "Opens new issues and auto-closes issues whose triggering condition no "
-            "longer holds. Returns the summary with opened/still_open/closed issue ids."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
@@ -312,25 +273,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "name": "query_events",
-        "description": (
-            "Return canonical events from the SQLite event log, newest first. "
-            "Optional filters: eui64, event_type, since (ISO-8601 timestamp). "
-            "Use to verify ingestion or to drill into a specific node's recent activity."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "eui64":      {"type": "string"},
-                "event_type": {"type": "string"},
-                "since":      {"type": "string", "description": "ISO-8601 timestamp"},
-                "limit":      {"type": "integer", "default": 100, "minimum": 1, "maximum": 1000},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "query_timeline",
+        "name": "query_history",
         "description": (
             "Tier 4 unified timeline. Return a single newest-first stream that "
             "merges canonical events, issue open/close lifecycle, and observer "
@@ -377,7 +320,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "get_topology_snapshot",
+        "name": "get_topology_history_entry",
         "description": (
             "Tier 4. Return a persisted topology snapshot row. Pass "
             "``snapshot_id`` to fetch one by id, or ``at`` (ISO-8601) "
@@ -394,12 +337,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "list_topology_snapshots",
+        "name": "list_topology_history",
         "description": (
             "Tier 4. List topology snapshot summaries (id, captured_at, "
             "hash, partition_id, node_count, link_count) newest-first. "
-            "Snapshot bodies are NOT returned — use ``get_topology_snapshot`` "
-            "or ``diff_topology`` to drill in."
+            "Snapshot bodies are NOT returned — use ``get_topology_history_entry`` "
+            "or ``diff_topology_history`` to drill in."
         ),
         "inputSchema": {
             "type": "object",
@@ -417,7 +360,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "diff_topology",
+        "name": "diff_topology_history",
         "description": (
             "Tier 4. Return a structured diff between two topology "
             "snapshots: added/removed nodes, per-node role/partition/parent "
@@ -465,15 +408,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "analyze_node",
         "description": (
-            "Tier 4 consultant tool. One-call structured payload for a "
-            "single EUI-64: node metadata, parent + neighbors, open "
-            "issues, recent closed issues, unified Tier 4 timeline "
-            "(events + issue lifecycle + observer events), simple "
-            "per-node baselines (parent_change rate this period vs. "
-            "previous, status_change count), and full playbook entries "
-            "matching the union of issue kinds. Use this instead of "
-            "calling get_node_metadata + list_active_issues + "
-            "query_events + lookup_playbook separately."
+            "Use when: drilling into a single suspected-bad EUI-64. One-call structured payload: node metadata, parent + neighbors, "
+            "open issues, recent closed issues, unified timeline (events + issue lifecycle + observer events), per-node baselines "
+            "(parent_change rate this period vs. previous, status_change count), and full playbook entries matching the union of issue kinds. "
+            "Prefer over composing list_all_nodes + list_active_issues + query_history + lookup_playbook by hand. "
+            "Returns: rich JSON keyed by section. Caveats: timeline_hours and baseline_days are capped; very large windows truncate."
         ),
         "inputSchema": {
             "type": "object",
@@ -493,97 +432,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 },
             },
             "required": ["eui64"],
-        },
-    },
-    {
-        "name": "get_node_flap_history",
-        "description": (
-            "Return the per-node status_change history (online/offline/phantom "
-            "transitions) emitted by recompute_node_statuses. Each call returns "
-            "the most-recent transitions (newest first) plus an aggregate "
-            "flap_counts map keyed by EUI. Use this to rank flappers: a high "
-            "total in a short window points to an unstable router or to a "
-            "device with multiple stale Matter operational identities. Available "
-            "since v0.9.41; transitions before that release are not recorded."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "eui64": {
-                    "type": "string",
-                    "description": "Restrict history to a single EUI-64 (lower-case hex).",
-                },
-                "since": {
-                    "type": "string",
-                    "description": "ISO-8601 timestamp; only transitions at or after this time are returned.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "default": 500,
-                    "minimum": 1,
-                    "maximum": 5000,
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_link_flap_history",
-        "description": (
-            "Return the per-edge link_acquired/link_lost history emitted by the "
-            "Matter cluster-53 link sweep. Each call returns the most-recent "
-            "transitions plus a flap_counts map keyed by the unordered "
-            "(reporter, neighbor) pair so a symmetric flap surfaces once. Use "
-            "this to rank unstable edges in the mesh: a high total over a short "
-            "window indicates a marginal RF link or a sleepy child whose parent "
-            "keeps timing it out. Available since v0.9.42; transitions before "
-            "that release are not recorded."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "reporter_eui64": {
-                    "type": "string",
-                    "description": "Restrict to events where this EUI was the reporter.",
-                },
-                "neighbor_eui64": {
-                    "type": "string",
-                    "description": "Restrict to events where this EUI was the neighbor.",
-                },
-                "source": {
-                    "type": "string",
-                    "enum": ["neighbor_table", "route_table"],
-                    "description": "Restrict to one Matter link source.",
-                },
-                "since": {
-                    "type": "string",
-                    "description": "ISO-8601 timestamp; only transitions at or after this time.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "default": 500,
-                    "minimum": 1,
-                    "maximum": 5000,
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "insert_test_event",
-        "description": (
-            "DEV: insert a synthetic canonical event into the SQLite store. Used to "
-            "verify the storage layer end-to-end before real ingestion lands."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "eui64": {"type": "string", "default": "0000000000000001"},
-                "type":  {"type": "string", "default": "attach"},
-                "rssi":  {"type": "integer"},
-                "lqi":   {"type": "integer"},
-            },
-            "required": [],
         },
     },
     {
@@ -638,48 +486,33 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "name": "get_node_metadata",
+        "name": "list_all_nodes",
         "description": (
-            "Return enriched metadata for a Thread node: friendly name, role, area, "
-            "device_id, first/last seen times, current status (healthy/stale/offline), "
-            "and latest RSSI/LQI readings."
-        ),
-        "inputSchema": {
-            "type": "object",
-            "properties": {"eui64": {"type": "string", "description": "16-char hex node EUI64"}},
-            "required": ["eui64"],
-        },
-    },
-    {
-        "name": "set_node_friendly_name",
-        "description": (
-            "Set or update a node's friendly name (e.g., 'Living Room Coordinator'). "
-            "Returns the updated node record. Use this to make node identities human-readable."
+            "Use when: enumerating every known Thread node (including phantoms) or building a device-by-device inventory. "
+            "Returns: {nodes:[{eui64, friendly_name, role, area, device_id, status, first_seen, last_seen, last_rssi, last_lqi, ...}], count}. "
+            "Ordered most-recently-seen first. Use ``status_filter='phantom'`` to drill into stale-reference cleanup candidates. "
+            "Caveats: SQLite-cached; check meta.cache_age_s."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "eui64": {"type": "string"},
-                "name": {"type": "string"},
+                "status_filter": {
+                    "type": "string",
+                    "enum": ["healthy", "stale", "offline", "phantom"],
+                    "description": "Restrict to nodes whose status matches this value.",
+                },
             },
-            "required": ["eui64", "name"],
+            "required": [],
         },
     },
     {
-        "name": "list_all_nodes",
+        "name": "sync_ha_devices",
         "description": (
-            "Return all Thread network nodes with enrichment: friendly names, role, "
-            "area, device_id, status (healthy/stale/offline), and first/last seen. "
-            "Ordered by most-recently-seen first."
-        ),
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
-    },
-    {
-        "name": "discover_thread_devices",
-        "description": (
-            "Query Home Assistant's device registry for Thread/Zigbee devices and "
-            "correlate IEEE addresses with extracted EUI64 nodes. Auto-populates "
-            "friendly_name and device_id for matching nodes. Returns match summary."
+            "Use when: HA shows a Thread device the addon hasn't seen yet, or after a fresh commission, or when phantom "
+            "counts look wrong. Queries the HA device registry for Thread/Zigbee devices and correlates IEEE addresses "
+            "with extracted EUI64 nodes. Auto-populates friendly_name and device_id for matching nodes. "
+            "Returns: {matched, updated, ...}. "
+            "Caveats: This is a mutation (writes friendly_name/device_id back to SQLite); not a read tool."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
@@ -807,9 +640,7 @@ def _build_phantom_list() -> dict[str, Any]:
 # unwrapped because they already include their own "requested_at" /
 # "performed" / "action" fields and are not snapshots of cached state.
 _READ_TOOLS: frozenset[str] = frozenset({
-    "get_network_topology",
-    "get_partition_state",
-    "list_phantom_nodes",
+    "get_mesh_state",
     "list_active_issues",
     "get_health_snapshot",
     "get_recent_logs",
@@ -819,21 +650,17 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "ha_check_for_update",
     "list_thread_datasets",
     "get_storage_stats",
-    "query_events",
-    "query_timeline",
-    "get_topology_snapshot",
-    "list_topology_snapshots",
-    "diff_topology",
+    "query_history",
+    "get_topology_history_entry",
+    "list_topology_history",
+    "diff_topology_history",
     "list_playbooks",
     "lookup_playbook",
     "analyze_node",
-    "get_node_flap_history",
-    "get_link_flap_history",
     "get_config",
     "get_timeseries_health",
     "list_otbr_candidates",
     "get_ingest_state",
-    "get_node_metadata",
     "list_all_nodes",
 })
 
@@ -904,7 +731,7 @@ async def _dispatch_and_wrap(
 
 async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Execute a tool and return its result payload."""
-    if name == "get_network_topology":
+    if name == "get_mesh_state":
         try:
             freshness = int(arguments.get("freshness_minutes", 60))
             include_phantoms = bool(arguments.get("include_phantoms", False))
@@ -920,25 +747,9 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return {"count": len(issues), "issues": issues}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
-    if name == "get_partition_state":
-        try:
-            include_phantoms = bool(arguments.get("include_phantoms", False))
-            return _build_partition_state(include_phantoms=include_phantoms)
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "list_phantom_nodes":
-        try:
-            return _build_phantom_list()
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
     if name == "get_health_snapshot":
         try:
             return _build_health_snapshot()
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "run_reasoner":
-        try:
-            return reasoner_mod.run_reasoner()
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "close_issue":
@@ -1035,18 +846,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return {"sqlite": stats, "timeseries": ts_health}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
-    if name == "query_events":
-        try:
-            events = get_store().query_events(
-                eui64=arguments.get("eui64"),
-                event_type=arguments.get("event_type"),
-                since=arguments.get("since"),
-                limit=int(arguments.get("limit", 100)),
-            )
-            return {"events": events, "count": len(events)}
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "query_timeline":
+    if name == "query_history":
         try:
             from ..pipeline import timeline as timeline_mod
 
@@ -1064,7 +864,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
-    if name == "get_topology_snapshot":
+    if name == "get_topology_history_entry":
         try:
             sid = arguments.get("snapshot_id")
             if sid is not None:
@@ -1076,7 +876,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return snap or {"snapshot": None}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
-    if name == "list_topology_snapshots":
+    if name == "list_topology_history":
         try:
             snaps = get_store().list_topology_snapshots(
                 since=arguments.get("since"),
@@ -1086,7 +886,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return {"snapshots": snaps, "count": len(snaps)}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
-    if name == "diff_topology":
+    if name == "diff_topology_history":
         try:
             from ..pipeline import topology_snapshot as ts_mod
 
@@ -1136,38 +936,6 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             )
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
-    if name == "get_node_flap_history":
-        try:
-            return get_store().get_node_flap_history(
-                eui64=arguments.get("eui64"),
-                since=arguments.get("since"),
-                limit=int(arguments.get("limit", 500)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "get_link_flap_history":
-        try:
-            return get_store().get_link_flap_history(
-                reporter_eui64=arguments.get("reporter_eui64"),
-                neighbor_eui64=arguments.get("neighbor_eui64"),
-                source=arguments.get("source"),
-                since=arguments.get("since"),
-                limit=int(arguments.get("limit", 500)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "insert_test_event":
-        try:
-            eid = get_store().insert_event(
-                eui64=arguments.get("eui64", "0000000000000001"),
-                type=arguments.get("type", "attach"),
-                rssi=arguments.get("rssi"),
-                lqi=arguments.get("lqi"),
-                payload={"source": "insert_test_event"},
-            )
-            return {"inserted_event_id": eid, "at": _utc_now()}
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
     if name == "get_config":
         try:
             cfg = get_config()
@@ -1214,36 +982,21 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
-    # ---- Node metadata tools (Phase 3) ----------------------------------
-    if name == "get_node_metadata":
-        try:
-            eui64 = str(arguments.get("eui64", "")).strip()
-            if not eui64:
-                return {"error": "eui64 required"}
-            return nodes_mod.get_node_summary(eui64, include_signal_strength=True)
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
-    if name == "set_node_friendly_name":
-        try:
-            eui64 = str(arguments.get("eui64", "")).strip()
-            name = str(arguments.get("name", "")).strip()
-            if not eui64 or not name:
-                return {"error": "eui64 and name required"}
-            ok = get_store().set_node_friendly_name(eui64, name)
-            if not ok:
-                return {"error": f"node {eui64} not found"}
-            return nodes_mod.get_node_summary(eui64, include_signal_strength=True)
-        except Exception as exc:  # noqa: BLE001
-            return {"error": str(exc)}
+    # ---- Node metadata tools ----------------------------------
     if name == "list_all_nodes":
         try:
-            return {
-                "nodes": nodes_mod.list_nodes_enriched(include_signal_strength=True),
-                "count": len(get_store().list_nodes()),
-            }
+            status_filter = arguments.get("status_filter")
+            include_phantoms = status_filter == "phantom"
+            nodes = nodes_mod.list_nodes_enriched(
+                include_signal_strength=True,
+                include_phantoms=include_phantoms,
+            )
+            if status_filter:
+                nodes = [n for n in nodes if n.get("status") == status_filter]
+            return {"nodes": nodes, "count": len(nodes)}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "nodes": []}
-    if name == "discover_thread_devices":
+    if name == "sync_ha_devices":
         try:
             from ..pipeline import device_discovery
             return await device_discovery.discover_and_sync()

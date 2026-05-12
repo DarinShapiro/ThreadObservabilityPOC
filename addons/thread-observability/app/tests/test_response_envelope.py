@@ -85,6 +85,39 @@ def test_all_documented_read_tools_in_registry() -> None:
     assert not missing, f"Read tools not registered: {sorted(missing)}"
 
 
+def test_phase2_catalog_shape() -> None:
+    """Phase 2 hard cut: removed tools must be gone, renamed names present."""
+    registered = {t["name"] for t in mcp_tools.TOOL_DEFS}
+    removed = {
+        "get_partition_state",
+        "list_phantom_nodes",
+        "run_reasoner",
+        "query_events",
+        "get_node_flap_history",
+        "get_link_flap_history",
+        "insert_test_event",
+        "get_node_metadata",
+        "set_node_friendly_name",
+        "get_network_topology",
+        "query_timeline",
+        "get_topology_snapshot",
+        "list_topology_snapshots",
+        "diff_topology",
+        "discover_thread_devices",
+    }
+    leaked = removed & registered
+    assert not leaked, f"Phase 2 removed/renamed tools still present: {sorted(leaked)}"
+    renamed = {
+        "get_mesh_state",
+        "query_history",
+        "get_topology_history_entry",
+        "list_topology_history",
+        "diff_topology_history",
+        "sync_ha_devices",
+    }
+    missing = renamed - registered
+    assert not missing, f"Phase 2 renamed tools missing: {sorted(missing)}"
+
 def test_get_config_redacts_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """ha_admin_token and influx.token must never appear in plaintext."""
     from thread_observability import config as cfg_mod
