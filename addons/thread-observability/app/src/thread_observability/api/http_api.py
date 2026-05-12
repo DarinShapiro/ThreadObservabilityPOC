@@ -381,19 +381,6 @@ setInterval(refresh, 5000);
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start/stop background scheduler tasks alongside the FastAPI app."""
-    # ---- ONE-SHOT DB TRUNCATION (0.9.16) ----
-    # Wipes legacy rows accumulated by older versions before bridged-upsert
-    # was wired in. Remove this block (and bump version) once the DB is clean.
-    try:
-        store = get_store()
-        with store._tx() as conn:
-            for t in ("events", "issues", "metadata_cache", "ingest_state", "nodes"):
-                conn.execute(f"DELETE FROM {t}")
-        store.vacuum()
-        log.warning("ONE-SHOT: truncated all data tables on startup (0.9.16 reset)")
-    except Exception as exc:
-        log.exception("one-shot truncation failed: %s", exc)
-
     cfg = get_config()
     interval = int(getattr(cfg.scheduler, "ingestion_interval_seconds", 10))
     task = asyncio.create_task(otbr_adapter.run_forever(interval_seconds=interval),

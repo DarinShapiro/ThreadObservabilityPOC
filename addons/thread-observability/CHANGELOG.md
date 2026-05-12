@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.17 — Remove one-shot truncation
+
+- Reverted the 0.9.16 startup wipe now that the DB has been cleaned
+
 ## 0.9.16 — ONE-SHOT: truncate data tables on startup
 
 - Lifespan startup hook deletes all rows from `events`, `issues`, `metadata_cache`, `ingest_state`, `nodes` and runs `VACUUM`
