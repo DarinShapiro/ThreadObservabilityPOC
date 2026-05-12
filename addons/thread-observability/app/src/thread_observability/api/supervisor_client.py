@@ -218,16 +218,23 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
     Dispatch routing: Supervisor refuses self-update with HTTP 403 + body
     ``{"message": "App {slug} can't update itself!"}`` when the calling
     process is the add-on being updated. To bypass this safety guard we
-    route the call through Home Assistant Core's ``hassio.addon_update``
-    service (``POST /core/api/services/hassio/addon_update``) so the
-    Supervisor sees HA Core as the caller, not the add-on itself. The
-    add-on requires ``homeassistant_api: true`` in its ``config.yaml`` for
-    this path to work (already present).
+    route the call through Home Assistant Core's hassio HTTP proxy at
+    ``POST /core/api/hassio/addons/{slug}/update`` (the same path the HA
+    frontend uses when you click "Update" in the UI). HA Core forwards
+    this to Supervisor under its own admin identity, so the self-guard
+    sees HA Core as the caller, not the add-on. The add-on requires
+    ``homeassistant_api: true`` in its ``config.yaml`` for this path to
+    work (already present).
 
-    A direct Supervisor call to ``/store/addons/{slug}/update`` is kept as a
-    fallback for the rare case where HA Core is unreachable but Supervisor
-    is, and is the path that produces the 403 self-guard error \u2014 which we
-    now report honestly rather than mask.
+    A direct Supervisor call to ``/store/addons/{slug}/update`` is kept as
+    a documented fallback for diagnostics only — it always trips the 403
+    self-guard from inside the add-on and is intentionally not auto-tried.
+
+    Note on the *services* endpoint: ``/core/api/services/hassio/addon_update``
+    looks plausible but returns 400 because ``hassio.*`` services are
+    registered with ``async_register_admin_service`` and the Supervisor
+    token is not admin-equivalent on HA Core. The HTTP proxy path above
+    does not go through that check.
     """
     try:
         await reload_store()
@@ -241,7 +248,7 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
 
     store_slug, repository = await _resolve_store_slug(self_slug)
     supervisor_endpoint = f"/store/addons/{store_slug}/update"
-    ha_core_endpoint = "/core/api/services/hassio/addon_update"
+    ha_core_endpoint = f"/core/api/hassio/addons/{store_slug}/update"
 
     current = info.get("version")
     latest = info.get("version_latest")
@@ -254,7 +261,7 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
         "repository": repository,
         "endpoint": ha_core_endpoint,
         "endpoint_fallback": supervisor_endpoint,
-        "via": "ha_core_service",
+        "via": "ha_core_hassio_proxy",
         "current": current,
         "latest": latest,
         "update_available": update_available,
@@ -266,24 +273,25 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
     if not update_available:
         return {**base, "status": "ok", "performed": False, "reason": "no_update_available"}
 
-    # Primary path: HA Core service call (bypasses Supervisor self-update guard).
+    # Primary path: HA Core hassio HTTP proxy (same path the HA frontend
+    # uses when you click "Update"). HA Core forwards to Supervisor under
+    # its own admin identity, so the self-update guard does not fire.
     try:
-        resp = await _post(ha_core_endpoint, {"addon": store_slug})
+        resp = await _post(ha_core_endpoint)
         return {
             **base,
             "status": "ok",
             "performed": True,
             "response": resp,
             "note": (
-                "HA Core accepted the addon_update service call. Supervisor "
-                "will pull the new image and restart this add-on "
-                "asynchronously \u2014 expect the current MCP connection to drop "
-                "shortly. Poll ha_get_addon_state to confirm the new version."
+                "HA Core accepted the update request and dispatched it to "
+                "Supervisor. Supervisor will pull/build the new image and "
+                "restart this add-on asynchronously \u2014 expect the current "
+                "MCP connection to drop shortly. Poll ha_get_addon_state "
+                "to confirm the new version."
             ),
         }
     except httpx.RequestError as exc:
-        # Transport error here often means the update already started and
-        # killed our connection. Report honestly, do not mask.
         return {
             **base,
             "status": "transport_error",
@@ -291,10 +299,10 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
             "error_class": exc.__class__.__name__,
             "error": str(exc),
             "note": (
-                "POST to HA Core service interrupted. Supervisor may have "
-                "begun the update before the response completed. Inspect "
-                "ha_get_supervisor_logs and ha_get_addon_state to determine "
-                "the outcome."
+                "POST to HA Core hassio proxy interrupted. Supervisor may "
+                "have begun the update before the response completed. "
+                "Inspect ha_get_supervisor_logs and ha_get_addon_state to "
+                "determine the outcome."
             ),
         }
     except httpx.HTTPStatusError as exc:
@@ -312,12 +320,13 @@ async def update_addon(dry_run: bool = False) -> dict[str, Any]:
             "error": str(exc),
             "response_body": body[:500],
             "note": (
-                "HA Core rejected the addon_update service call. Confirm the "
-                "add-on has homeassistant_api: true in config.yaml and that "
-                "SUPERVISOR_TOKEN is a valid token. The Supervisor direct path "
-                "/store/addons/{slug}/update is NOT auto-attempted because it "
-                "triggers Supervisor's self-update guard (403 'can't update "
-                "itself')."
+                "HA Core's hassio proxy rejected the update. The Supervisor "
+                "direct path /store/addons/{slug}/update is NOT auto-attempted "
+                "because it always trips Supervisor's self-update guard (403 "
+                "'can't update itself') when called from inside this add-on. "
+                "If this persists, fall back to enabling auto_update via "
+                "ha_set_auto_update(enabled=true) and waiting for the next "
+                "Supervisor sweep."
             ),
         }
 

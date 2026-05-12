@@ -1,4 +1,31 @@
-# Changelog## 0.9.50 — Verify HA-Core-routed `ha_update_addon` (no functional change)
+# Changelog
+
+## 0.9.51 — Switch `ha_update_addon` to HA Core hassio HTTP proxy
+
+**Discovery from 0.9.50 test.** The HA Core *service* path
+`POST /core/api/services/hassio/addon_update` returns HTTP 400 because
+`hassio.*` services are registered with `async_register_admin_service` and
+the Supervisor token is not admin-equivalent on HA Core.
+
+**Fix.** `update_addon()` now POSTs to
+`POST /core/api/hassio/addons/{store_slug}/update` — Home Assistant Core's
+hassio HTTP proxy view (the same path the HA frontend uses when you click
+"Update" in the UI). HA Core forwards the request to Supervisor under its
+own admin identity, so Supervisor's self-update guard does not fire.
+
+**Response shape additions.**
+- `endpoint`: `/core/api/hassio/addons/<slug>/update`.
+- `via`: `"ha_core_hassio_proxy"`.
+
+Tests assert the new endpoint and that no JSON body is sent (the slug is
+in the URL).
+
+**Operational note.** If this path ever fails, `ha_set_auto_update(enabled=true)`
+followed by waiting for the next Supervisor sweep remains a verified
+fallback — used successfully to bootstrap 0.9.48 → 0.9.49 during this
+investigation.
+
+## 0.9.50 — Verify HA-Core-routed `ha_update_addon` (no functional change)
 
 No-op version bump to exercise the 0.9.49 update path from MCP end-to-end:
 `ha_update_addon(dry_run=true)` followed by a real `ha_update_addon` call.

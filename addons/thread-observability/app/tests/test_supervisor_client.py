@@ -42,9 +42,9 @@ def test_update_addon_no_update_available(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["current"] == "0.9.1"
     assert result["latest"] == "0.9.1"
     assert result["store_slug"] == "thread-observability"
-    assert result["endpoint"] == "/core/api/services/hassio/addon_update"
+    assert result["endpoint"] == "/core/api/hassio/addons/thread-observability/update"
     assert result["endpoint_fallback"] == "/store/addons/thread-observability/update"
-    assert result["via"] == "ha_core_service"
+    assert result["via"] == "ha_core_hassio_proxy"
 
 
 def test_update_addon_resolves_store_slug_and_posts(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,14 +77,15 @@ def test_update_addon_resolves_store_slug_and_posts(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(sc, "_post", fake_post)
 
     result = asyncio.run(sc.update_addon())
-    # Must go through HA Core service (bypasses Supervisor's self-update guard)
-    # and must NOT call /store/addons/{slug}/update directly nor /addons/self/update.
-    assert calls == [("/core/api/services/hassio/addon_update", {"addon": "thread-observability"})]
+    # Must go through HA Core hassio HTTP proxy (same path the HA frontend
+    # uses); must NOT call /store/addons/{slug}/update directly nor pass any
+    # body — the proxy takes the slug from the URL.
+    assert calls == [("/core/api/hassio/addons/thread-observability/update", None)]
     assert result["status"] == "ok"
     assert result["performed"] is True
     assert result["store_slug"] == "thread-observability"
     assert result["repository"] == "9e5048e8"
-    assert result["via"] == "ha_core_service"
+    assert result["via"] == "ha_core_hassio_proxy"
 
 
 def test_update_addon_dry_run_does_not_post(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,7 +115,7 @@ def test_update_addon_dry_run_does_not_post(monkeypatch: pytest.MonkeyPatch) -> 
     assert result["status"] == "dry_run"
     assert result["performed"] is False
     assert result["update_available"] is True
-    assert result["endpoint"] == "/core/api/services/hassio/addon_update"
+    assert result["endpoint"] == "/core/api/hassio/addons/thread-observability/update"
     assert result["endpoint_fallback"] == "/store/addons/thread-observability/update"
 
 
@@ -141,7 +142,7 @@ def test_update_addon_falls_back_to_self_slug_when_store_unreachable(monkeypatch
 
     result = asyncio.run(sc.update_addon(dry_run=True))
     assert result["store_slug"] == "9e5048e8_thread-observability"
-    assert result["endpoint"] == "/core/api/services/hassio/addon_update"
+    assert result["endpoint"] == "/core/api/hassio/addons/9e5048e8_thread-observability/update"
     assert result["endpoint_fallback"] == "/store/addons/9e5048e8_thread-observability/update"
 
 
