@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from . import supervisor_client
+from . import triage as triage_mod
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
 from ..pipeline import nodes as nodes_mod
@@ -516,6 +517,46 @@ TOOL_DEFS: list[dict[str, Any]] = [
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
+    # ---- Phase 3 triage tools ---------------------------------------------
+    {
+        "name": "start_triage",
+        "description": (
+            "Use when: starting any new investigation, or as the first call in a session. Returns the consolidated "
+            "environment (addon/HA/OTBR/Matter/network/pipeline versions) plus the health snapshot plus active issues "
+            "plus a `recommended_next` list of up to 3 follow-up tool calls chosen from the catalog. "
+            "Returns: {as_of, environment, health, active_issues_count, active_issues[<=10], recommended_next[<=3]}. "
+            "Caveats: snapshot from SQLite cache; refresh by waiting one pipeline tick."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_environment",
+        "description": (
+            "Use when: you need versions/identity of every relevant component in one shot — addon version, HA Core "
+            "version, Supervisor version, OTBR add-on state, Matter Server add-on state, Thread network identity "
+            "(name/pan_id/channel/leader), and pipeline runner state. "
+            "Returns: {addon, home_assistant, otbr, matter_server, network, pipeline}. "
+            "Caveats: Supervisor calls may fail outside the HA container; those sections fall back to `{error: ...}`."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_pipeline_health",
+        "description": (
+            "Use when: data looks stale, the dashboard is empty, or the model needs to know whether the pipeline is "
+            "actually running. Returns the last N pipeline ticks (newest first) plus a summary including "
+            "consecutive_failed_ticks, stages_currently_failing, avg_duration_seconds, and the current runner state. "
+            "Returns: {summary: {...}, recent_ticks: [...]}. "
+            "Caveats: only ticks recorded in schema v18+ are visible; backfill is not retroactive."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
+            },
+            "required": [],
+        },
+    },
 ]
 
 _TOOL_MAP = {t["name"]: t for t in TOOL_DEFS}
@@ -662,6 +703,9 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "list_otbr_candidates",
     "get_ingest_state",
     "list_all_nodes",
+    "start_triage",
+    "get_environment",
+    "get_pipeline_health",
 })
 
 
@@ -1002,6 +1046,26 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             return await device_discovery.discover_and_sync()
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "matched": 0, "updated": 0}
+
+    # ---- Phase 3 triage tools -----------------------------------------
+    if name == "start_triage":
+        try:
+            from .http_api import ADDON_VERSION
+            return await triage_mod.start_triage(addon_version=ADDON_VERSION)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_environment":
+        try:
+            from .http_api import ADDON_VERSION
+            return await triage_mod.get_environment(addon_version=ADDON_VERSION)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_pipeline_health":
+        try:
+            limit = int(arguments.get("limit", 20))
+            return triage_mod.get_pipeline_health(limit=limit)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     raise ValueError(f"Unknown tool: {name}")
 

@@ -145,6 +145,16 @@ async def reload_store() -> dict[str, Any]:
     return await _post("/store/reload")
 
 
+async def get_core_info() -> dict[str, Any]:
+    """Return Supervisor's view of Home Assistant Core (version, state, arch)."""
+    return await _get_json("/core/info")
+
+
+async def get_supervisor_info() -> dict[str, Any]:
+    """Return Supervisor self-info (version, arch, channel, timezone)."""
+    return await _get_json("/supervisor/info")
+
+
 async def check_for_update() -> dict[str, Any]:
     """Reload the store, then report current vs latest version for this add-on.
 

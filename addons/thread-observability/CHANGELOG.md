@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.57 — Phase 3: triage entry points
+
+Adds three high-signal read tools so an AI agent (or human) can drive a triage
+session without having to pick among 31 tools blind on the first call.
+
+**New tools (read-only, envelope-wrapped):**
+- `start_triage` — first-call entry point. Returns `{environment, health,
+  active_issues, recommended_next}` where `recommended_next` is up to 3
+  follow-up tool calls inferred from active issues and pipeline state.
+- `get_environment` — one-shot bundle of every version/identity surface:
+  addon, HA Core, Supervisor, OTBR add-on, Matter Server add-on, Thread
+  network identity, and the pipeline runner state.
+- `get_pipeline_health` — recent pipeline ticks + summary including
+  `consecutive_failed_ticks`, `stages_currently_failing`,
+  `avg_duration_seconds`, and the current runner state.
+
+**Supervisor client:** new helpers `get_core_info` (GET `/core/info`) and
+`get_supervisor_info` (GET `/supervisor/info`) used by `get_environment`.
+
+Tool count: 31 → 34. All three new tools are in `_READ_TOOLS` and emit the
+standard `{data, meta}` envelope. No breaking changes.
+
 ## 0.9.56 — Phase 2: tool catalog reshape (BREAKING)
 
 Tightens the MCP surface area from 40 to 31 tools. **Hard cut, no shim.**
