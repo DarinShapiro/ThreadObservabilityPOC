@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.2 — Clarify non-LLM chat fallback
+
+- **Chat fallback hint.** When Home Assistant routes dashboard chat through its
+  built-in default conversation agent and returns the generic
+  `Sorry, I couldn't understand that`, the add-on now rewrites that reply into
+  an explicit explanation that no LLM-backed Assist agent handled the request.
+- **Regression coverage.** Added focused chat tests for built-in fallback
+  rewriting so this failure mode stays obvious during development.
+
 ## 0.11.1 — Dashboard chat rail and assessment history
 
 - **Dashboard UI for Adaptive Monitoring.** The Network tab now exposes an

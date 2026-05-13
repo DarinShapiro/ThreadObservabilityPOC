@@ -43,6 +43,41 @@ def _render_chat_message(message: str, page_context: dict[str, object] | None) -
     return f"Page context: {context_blob}\n\nUser message: {text}"
 
 
+def _looks_like_builtin_chat_fallback(text: str) -> bool:
+    normalized = " ".join(text.strip().lower().split())
+    if not normalized:
+        return False
+    fallback_prefixes = (
+        "sorry, i couldn't understand that",
+        "sorry, i could not understand that",
+        "sorry, i didn't understand that",
+        "sorry, i did not understand that",
+        "i'm sorry, but i couldn't understand that",
+        "i am sorry, but i couldn't understand that",
+    )
+    return any(normalized.startswith(prefix) for prefix in fallback_prefixes)
+
+
+def _rewrite_builtin_chat_fallback(
+    text: str,
+    *,
+    model: object,
+    agent_id: object,
+    requested_agent_id: str | None,
+) -> str:
+    plain_text = str(text or "").strip()
+    if not _looks_like_builtin_chat_fallback(plain_text):
+        return plain_text
+    selected_agent = str(agent_id or requested_agent_id or "Home Assistant default").strip()
+    if model:
+        return plain_text
+    return (
+        "Home Assistant handled this with its default conversation agent, not an LLM-backed Assist "
+        f"agent, so it returned the generic fallback: \"{plain_text}\". Configure or select an "
+        f"LLM-capable conversation agent in Home Assistant Assist, then retry. Current agent: {selected_agent}."
+    )
+
+
 def _extract_chat_turn(
     payload: dict[str, object],
     *,
@@ -69,11 +104,18 @@ def _extract_chat_turn(
         if isinstance(maybe_card, dict):
             card = maybe_card
     model = data.get("model") or response_dict.get("model") or payload.get("model")
+    agent_id = payload.get("agent_id") or requested_agent_id
+    response_text = _rewrite_builtin_chat_fallback(
+        str(plain.get("speech") or data.get("text") or ""),
+        model=model,
+        agent_id=agent_id,
+        requested_agent_id=requested_agent_id,
+    )
     return {
         "conversation_id": payload.get("conversation_id"),
-        "agent_id": payload.get("agent_id") or requested_agent_id,
+        "agent_id": agent_id,
         "response": {
-            "text": str(plain.get("speech") or data.get("text") or ""),
+            "text": response_text,
             "card": card,
         },
         "tool_calls": tool_calls,

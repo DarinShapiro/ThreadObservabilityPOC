@@ -98,3 +98,44 @@ def test_chat_turn_rejects_streaming_for_now() -> None:
         json={"message": "hello", "streaming": True},
     )
     assert response.status_code == 501
+
+
+def test_chat_turn_rewrites_builtin_fallback_without_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_process(*, text: str, conversation_id: str | None = None, agent_id: str | None = None) -> dict[str, object]:  # noqa: ARG001
+        return {
+            "conversation_id": "conv-1",
+            "agent_id": "conversation.home_assistant",
+            "response": {
+                "speech": {"plain": {"speech": "Sorry, I couldn't understand that"}},
+                "data": {},
+            },
+        }
+
+    monkeypatch.setattr(supervisor_client, "conversation_process", fake_process)
+    client = TestClient(create_core_app())
+
+    response = client.post("/v1/chat/turn", json={"message": "hello"})
+    assert response.status_code == 200
+    body = response.json()
+    assert "not an LLM-backed Assist agent" in body["response"]["text"]
+    assert "conversation.home_assistant" in body["response"]["text"]
+
+
+def test_chat_turn_keeps_builtin_text_when_model_is_present(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_process(*, text: str, conversation_id: str | None = None, agent_id: str | None = None) -> dict[str, object]:  # noqa: ARG001
+        return {
+            "conversation_id": "conv-1",
+            "agent_id": "conversation.claude",
+            "response": {
+                "speech": {"plain": {"speech": "Sorry, I couldn't understand that"}},
+                "data": {"model": "claude-sonnet-4.5"},
+            },
+        }
+
+    monkeypatch.setattr(supervisor_client, "conversation_process", fake_process)
+    client = TestClient(create_core_app())
+
+    response = client.post("/v1/chat/turn", json={"message": "hello"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["response"]["text"] == "Sorry, I couldn't understand that"
