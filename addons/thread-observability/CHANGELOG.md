@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.1 — Dashboard chat rail and assessment history
+
+- **Dashboard UI for Adaptive Monitoring.** The Network tab now exposes an
+  Adaptive Monitoring header chip, an investigation banner for active findings,
+  a right-rail assessment history/evidence view, and one-click background-check
+  actions.
+- **HA-backed chat rail.** Added a dashboard chat panel wired to Home
+  Assistant conversation agents with suggested prompts, node-aware context,
+  visible tool calls, and conversation reset.
+- **Assessment history + run-now APIs.** Added `/v1/assessment/history` and
+  `/v1/assessment/run-now`, plus append-only `assessment_runs` storage so the
+  dashboard can show recent checks instead of only deduped open findings.
+- **Conversation proxy APIs.** Added `/v1/chat/agents` and `/v1/chat/turn`
+  so the add-on dashboard can use HA Assist agents directly.
+
 ## 0.11.0 — Phase 4: Background Diagnostics (Adaptive Monitoring)
 
 - **New: adaptive background assessment loop** (#18, #19, #22). The
