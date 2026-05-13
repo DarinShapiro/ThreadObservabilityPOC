@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +30,7 @@ from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import routing as routing_mod
 from ..pipeline import runner as pipeline_runner
 from ..pipeline import topology as topology_mod
+from ..services import chat_memory
 from ..services import direct_chat
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
@@ -36,12 +38,29 @@ from ..storage.sqlite_store import get_store
 log = logging.getLogger(__name__)
 
 
-def _render_chat_message(message: str, page_context: dict[str, object] | None) -> str:
+def _render_chat_message(
+    message: str,
+    page_context: dict[str, object] | None,
+    session_context: dict[str, object] | None = None,
+) -> str:
     text = message.strip()
+    sections: list[str] = []
+    if session_context:
+        sections.append(
+            "Session memory: "
+            + json.dumps(session_context, separators=(",", ":"), ensure_ascii=True)
+        )
+    if page_context:
+        sections.append(
+            "Page context: "
+            + json.dumps(page_context, separators=(",", ":"), ensure_ascii=True)
+        )
+    sections.append(f"User message: {text}")
+    if sections:
+        return "\n\n".join(sections)
     if not page_context:
         return text
-    context_blob = json.dumps(page_context, separators=(",", ":"), ensure_ascii=True)
-    return f"Page context: {context_blob}\n\nUser message: {text}"
+    return text
 
 
 def _looks_like_builtin_chat_fallback(text: str) -> bool:
@@ -328,18 +347,29 @@ def create_core_app() -> FastAPI:
         agent_id = str(agent_id).strip() if agent_id else None
         page_context = (payload or {}).get("page_context")
         page_context = page_context if isinstance(page_context, dict) else None
-        rendered_message = _render_chat_message(message, page_context)
         direct_target = direct_chat.resolve_direct_chat_target(cfg.ai)
+        if direct_chat.direct_chat_preferred(cfg.ai, agent_id, direct_target) and not conversation_id:
+            conversation_id = f"direct-{uuid.uuid4()}"
+        session_context = chat_memory.build_prompt_context(conversation_id)
+        rendered_message = _render_chat_message(message, page_context, session_context)
 
         if direct_chat.direct_chat_preferred(cfg.ai, agent_id, direct_target):
             try:
                 target = direct_target or direct_chat.require_direct_chat_target(cfg.ai)
-                return await direct_chat.direct_chat_turn(
+                result = await direct_chat.direct_chat_turn(
                     target=target,
                     message=message,
                     rendered_message=rendered_message,
                     conversation_id=conversation_id,
                 )
+                if result.get("conversation_id"):
+                    chat_memory.record_turn(
+                        conversation_id=str(result["conversation_id"]),
+                        message=message,
+                        page_context=page_context,
+                        tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
+                    )
+                return result
             except direct_chat.DirectChatConfigError as exc:
                 raise HTTPException(
                     status_code=status.HTTP_412_PRECONDITION_FAILED,
@@ -386,11 +416,19 @@ def create_core_app() -> FastAPI:
             ) from exc
 
         duration_ms = max(0, int((time.perf_counter() - started) * 1000))
-        return _extract_chat_turn(
+        result = _extract_chat_turn(
             upstream,
             requested_agent_id=agent_id,
             duration_ms=duration_ms,
         )
+        if result.get("conversation_id"):
+            chat_memory.record_turn(
+                conversation_id=str(result["conversation_id"]),
+                message=message,
+                page_context=page_context,
+                tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
+            )
+        return result
 
     @app.get("/health")
     def health() -> dict[str, str]:

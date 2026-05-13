@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.13 — Structured session memory for chat
+
+- **Short-term investigation memory.** Direct chat now carries a compact server-side session state keyed by `conversation_id`, rather than relying only on the current message and page context.
+- **Derived fact carryover.** Prior tool-backed facts such as the current node focus, active partitions, recent node timeline signals, and recent tool usage can be injected into follow-up turns as structured session memory.
+- **Better follow-up fidelity.** Multi-turn debugging can preserve important investigation context without replaying full transcript history or full raw tool payloads into every prompt.
+
 ## 0.11.12 — Compact tool context for direct chat
 
 - **Prompt-size management.** Direct-model chat now compacts large tool results before feeding them back into the model prompt, instead of appending full raw JSON for every tool call.

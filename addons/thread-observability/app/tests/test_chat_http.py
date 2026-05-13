@@ -9,7 +9,15 @@ from fastapi.testclient import TestClient
 from thread_observability.api import supervisor_client
 from thread_observability.api.http_api import create_core_app
 from thread_observability.config import AIConfig, ThreadObsConfig
+from thread_observability.services import chat_memory
 from thread_observability.services import direct_chat
+
+
+@pytest.fixture(autouse=True)
+def reset_chat_memory_store() -> None:
+    chat_memory.reset()
+    yield
+    chat_memory.reset()
 
 
 def test_chat_agents_endpoint_returns_agent_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,9 +148,9 @@ def test_chat_turn_uses_direct_model_when_auto_configured(monkeypatch: pytest.Mo
         assert target.provider == "cerebras"
         assert message == "hello"
         assert "User message: hello" in rendered_message
-        assert conversation_id is None
+        assert conversation_id is not None
         return {
-            "conversation_id": "direct-1",
+            "conversation_id": str(conversation_id),
             "agent_id": target.agent_id,
             "response": {"text": "direct reply", "card": None},
             "tool_calls": [],
@@ -166,6 +174,7 @@ def test_chat_turn_uses_direct_model_when_auto_configured(monkeypatch: pytest.Mo
     assert body["agent_id"] == "direct:cerebras"
     assert body["response"]["text"] == "direct reply"
     assert body["model"] == "llama-4-scout"
+    assert str(body["conversation_id"]).startswith("direct:") is False
 
 
 def test_chat_turn_uses_direct_model_even_if_ai_enabled_false(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -205,6 +214,91 @@ def test_chat_turn_uses_direct_model_even_if_ai_enabled_false(monkeypatch: pytes
     body = response.json()
     assert body["agent_id"] == "direct:cerebras"
     assert body["response"]["text"] == "direct reply"
+
+
+def test_chat_turn_injects_session_memory_on_direct_followup(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = ThreadObsConfig(
+        ai=AIConfig(
+            enabled=True,
+            provider="cerebras",
+            chat_backend="direct",
+            model="llama-4-scout",
+            api_key="secret",
+        )
+    )
+    rendered_messages: list[str] = []
+
+    async def fake_direct_turn(*, target, message: str, rendered_message: str, conversation_id: str | None):  # noqa: ANN001
+        rendered_messages.append(rendered_message)
+        assert conversation_id is not None
+        if len(rendered_messages) == 1:
+            assert "Session memory:" not in rendered_message
+            return {
+                "conversation_id": str(conversation_id),
+                "agent_id": target.agent_id,
+                "response": {"text": "First reply", "card": None},
+                "tool_calls": [
+                    {
+                        "name": "analyze_node",
+                        "result": {
+                            "eui64": "e6684b9903e8970f",
+                            "node": {
+                                "eui64": "e6684b9903e8970f",
+                                "friendly_name": "Family Room Track Lights",
+                                "status": "online",
+                                "partition_id": 1846206278,
+                            },
+                            "timeline": [{"kind": "re_attached_node"}],
+                        },
+                    },
+                    {
+                        "name": "get_mesh_state",
+                        "result": {"all_partitions": [1846206278, 2107240925]},
+                    },
+                ],
+                "duration_ms": 7,
+                "model": target.model,
+                "streaming": False,
+            }
+        assert "Session memory:" in rendered_message
+        assert "Family Room Track Lights" in rendered_message
+        assert "Current mesh state shows 2 active partitions." in rendered_message
+        assert "Recent node timeline includes: re_attached_node." in rendered_message
+        return {
+            "conversation_id": str(conversation_id),
+            "agent_id": target.agent_id,
+            "response": {"text": "Second reply", "card": None},
+            "tool_calls": [],
+            "duration_ms": 8,
+            "model": target.model,
+            "streaming": False,
+        }
+
+    import thread_observability.api.http_api as http_api
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    monkeypatch.setattr(direct_chat, "direct_chat_turn", fake_direct_turn)
+    client = TestClient(create_core_app())
+
+    first = client.post(
+        "/v1/chat/turn",
+        json={
+            "message": "Tell me what is going on with node e6684b9903e8970f.",
+            "page_context": {"page": "dashboard", "selected_node_eui64": "e6684b9903e8970f"},
+        },
+    )
+    assert first.status_code == 200
+    conversation_id = first.json()["conversation_id"]
+
+    second = client.post(
+        "/v1/chat/turn",
+        json={
+            "message": "What changed recently?",
+            "conversation_id": conversation_id,
+            "page_context": {"page": "dashboard", "selected_node_eui64": "e6684b9903e8970f"},
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["response"]["text"] == "Second reply"
 
 
 def test_chat_turn_explicit_ha_agent_overrides_direct_default(monkeypatch: pytest.MonkeyPatch) -> None:
