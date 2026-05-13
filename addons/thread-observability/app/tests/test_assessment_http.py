@@ -25,6 +25,22 @@ def test_assessment_history_endpoint_paginates(store) -> None:
     assert len(payload["runs"]) == 2
 
 
+def test_assessment_state_endpoint_exposes_scheduler_fields(monkeypatch) -> None:
+    cfg = ThreadObsConfig(assessment=AssessmentConfig(enabled=True))
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+
+    client = TestClient(create_core_app())
+    payload = client.get("/v1/assessment/state").json()
+
+    assert payload["enabled"] is True
+    assert "last_check_at" in payload
+    assert "next_check_at" in payload
+    assert "calls_today" in payload
+    assert "daily_budget" in payload
+    assert "probation_checks_remaining" in payload
+    assert payload["reason"]
+
+
 def test_assessment_run_now_endpoint_executes_when_enabled(store, monkeypatch) -> None:
     cfg = ThreadObsConfig(assessment=AssessmentConfig(enabled=True))
     monkeypatch.setattr(http_api, "get_config", lambda: cfg)

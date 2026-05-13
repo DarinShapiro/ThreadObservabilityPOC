@@ -4,6 +4,49 @@
 
 This document defines the contract that each reasoning module (Thread v1, Energy v2, Climate v3, etc.) must implement to integrate with the HA Reasoning Platform core.
 
+## Runtime Chat Endpoints
+
+The add-on also exposes a lightweight HA-backed chat proxy for the dashboard panel.
+
+### `GET /v1/chat/agents`
+
+Returns the conversation agents Home Assistant currently exposes, preferring HA's `conversation/agent/list` WebSocket command and falling back to scanning `conversation.*` entities.
+
+### `POST /v1/chat/turn`
+
+Request:
+
+```json
+{
+    "message": "why are there two partitions right now?",
+    "conversation_id": "optional-existing-thread",
+    "agent_id": "optional-agent-id",
+    "page_context": {"page": "dashboard"},
+    "streaming": false
+}
+```
+
+Response:
+
+```json
+{
+    "conversation_id": "optional-existing-thread",
+    "agent_id": "conversation.claude",
+    "response": {"text": "...", "card": null},
+    "tool_calls": [],
+    "duration_ms": 1834,
+    "model": "claude-sonnet-4.5",
+    "streaming": false
+}
+```
+
+Behavior:
+
+- Uses the Supervisor token to proxy to HA Core's conversation API.
+- Returns `412` when no HA conversation agent is configured.
+- Returns `502` when HA rejects the upstream request.
+- Rejects `streaming=true` with `501` for forward compatibility; sync-only in v1.
+
 ---
 
 ## Data Adapter Interface
