@@ -44,6 +44,10 @@
 
 6. **[MCP Tool Reference](06-mcp-tools-reference.md)** *(authoritative, auto-generated from the live `/mcp/tools` registry)*
 
+7. **[Sprint Design: Agentic AI Integration](07-agentic-ai-sprint.md)**
+
+8. **[Live AI Evaluation](08-live-ai-eval.md)** *(release-time live acceptance harness for the dashboard chat assistant)*
+
 ---
 
 ## Executive Summary
