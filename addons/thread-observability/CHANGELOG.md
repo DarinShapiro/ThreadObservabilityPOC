@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.3 — Direct model chat fallback
+
+- **Direct model chat path.** Dashboard chat can now route directly to a
+  configured model provider instead of requiring a Home Assistant Assist
+  conversation agent.
+- **OpenAI-compatible providers.** Added direct chat support for `openai`,
+  `cerebras`, and `local` endpoints that expose a `/chat/completions` API.
+- **Agent picker + auto default.** `/v1/chat/agents` now advertises a
+  synthetic direct-model option and reports whether chat defaults to Home
+  Assistant or the configured direct model.
+- **Secrets redaction.** `ai.api_key` is redacted from config inspection
+  surfaces.
+
 ## 0.11.2 — Clarify non-LLM chat fallback
 
 - **Chat fallback hint.** When Home Assistant routes dashboard chat through its

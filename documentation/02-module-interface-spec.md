@@ -6,11 +6,15 @@ This document defines the contract that each reasoning module (Thread v1, Energy
 
 ## Runtime Chat Endpoints
 
-The add-on also exposes a lightweight HA-backed chat proxy for the dashboard panel.
+The add-on also exposes a lightweight dashboard chat endpoint that can use either:
+
+- a Home Assistant conversation agent via `conversation.process`, or
+- a directly-configured model provider for operators who do not want to wire an
+    Assist agent first.
 
 ### `GET /v1/chat/agents`
 
-Returns the conversation agents Home Assistant currently exposes, preferring HA's `conversation/agent/list` WebSocket command and falling back to scanning `conversation.*` entities.
+Returns the conversation agents Home Assistant currently exposes, preferring HA's `conversation/agent/list` WebSocket command and falling back to scanning `conversation.*` entities. When direct model chat is configured, the response also includes a synthetic `direct:<provider>` agent row plus `default_backend` / `default_label` to describe what happens when the UI leaves `agent_id` unset.
 
 ### `POST /v1/chat/turn`
 
@@ -42,10 +46,11 @@ Response:
 
 Behavior:
 
-- Uses the Supervisor token to proxy to HA Core's conversation API.
-- Returns `412` when no HA conversation agent is configured.
-- Returns `502` when HA rejects the upstream request.
 - Rejects `streaming=true` with `501` for forward compatibility; sync-only in v1.
+- When `agent_id` is a Home Assistant agent (or omitted and the default backend is HA), uses the Supervisor token to proxy to HA Core's conversation API.
+- When `agent_id` is `direct:<provider>` (or omitted and the default backend is configured as direct), calls the configured provider directly through an OpenAI-compatible `/chat/completions` API.
+- Returns `412` when the selected backend is not fully configured.
+- Returns `502` when the upstream model provider rejects the request.
 
 ---
 
