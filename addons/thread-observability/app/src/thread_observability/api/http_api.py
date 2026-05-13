@@ -604,4 +604,102 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
 
+    @app.get("/v1/assessment/state")
+    def assessment_state() -> dict[str, object]:
+        try:
+            from ..services.assessment.scheduler import (
+                AssessmentScheduler,
+                ScheduleConfig,
+            )
+
+            cfg = get_config().assessment
+            sched = AssessmentScheduler(
+                store=get_store(),
+                config=ScheduleConfig(
+                    enabled=cfg.enabled,
+                    probation_interval_minutes=cfg.probation_interval_minutes,
+                    probation_checks=cfg.probation_checks,
+                    relaxing_initial_hours=cfg.relaxing_initial_hours,
+                    relaxing_max_hours=cfg.relaxing_max_hours,
+                    heightened_initial_minutes=cfg.heightened_initial_minutes,
+                    heightened_max_hours=cfg.heightened_max_hours,
+                    engaged_interval_minutes=cfg.engaged_interval_minutes,
+                    engaged_decay_minutes=cfg.engaged_decay_minutes,
+                    daily_budget_calls=cfg.daily_budget_calls,
+                ),
+            )
+            snap = sched.snapshot()
+            return {
+                "enabled": snap.enabled,
+                "state": snap.state,
+                "current_interval_seconds": snap.current_interval_seconds,
+                "next_check_at": snap.next_check_at,
+                "last_check_at": snap.last_check_at,
+                "last_verdict": snap.last_verdict,
+                "calls_today": snap.calls_today,
+                "daily_budget": snap.daily_budget,
+                "probation_checks_remaining": snap.probation_checks_remaining,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.get("/v1/assessment/findings")
+    def assessment_findings(state: str = "open", limit: int = 50) -> dict[str, object]:
+        try:
+            rows = get_store().list_assessment_findings(state=state, limit=limit)
+            return {"findings": rows, "count": len(rows)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "findings": []}
+
+    @app.post("/v1/assessment/findings/{finding_id}/dismiss")
+    def assessment_dismiss(
+        finding_id: int, payload: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        try:
+            suppress_seconds = int((payload or {}).get("suppress_seconds") or 86400)
+            row = get_store().dismiss_assessment_finding(
+                finding_id, suppress_seconds=suppress_seconds
+            )
+            if row is None:
+                return {"error": f"finding {finding_id} not found"}
+            return {"ok": True, "finding": row}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.post("/v1/assessment/findings/{finding_id}/feedback")
+    def assessment_feedback(
+        finding_id: int, payload: dict[str, object]
+    ) -> dict[str, object]:
+        try:
+            from ..services.assessment import feedback as feedback_mod
+
+            outcome = str((payload or {}).get("outcome") or "").strip()
+            notes = (payload or {}).get("notes")
+            notes_str = str(notes) if notes is not None else None
+            result = feedback_mod.mark_outcome(
+                finding_id=finding_id,
+                outcome=outcome,
+                notes=notes_str,
+                store=get_store(),
+            )
+            return {"ok": True, "result": result}
+        except LookupError as exc:
+            return {"error": str(exc)}
+        except ValueError as exc:
+            return {"error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
+    @app.get("/v1/assessment/quality")
+    def assessment_quality(since_hours: int = 168) -> dict[str, object]:
+        try:
+            from datetime import timedelta
+
+            from ..services.assessment import feedback as feedback_mod
+
+            since = (datetime.now(UTC) - timedelta(hours=since_hours)).isoformat()
+            return feedback_mod.quality_summary(since=since, store=get_store())
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+
     return app
