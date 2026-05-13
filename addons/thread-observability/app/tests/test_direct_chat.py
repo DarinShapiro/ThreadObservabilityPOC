@@ -84,6 +84,44 @@ def test_parse_tool_arguments_accepts_json_string() -> None:
     assert direct_chat._parse_tool_arguments('{"eui64":"AA"}') == {"eui64": "AA"}
 
 
+def test_chat_tools_include_web_search_and_safe_read_tools() -> None:
+    tools = direct_chat._chat_tools()
+    names = {row["function"]["name"] for row in tools}
+    assert "get_health_snapshot" in names
+    assert "query_history" in names
+    assert "web_search" in names
+    assert "get_config" not in names
+    assert "ha_get_addon_logs" not in names
+
+
 def test_dispatch_chat_tool_rejects_non_whitelisted_tool() -> None:
     result = asyncio.run(direct_chat._dispatch_chat_tool("ha_restart_addon", {}))
     assert result == {"error": "tool not allowed for chat: ha_restart_addon"}
+
+
+def test_dispatch_chat_tool_routes_web_search(monkeypatch) -> None:
+    async def fake_search(query: str, *, max_results: int = 5) -> dict[str, object]:
+        assert query == "matter over thread error 15"
+        assert max_results == 3
+        return {"query": query, "count": 1, "results": [{"title": "doc", "url": "https://example.com"}]}
+
+    monkeypatch.setattr(direct_chat.web_search, "search_web", fake_search)
+    result = asyncio.run(
+        direct_chat._dispatch_chat_tool(
+            "web_search",
+            {"query": "matter over thread error 15", "max_results": 3},
+        )
+    )
+    assert result["count"] == 1
+
+
+def test_dispatch_chat_tool_allows_other_safe_read_tool(monkeypatch) -> None:
+    from thread_observability.api import mcp_tools
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "get_timeseries_health"
+        return {"data": {"backend": "sqlite"}, "meta": {"tool": name}}
+
+    monkeypatch.setattr(mcp_tools, "_dispatch_and_wrap", fake_dispatch)
+    result = asyncio.run(direct_chat._dispatch_chat_tool("get_timeseries_health", {}))
+    assert result["data"]["backend"] == "sqlite"

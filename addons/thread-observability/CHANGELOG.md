@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.5 — Web search and broader chat-safe tool access
+
+- **Web search tool.** Direct-model chat can now call a bounded server-side
+  `web_search` tool for external context when on-box Thread diagnostics are not
+  enough.
+- **Principled tool policy.** Direct chat now exposes all chat-safe read-only
+  MCP tools by default, with only a small denylist for secrets, raw logs, and
+  supervisor/admin surfaces.
+- **Focused coverage.** Added unit coverage for the web-search dispatch path and
+  the broader chat-safe tool selection policy.
+
 ## 0.11.4 — Direct chat tool calling
 
 - **Direct model reasoning can now use MCP tools.** The direct-model chat path

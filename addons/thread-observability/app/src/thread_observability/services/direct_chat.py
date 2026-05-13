@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from ..config import AIConfig
+from . import web_search
 
 _DIRECT_AGENT_PREFIX = "direct:"
 _MAX_TOOL_ROUNDS = 4
@@ -24,20 +25,21 @@ _DEFAULT_SYSTEM_PROMPT = (
     "You are the Thread Observability dashboard assistant. Answer using only the provided "
     "Thread dashboard context, the user's request, and the available diagnostic tools. "
     "Use tools when you need current mesh state, counters, history, or node-specific evidence. "
+    "Use web_search only when outside product or protocol context is actually needed. "
     "Be concise, practical, and explicit about uncertainty when the available evidence is insufficient."
 )
-_CHAT_TOOL_NAMES: tuple[str, ...] = (
-    "start_triage",
-    "get_mesh_state",
-    "get_health_snapshot",
-    "list_active_issues",
-    "list_all_nodes",
-    "list_thread_datasets",
-    "query_history",
-    "analyze_node",
-    "get_counter_series",
-    "compare_node_counters",
+_CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
+    {
+        "get_config",
+        "get_recent_logs",
+        "ha_get_addon_state",
+        "ha_get_addon_logs",
+        "ha_get_supervisor_logs",
+        "ha_check_for_update",
+        "list_otbr_candidates",
+    }
 )
+_WEB_SEARCH_TOOL_NAME = "web_search"
 
 
 class DirectChatConfigError(ValueError):
@@ -174,7 +176,8 @@ def _chat_tools() -> list[dict[str, Any]]:
 
     defs = []
     for row in mcp_tools.TOOL_DEFS:
-        if row.get("name") not in _CHAT_TOOL_NAMES:
+        name = row.get("name")
+        if name not in mcp_tools._READ_TOOLS or name in _CHAT_TOOL_EXCLUDE:
             continue
         defs.append(
             {
@@ -186,6 +189,30 @@ def _chat_tools() -> list[dict[str, Any]]:
                 },
             }
         )
+    defs.append(
+        {
+            "type": "function",
+            "function": {
+                "name": _WEB_SEARCH_TOOL_NAME,
+                "description": (
+                    "Search the public web for external context such as vendor docs, protocol behavior, "
+                    "or product-specific error explanations. Use only when on-box Thread tools are not enough."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Search query."},
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum results to return (default 5, max 10).",
+                            "default": 5,
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        }
+    )
     return defs
 
 
@@ -231,7 +258,12 @@ def _extract_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]]:
 async def _dispatch_chat_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     from ..api import mcp_tools
 
-    if name not in _CHAT_TOOL_NAMES:
+    if name == _WEB_SEARCH_TOOL_NAME:
+        return await web_search.search_web(
+            str(arguments.get("query") or ""),
+            max_results=int(arguments.get("max_results", 5)),
+        )
+    if name not in mcp_tools._READ_TOOLS or name in _CHAT_TOOL_EXCLUDE:
         return {"error": f"tool not allowed for chat: {name}"}
     return await mcp_tools._dispatch_and_wrap(name, arguments)
 
