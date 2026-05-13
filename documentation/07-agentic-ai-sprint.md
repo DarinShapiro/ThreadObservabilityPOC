@@ -250,7 +250,164 @@ All five open questions resolved by @DarinShapiroMS:
   authoritative external references (Thread spec, Matter spec, HA
   release notes, vendor docs) as part of an answer.
 
-## 11. Phases & rough sequencing (updated)
+## 11. Background Diagnostics (proactive AI assessment)
+
+Reactive chat (a user opens the drawer and asks) is half the story.
+The other half is **silent-by-default assessment**: the addon
+quietly checks the network on an adaptive cadence and only surfaces
+when there's something worth a conversation. Internally this
+feature is called **Background Diagnostics**; the on-page indicator
+label is **Adaptive Monitoring**.
+
+### 11.1 Adaptive cadence (state machine with budget cap)
+
+```
+                  ┌──────────────┐
+   install ──────►│ probation    │  every 15 min, for first 3 checks
+                  └──────┬───────┘
+                         │ all clear
+                         ▼
+                  ┌──────────────┐
+                  │ relaxing     │  1h → 6h → 24h (doubling on clean)
+                  └──────┬───────┘
+                         │ N consecutive clean checks
+                         ▼
+                  ┌──────────────┐
+                  │ steady       │  every 24h (max idle interval) ◄──────┐
+                  └──────┬───────┘                                       │
+                         │ verdict=investigate                            │ all clear
+                         ▼                                                │ × M checks
+                  ┌──────────────┐                                        │
+                  │ heightened   │  30 min → 1h → 6h ─► relaxing ─────────┘
+                  └──────┬───────┘
+                         │ user investigates / finding open
+                         ▼
+                  ┌──────────────┐
+                  │ engaged      │  every 5 min (decays after 60 min idle)
+                  └──────────────┘
+```
+
+Configurable in addon options:
+
+| Key | Default | |
+|---|---|---|
+| `assessment.enabled` | install-time radio | One-time prompt; runtime override via switch entity |
+| `assessment.probation_interval_minutes` | 15 | |
+| `assessment.probation_checks` | 3 | |
+| `assessment.relaxing_initial_hours` | 1 | Doubles each clean check |
+| `assessment.relaxing_max_hours` | 24 | The "steady" interval |
+| `assessment.heightened_initial_minutes` | 30 | After a fresh finding |
+| `assessment.heightened_max_hours` | 6 | Before falling back to relaxing |
+| `assessment.engaged_interval_minutes` | 5 | While a chat investigation is active |
+| `assessment.engaged_decay_minutes` | 60 | Engaged persists this long after chat closes |
+| `assessment.daily_budget_calls` | 12 | Rolling-24h cap on assessment LLM calls |
+
+Always-on rules:
+- Run once on addon start/upgrade. (Schedule state persists across
+  updates — we don't reset to probation on every release.)
+- Event triggers (partition change, new node, OTBR restart, fresh
+  stale-link cluster, etc.) fire off-cadence assessments, debounced
+  to once per 60 s.
+- Budget cap drops cadence-driven checks first when exceeded; event
+  triggers are higher-signal and take priority.
+- Schedule state persists in SQLite (`assessment_schedule`) and
+  survives addon updates.
+
+### 11.2 Verdict envelope
+
+```json
+{
+  "verdict": "investigate" | "watch" | "ok",
+  "severity": "watch" | "investigate" | "critical",
+  "confidence": 0.0,
+  "headline": "Eve Door & Window has changed parent 4 times in the last hour",
+  "evidence": [
+    {"tool": "get_counter_series", "key_finding": "parent_change_count delta = 4 (1h)"},
+    {"tool": "get_mesh_state",     "key_finding": "parent flips between R-A and R-B"}
+  ],
+  "suggested_starter_prompt": "Why is Eve Door & Window flapping parents?",
+  "evidence_id": "evid-c8af..."
+}
+```
+
+`severity` is free-form for now (`watch`, `investigate`, and
+eventually `critical` for true outages — OTBR unresponsive, all
+routers offline, data age >30 min). Specifics will evolve as we
+catalog signals (see `documentation/assessment-signals.md`).
+
+### 11.3 Surfacing — four channels, one source of truth
+
+| Channel | When | Audience |
+|---|---|---|
+| **HA Repairs** | Each `investigate` finding → `issue_registry/create_issue` with deep-link to evidence panel. Auto-clears when next assessment confirms resolved. | Humans, system-wide badge in HA sidebar. **Primary surface.** |
+| **In-page banner** | When user is on the dashboard | "I noticed X. [Investigate with me] [Show me what you saw] [Not now] [Dismiss for 24h]" |
+| **HA entities** | Always present | Automation surface for users who want push/voice/lights |
+| **`thread_observability_finding` event** | Each assessment with a finding | Power-user automations needing structured payload |
+
+Dedup key: `finding_key = hash(eui64 + finding_type)`. Re-confirmed
+findings update existing repair/notification, do not duplicate.
+
+### 11.4 HA Device + entity inventory
+
+Registered via Supervisor discovery as a single `thread_observability`
+device. Curated entity set, network-level not per-node:
+
+**Sensors**
+
+| Entity | State | Attributes |
+|---|---|---|
+| `binary_sensor.thread_observability_finding_active` | `on` if ≥1 open investigate finding | `top_finding`, `severity` |
+| `sensor.thread_observability_open_findings` | count | per-finding list (capped) |
+| `sensor.thread_observability_latest_finding` | headline (truncated) | full verdict envelope, `evidence_url` |
+| `sensor.thread_observability_assessment_state` | `probation`/`relaxing`/`steady`/`heightened`/`engaged`/`disabled` | `since`, `reason` |
+| `sensor.thread_observability_next_assessment` | timestamp | |
+| `sensor.thread_observability_data_age_seconds` | seconds | already computed |
+| `sensor.thread_observability_node_count` | total | `{stale, offline, healthy, distinct_partitions}` |
+| `sensor.thread_observability_distinct_partitions` | integer | partition IDs |
+
+**Buttons**
+
+- `button.thread_observability_run_assessment` — force an off-cadence assessment (respects daily budget)
+- `button.thread_observability_acknowledge_findings` — dismiss-all for 24h
+
+**Switch**
+
+- `switch.thread_observability_ai_assessments` — runtime override of the addon option
+
+**Update entity**
+
+- `update.thread_observability` — standard HA update flow
+
+**Events**
+
+- `thread_observability_finding` — fired on each new/re-confirmed finding
+- `thread_observability_finding_cleared` — fired when a previously-open finding resolves
+
+### 11.5 Header indicator (in-page)
+
+Small chip in the dashboard header:
+
+```
+Adaptive Monitoring · steady · next check 14 h
+```
+
+States: `idle` (green dot, when disabled — but only shown if user enabled it
+once), `steady`/`relaxing`/`probation` (green), `heightened` (amber),
+`engaged` (blue), `assessing now` (animated). Hover for details. Click
+opens the Background Diagnostics panel (configuration + history).
+
+### 11.6 Cost expectations
+
+| Install profile | Assessments / day | Notes |
+|---|---|---|
+| Healthy network, steady state | ~1 | One LLM call chain per day |
+| Network with chronic open finding | 4–6 | Heightened mode |
+| User actively investigating | ~12 / hr (engaged window) | Decays back after 60 min |
+
+Sub-dollar/month for typical agents; trivial for self-hosted Ollama.
+Whole feature gated behind `assessment.enabled` (opt-in at install).
+
+## 12. Phases & rough sequencing (updated)
 
 1. **Phase 1 — Transport + docs + tool enrichment.** Issues #7, #8,
    #16. Path A works end-to-end with HA's MCP Client and the tools
@@ -260,12 +417,17 @@ All five open questions resolved by @DarinShapiroMS:
 3. **Phase 3 — Context-aware + web search.** Issues #11, #12, #17.
    Selection-aware prompts, tool-call surfacing, agent can call
    `web_search`.
-4. **Phase 4 — Safety knobs.** Issue #14 (options). Persistence
-   (#13) explicitly *not* part of v1.
-5. **Phase 5 — Polish.** Issue #15 (telemetry), hybrid streaming
-   transport with sync fallback, voice (optional).
+4. **Phase 4 — Background Diagnostics.** Issues #18 (adaptive
+   scheduler), #19 (assessment engine + verdict envelope), #20
+   (in-page surfacing + header indicator + dismiss/suppress), #21
+   (HA device + entities + repairs + events + blueprint), #22
+   (feedback / outcome tool). #14 (options) gains the assessment
+   config keys.
+5. **Phase 5 — Polish.** Issue #15 (telemetry, including assessment
+   precision and dismissal rate), hybrid streaming transport with
+   sync fallback, voice (optional).
 
-## 12. Out of scope (for now)
+## 13. Out of scope (for now)
 
 - Custom fine-tuned Thread model.
 - Multi-user / multi-tenant chat sessions.
