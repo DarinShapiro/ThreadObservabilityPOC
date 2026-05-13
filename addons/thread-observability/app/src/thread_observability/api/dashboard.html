@@ -138,7 +138,61 @@
   .delta-reset { color: var(--muted); font-style: italic; }
 
   /* Highlight target node from hot-spots click */
-  tr.flash-target td { background: rgba(96,165,250,0.18) !important; transition: background 1.2s ease-out; }</style>
+  tr.flash-target td { background: rgba(96,165,250,0.18) !important; transition: background 1.2s ease-out; }
+
+  /* Node detail modal */
+  #node-detail-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 1000;
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 40px 20px; overflow-y: auto;
+  }
+  #node-detail-backdrop.open { display: flex; }
+  #node-detail {
+    background: var(--panel); border:1px solid var(--border); border-radius: 12px;
+    width: min(960px, 100%); max-width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  #node-detail .nd-head {
+    display:flex; align-items:flex-start; gap:14px; padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  #node-detail .nd-title { flex:1; }
+  #node-detail .nd-title h2 {
+    font-size: 18px; margin: 0 0 4px; color: var(--fg);
+    text-transform: none; letter-spacing: 0; font-weight: 700;
+  }
+  #node-detail .nd-title .nd-sub { color: var(--muted); font-size: 12px; }
+  #node-detail .nd-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  #node-detail .nd-btn {
+    background: var(--panel2); color: var(--fg); border:1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: 600;
+    cursor: pointer; text-decoration: none; display:inline-block;
+  }
+  #node-detail .nd-btn:hover { border-color: var(--accent); color: var(--accent); }
+  #node-detail .nd-close {
+    background: transparent; color: var(--muted); border:0; font-size: 22px;
+    cursor: pointer; padding: 0 4px; line-height: 1;
+  }
+  #node-detail .nd-close:hover { color: var(--fg); }
+  #node-detail .nd-body { padding: 16px 20px 20px; }
+  #node-detail .nd-section { margin-bottom: 18px; }
+  #node-detail .nd-section h3 {
+    font-size: 11px; color: var(--muted); text-transform: uppercase;
+    letter-spacing: 0.04em; margin: 0 0 8px; font-weight: 600;
+  }
+  #node-detail table { font-size: 12px; }
+  #node-detail table th, #node-detail table td { padding: 6px 8px; }
+  #node-detail .nd-route-list { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size: 13px; }
+  #node-detail .nd-hop {
+    background: var(--panel2); border:1px solid var(--border); border-radius: 6px;
+    padding: 4px 10px;
+  }
+  #node-detail .nd-hop.otbr { border-color:#7f1d1d; color:#fca5a5; }
+  #node-detail .nd-arrow { color: var(--muted); font-size: 14px; }
+  #node-detail .nd-cost { color: var(--muted); font-size: 11px; }
+  tbody tr[data-eui] { cursor: pointer; }
+  tbody tr[data-eui] td:first-child::before {
+    content: ''; display:inline-block;
+  }</style>
 </head>
 <body>
 <header>
@@ -334,6 +388,22 @@
     </details>
   </section>
 </main>
+
+<div id="node-detail-backdrop" role="dialog" aria-modal="true" aria-labelledby="nd-title">
+  <div id="node-detail">
+    <div class="nd-head">
+      <div class="nd-title">
+        <h2 id="nd-title">…</h2>
+        <div class="nd-sub" id="nd-subtitle">…</div>
+      </div>
+      <div class="nd-actions" id="nd-actions"></div>
+      <button class="nd-close" id="nd-close" aria-label="Close">×</button>
+    </div>
+    <div class="nd-body" id="nd-body">
+      <div class="empty">loading…</div>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = (sel) => document.querySelector(sel);
@@ -948,6 +1018,14 @@ function renderNodesTable(nodes) {
       ? '<code title="' + escapeHtml(euiTip) + '">' + n.eui64.slice(-6).toUpperCase() + '</code>'
       : '<span class="muted">—</span>'});
     tr.append(nameCell, areaCell, roleCell, rssiCell, lqiCell, retryCell, parentCell, statusCell, seenCell, euiCell);
+    if (n.eui64) {
+      tr.addEventListener('click', (ev) => {
+        // Ignore clicks on inner interactive elements (links, code w/ tooltip selections).
+        const t = ev.target;
+        if (t && (t.tagName === 'A' || t.closest('a'))) return;
+        openNodeDetail(n.eui64);
+      });
+    }
     tbody.appendChild(tr);
   }
   if (!sorted.length) {
@@ -1359,6 +1437,250 @@ async function pipelinePoll() {
   } catch (_) { /* ignore */ }
 }
 setInterval(pipelinePoll, 1000);
+
+// ---------------- Node detail modal ----------------
+
+function nodeFromCache(eui) {
+  if (!lastStatus || !Array.isArray(lastStatus.all_nodes)) return null;
+  return lastStatus.all_nodes.find(n => (n.eui64 || '').toLowerCase() === eui.toLowerCase()) || null;
+}
+
+function fmtLqi(v) { return v == null ? '—' : String(v); }
+function fmtRssi(v) { return v == null ? '—' : (v + ' dBm'); }
+function fmtAgeSec(v) {
+  if (v == null) return '—';
+  const s = Number(v);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.round(s/60) + 'm';
+  if (s < 86400) return Math.round(s/3600) + 'h';
+  return Math.round(s/86400) + 'd';
+}
+function fmtPct(v) {
+  // frame_error_rate / message_error_rate are uint16 0..65535 representing
+  // a fraction (0xFFFF == 100%). Render as percent.
+  if (v == null) return '—';
+  return ((Number(v) / 65535) * 100).toFixed(1) + '%';
+}
+function shortEui(eui) { return eui ? eui.slice(-6).toUpperCase() : '—'; }
+function nameOrEui(name, eui) {
+  if (name) return name;
+  if (eui) return shortEui(eui);
+  return '—';
+}
+
+function renderRouteSection(rd) {
+  if (!rd) return '<div class="empty">no route data</div>';
+  if (rd.error) return '<div class="empty">error: ' + escapeHtml(rd.error) + '</div>';
+  const hops = rd.hops || [];
+  if (!hops.length) {
+    const issues = (rd.issues || []).map(i => i.code + ': ' + i.detail).join(' · ');
+    return '<div class="empty">no path' + (issues ? ' — ' + escapeHtml(issues) : '') + '</div>';
+  }
+  const parts = [];
+  hops.forEach((h, i) => {
+    const cls = h.is_otbr ? 'nd-hop otbr' : 'nd-hop';
+    const nm = nameOrEui(h.name, h.eui64);
+    parts.push('<span class="' + cls + '">' + escapeHtml(nm) + '</span>');
+    if (i < hops.length - 1) {
+      const next = hops[i + 1];
+      const cost = next && next.path_cost != null ? ' cost ' + next.path_cost : '';
+      parts.push('<span class="nd-arrow">→<span class="nd-cost">' + escapeHtml(cost) + '</span></span>');
+    }
+  });
+  const completeBadge = rd.complete
+    ? '<span class="pill good">complete</span>'
+    : '<span class="pill warn">partial</span>';
+  const issuesHtml = (rd.issues || []).length
+    ? '<div class="parent-hint" style="margin-top:6px;">' +
+      (rd.issues || []).map(i => escapeHtml(i.code + ': ' + i.detail)).join('<br>') + '</div>'
+    : '';
+  return completeBadge + ' <span class="muted">' + hops.length + ' hop(s)</span>' +
+         '<div class="nd-route-list" style="margin-top:8px;">' + parts.join('') + '</div>' +
+         issuesHtml;
+}
+
+function renderNeighborTable(nd) {
+  if (!nd) return '<div class="empty">no neighbors</div>';
+  if (nd.error) return '<div class="empty">error: ' + escapeHtml(nd.error) + '</div>';
+  const rows = nd.neighbors || [];
+  if (!rows.length) return '<div class="empty">no neighbor-table entries</div>';
+  const tr = [];
+  tr.push('<table><thead><tr>' +
+    '<th>Neighbor</th><th>RSSI</th><th>LQI</th><th>Role</th>' +
+    '<th title="Frame error rate (link layer)">FER</th>' +
+    '<th title="Message error rate (MLE/IPv6)">MER</th>' +
+    '<th>Age</th></tr></thead><tbody>');
+  for (const r of rows) {
+    const role = r.is_child ? 'child' : (r.full_thread_device ? 'router/REED' : 'end');
+    const sleepy = r.rx_on_when_idle === 0 ? ' · sleepy' : '';
+    tr.push('<tr>' +
+      '<td>' + escapeHtml(nameOrEui(r.name, r.neighbor_eui64)) +
+        '<div class="parent-hint"><code>' + escapeHtml(shortEui(r.neighbor_eui64)) + '</code></div></td>' +
+      '<td class="' + rssiClass(r.rssi_avg) + '">' + escapeHtml(fmtRssi(r.rssi_avg)) + '</td>' +
+      '<td class="' + lqiClass(r.lqi_in) + '">' + fmtLqi(r.lqi_in) + '</td>' +
+      '<td>' + escapeHtml(role + sleepy) + '</td>' +
+      '<td>' + escapeHtml(fmtPct(r.frame_error_rate)) + '</td>' +
+      '<td>' + escapeHtml(fmtPct(r.message_error_rate)) + '</td>' +
+      '<td>' + escapeHtml(fmtAgeSec(r.age_seconds)) + '</td></tr>');
+  }
+  tr.push('</tbody></table>');
+  return tr.join('');
+}
+
+function renderRouteTableRows(nd) {
+  if (!nd) return '<div class="empty">no route-table entries</div>';
+  if (nd.error) return '';
+  const rows = nd.routes || [];
+  if (!rows.length) return '<div class="empty">no route-table entries</div>';
+  const out = [];
+  out.push('<table><thead><tr>' +
+    '<th>Destination</th><th title="Effective forwarding next hop">Next hop</th>' +
+    '<th>Cost</th><th>LQI in/out</th><th>Link</th><th>Age</th></tr></thead><tbody>');
+  for (const r of rows) {
+    const nh = r.effective_next_hop_name || r.effective_next_hop_eui64
+      ? nameOrEui(r.effective_next_hop_name, r.effective_next_hop_eui64)
+      : '—';
+    const linkBadge = r.is_direct_link
+      ? '<span class="pill good">direct</span>'
+      : (r.link_established === 1 ? '<span class="pill muted">via</span>' : '<span class="pill warn">indirect</span>');
+    out.push('<tr>' +
+      '<td>' + escapeHtml(nameOrEui(r.name, r.neighbor_eui64)) +
+        '<div class="parent-hint"><code>' + escapeHtml(shortEui(r.neighbor_eui64)) + '</code></div></td>' +
+      '<td>' + escapeHtml(nh) + '</td>' +
+      '<td>' + (r.path_cost == null ? '—' : escapeHtml(String(r.path_cost))) + '</td>' +
+      '<td>' + fmtLqi(r.lqi_in) + ' / ' + fmtLqi(r.lqi_out) + '</td>' +
+      '<td>' + linkBadge + '</td>' +
+      '<td>' + escapeHtml(fmtAgeSec(r.age_seconds)) + '</td></tr>');
+  }
+  out.push('</tbody></table>');
+  return out.join('');
+}
+
+function renderChildrenSection(cd) {
+  if (!cd) return null;
+  if (cd.error) return '<div class="empty">error: ' + escapeHtml(cd.error) + '</div>';
+  const rows = cd.children || [];
+  if (!rows.length) return '<div class="empty">no children attached</div>';
+  const cap = cd.capacity_hint || 10;
+  const capPill = cd.is_at_capacity
+    ? '<span class="pill bad">' + rows.length + ' / ' + cap + ' (at capacity)</span>'
+    : '<span class="pill good">' + rows.length + ' / ' + cap + '</span>';
+  const tr = ['<div style="margin-bottom:8px;">' + capPill + '</div>'];
+  tr.push('<table><thead><tr>' +
+    '<th>Child</th><th>RSSI</th><th>LQI</th><th>Mode</th><th>FER</th><th>Age</th></tr></thead><tbody>');
+  for (const r of rows) {
+    const sleepy = r.rx_on_when_idle === 0 ? 'sleepy' : 'always-on';
+    const stale = r.registered ? '' : ' <span class="pill warn">stale</span>';
+    tr.push('<tr>' +
+      '<td>' + escapeHtml(nameOrEui(r.name, r.eui64)) + stale +
+        '<div class="parent-hint"><code>' + escapeHtml(shortEui(r.eui64)) + '</code></div></td>' +
+      '<td class="' + rssiClass(r.rssi_avg) + '">' + escapeHtml(fmtRssi(r.rssi_avg)) + '</td>' +
+      '<td class="' + lqiClass(r.lqi_in) + '">' + fmtLqi(r.lqi_in) + '</td>' +
+      '<td>' + escapeHtml(sleepy) + '</td>' +
+      '<td>' + escapeHtml(fmtPct(r.frame_error_rate)) + '</td>' +
+      '<td>' + escapeHtml(fmtAgeSec(r.age_seconds)) + '</td></tr>');
+  }
+  tr.push('</tbody></table>');
+  return tr.join('');
+}
+
+async function openNodeDetail(eui) {
+  const backdrop = $('#node-detail-backdrop');
+  const titleEl = $('#nd-title');
+  const subEl = $('#nd-subtitle');
+  const bodyEl = $('#nd-body');
+  const actionsEl = $('#nd-actions');
+  const n = nodeFromCache(eui) || { eui64: eui };
+
+  // Header.
+  titleEl.textContent = n.display_name || n.friendly_name || shortEui(eui);
+  const subBits = [];
+  if (n.manufacturer || n.model) subBits.push([n.manufacturer, n.model].filter(Boolean).join(' '));
+  if (n.sw_version) subBits.push('sw ' + n.sw_version);
+  if (n.eui64) subBits.push('EUI64 ' + n.eui64);
+  if (n.partition_id != null) subBits.push('partition ' + String(n.partition_id).slice(-4));
+  if (n.routing_role) subBits.push(n.routing_role);
+  if (n.status) subBits.push(n.status);
+  subEl.textContent = subBits.join(' · ');
+
+  // Actions (HA deep link). Use target="_top" to escape the ingress iframe.
+  actionsEl.innerHTML = '';
+  if (n.device_id) {
+    const a = el('a', {
+      class: 'nd-btn',
+      href: '/config/devices/device/' + n.device_id,
+      target: '_top',
+      rel: 'noopener',
+      title: 'Open device page in Home Assistant',
+    }, 'Open in HA ↗');
+    actionsEl.appendChild(a);
+  }
+
+  bodyEl.innerHTML = '<div class="empty">loading…</div>';
+  backdrop.classList.add('open');
+
+  // Fetch route / neighbors / (children if router-class) in parallel.
+  const isRouterClass = n.routing_role === 'leader' || n.device_kind === 'router' || n.device_kind === 'reed';
+  const fetches = [
+    fetchJSON('v1/routes/' + encodeURIComponent(eui)).catch(e => ({ error: e.message })),
+    fetchJSON('v1/neighbors/' + encodeURIComponent(eui)).catch(e => ({ error: e.message })),
+    isRouterClass
+      ? fetchJSON('v1/children/' + encodeURIComponent(eui)).catch(e => ({ error: e.message }))
+      : Promise.resolve(null),
+  ];
+  let routeData, neighData, childData;
+  try {
+    [routeData, neighData, childData] = await Promise.all(fetches);
+  } catch (e) {
+    bodyEl.innerHTML = '<div class="empty">error loading: ' + escapeHtml(e.message) + '</div>';
+    return;
+  }
+  // If user closed in the meantime, bail.
+  if (!backdrop.classList.contains('open')) return;
+  // If the modal is now showing a different node (rapid clicks), bail.
+  if (backdrop.dataset.eui && backdrop.dataset.eui !== eui) return;
+
+  const sections = [];
+  sections.push(
+    '<div class="nd-section"><h3>Route to OTBR</h3>' + renderRouteSection(routeData) + '</div>'
+  );
+  sections.push(
+    '<div class="nd-section"><h3>Neighbor table' +
+    (neighData && neighData.neighbor_count != null ? ' (' + neighData.neighbor_count + ')' : '') +
+    '</h3>' + renderNeighborTable(neighData) + '</div>'
+  );
+  if (isRouterClass) {
+    sections.push(
+      '<div class="nd-section"><h3>Route table' +
+      (neighData && neighData.route_count != null ? ' (' + neighData.route_count + ')' : '') +
+      '</h3>' + renderRouteTableRows(neighData) + '</div>'
+    );
+    const childHtml = renderChildrenSection(childData);
+    if (childHtml) {
+      sections.push(
+        '<div class="nd-section"><h3>Children' +
+        (childData && childData.child_count != null ? ' (' + childData.child_count + ')' : '') +
+        '</h3>' + childHtml + '</div>'
+      );
+    }
+  }
+  bodyEl.innerHTML = sections.join('');
+  backdrop.dataset.eui = eui;
+}
+
+function closeNodeDetail() {
+  const backdrop = $('#node-detail-backdrop');
+  backdrop.classList.remove('open');
+  backdrop.dataset.eui = '';
+}
+
+$('#nd-close').addEventListener('click', closeNodeDetail);
+$('#node-detail-backdrop').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeNodeDetail();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#node-detail-backdrop').classList.contains('open')) closeNodeDetail();
+});
 
 refresh().then(refreshDeltas);
 setInterval(refresh, 10000);

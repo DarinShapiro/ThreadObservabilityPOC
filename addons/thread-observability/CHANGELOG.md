@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.10.4 — Node detail pane
+
+Clicking any row in the Thread Nodes table now opens a detail modal
+for that node. The pane shows:
+
+- **Route to OTBR** — the resolved multi-hop path with per-hop cost,
+  a complete/partial badge, and any routing issues (uses
+  `/v1/routes/{eui64}`).
+- **Neighbor table** — every NeighborTable entry the node reports:
+  neighbor name, RSSI/LQI, role (router/child/end, sleepy flag),
+  frame & message error rate, age (uses `/v1/neighbors/{eui64}`).
+- **Route table** (routers/leader/REED only) — destination, effective
+  next hop, cost, in/out LQI, direct-link badge, age.
+- **Children** (routers/leader/REED only) — child roster with link
+  quality and a capacity badge against the Thread practical 10-child
+  cap (uses `/v1/children/{eui64}`). Stale (unregistered) children
+  are flagged.
+- **Open in HA** button — deep-links to the device page in HA via
+  `/config/devices/device/<device_id>` with `target="_top"` so it
+  breaks out of the ingress iframe.
+
+ESC, the × button, or clicking the backdrop closes the pane.
+
 ## 0.10.3 — RSSI: name the strongest reporter
 
 The Network-tab Nodes table previously showed each node's RSSI/LQI as a
