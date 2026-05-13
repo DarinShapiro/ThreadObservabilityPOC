@@ -79,8 +79,6 @@ def direct_agent_requested(agent_id: str | None) -> bool:
 
 
 def resolve_direct_chat_target(ai: AIConfig) -> DirectChatTarget | None:
-    if not ai.enabled:
-        return None
     provider = _normalize_provider(ai.provider)
     if provider not in {"openai", "cerebras", "local"}:
         return None

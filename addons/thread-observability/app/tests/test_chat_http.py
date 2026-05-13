@@ -61,6 +61,32 @@ def test_chat_agents_endpoint_includes_direct_agent_when_configured(monkeypatch:
     assert body["default_label"].startswith("Auto (Direct Cerebras")
 
 
+def test_chat_agents_endpoint_includes_direct_agent_even_if_ai_enabled_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_list_agents() -> dict[str, object]:
+        return {"count": 0, "source": "ws", "agents": []}
+
+    cfg = ThreadObsConfig(
+        ai=AIConfig(
+            enabled=False,
+            provider="cerebras",
+            chat_backend="direct",
+            model="llama3.1-8b",
+            api_key="secret",
+        )
+    )
+    monkeypatch.setattr(supervisor_client, "list_conversation_agents", fake_list_agents)
+    import thread_observability.api.http_api as http_api
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    client = TestClient(create_core_app())
+
+    response = client.get("/v1/chat/agents")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["agents"][0]["agent_id"] == "direct:cerebras"
+    assert body["default_backend"] == "direct"
+
+
 def test_chat_turn_success_shapes_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_process(*, text: str, conversation_id: str | None = None, agent_id: str | None = None) -> dict[str, object]:
         assert "Page context:" in text
@@ -140,6 +166,45 @@ def test_chat_turn_uses_direct_model_when_auto_configured(monkeypatch: pytest.Mo
     assert body["agent_id"] == "direct:cerebras"
     assert body["response"]["text"] == "direct reply"
     assert body["model"] == "llama-4-scout"
+
+
+def test_chat_turn_uses_direct_model_even_if_ai_enabled_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = ThreadObsConfig(
+        ai=AIConfig(
+            enabled=False,
+            provider="cerebras",
+            chat_backend="direct",
+            model="llama3.1-8b",
+            api_key="secret",
+        )
+    )
+
+    async def fake_direct_turn(*, target, message: str, rendered_message: str, conversation_id: str | None):  # noqa: ANN001
+        assert target.provider == "cerebras"
+        return {
+            "conversation_id": "direct-1",
+            "agent_id": target.agent_id,
+            "response": {"text": "direct reply", "card": None},
+            "tool_calls": [],
+            "duration_ms": 7,
+            "model": target.model,
+            "streaming": False,
+        }
+
+    async def fail_ha_process(**kwargs):  # noqa: ARG001
+        raise AssertionError("HA path should not be called")
+
+    import thread_observability.api.http_api as http_api
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    monkeypatch.setattr(direct_chat, "direct_chat_turn", fake_direct_turn)
+    monkeypatch.setattr(supervisor_client, "conversation_process", fail_ha_process)
+    client = TestClient(create_core_app())
+
+    response = client.post("/v1/chat/turn", json={"message": "hello", "page_context": {"page": "dashboard"}})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["agent_id"] == "direct:cerebras"
+    assert body["response"]["text"] == "direct reply"
 
 
 def test_chat_turn_explicit_ha_agent_overrides_direct_default(monkeypatch: pytest.MonkeyPatch) -> None:

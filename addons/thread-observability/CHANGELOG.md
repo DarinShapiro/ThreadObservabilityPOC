@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.6 — Direct chat no longer depends on ai.enabled
+
+- **Fix direct chat routing.** Direct-model chat now activates from its own
+  explicit chat configuration (`provider`, `chat_backend`, `model`, `api_key`)
+  and no longer incorrectly falls back to Home Assistant when the older
+  general-purpose `ai.enabled` flag is still false.
+- **Regression coverage.** Added focused tests covering direct chat routing and
+  agent listing when `ai.enabled=false`.
+
 ## 0.11.5 — Web search and broader chat-safe tool access
 
 - **Web search tool.** Direct-model chat can now call a bounded server-side
