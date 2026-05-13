@@ -5,19 +5,25 @@ from __future__ import annotations
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pathlib import Path
 
 from thread_observability.api import supervisor_client
 from thread_observability.api.http_api import create_core_app
 from thread_observability.config import AIConfig, ThreadObsConfig
 from thread_observability.services import chat_memory
 from thread_observability.services import direct_chat
+from thread_observability.storage.sqlite_store import SQLiteStore, reset_store_for_tests
 
 
 @pytest.fixture(autouse=True)
-def reset_chat_memory_store() -> None:
+def reset_chat_memory_store(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "state.db")
+    reset_store_for_tests(store)
     chat_memory.reset()
     yield
     chat_memory.reset()
+    reset_store_for_tests(None)
+    store.close()
 
 
 def test_chat_agents_endpoint_returns_agent_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -264,6 +270,10 @@ def test_chat_turn_injects_session_memory_on_direct_followup(monkeypatch: pytest
         assert "Family Room Track Lights" in rendered_message
         assert "Current mesh state shows 2 active partitions." in rendered_message
         assert "Recent node timeline includes: re_attached_node." in rendered_message
+        assert "hypotheses" in rendered_message
+        assert "Partition split or stale Thread dataset may explain the observed behavior." in rendered_message
+        assert "pending_questions" in rendered_message
+        assert "What is going on with node e6684b9903e8970f?" in rendered_message
         return {
             "conversation_id": str(conversation_id),
             "agent_id": target.agent_id,
@@ -282,12 +292,17 @@ def test_chat_turn_injects_session_memory_on_direct_followup(monkeypatch: pytest
     first = client.post(
         "/v1/chat/turn",
         json={
-            "message": "Tell me what is going on with node e6684b9903e8970f.",
-            "page_context": {"page": "dashboard", "selected_node_eui64": "e6684b9903e8970f"},
+            "message": "What is going on with node e6684b9903e8970f?",
+            "page_context": {
+                "page": "dashboard",
+                "selected_node_eui64": "e6684b9903e8970f",
+                "snapshot_summary": {"partition_count": 2, "distinct_thread_networks": 2},
+            },
         },
     )
     assert first.status_code == 200
     conversation_id = first.json()["conversation_id"]
+    chat_memory.reset()
 
     second = client.post(
         "/v1/chat/turn",

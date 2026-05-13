@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.14 — Persisted chat memory and richer session state
+
+- **Restart-safe chat memory.** Structured chat session state now persists in SQLite, so compact investigation context can survive add-on restarts instead of living only in process memory.
+- **Richer memory schema.** Session memory now carries explicit `hypotheses` and `pending_questions` alongside confirmed facts, focus, and recent tool usage.
+- **Prompt carryover after cache reset.** Follow-up turns can reload persisted session state and inject it back into prompts even after the in-process cache is cleared.
+
 ## 0.11.13 — Structured session memory for chat
 
 - **Short-term investigation memory.** Direct chat now carries a compact server-side session state keyed by `conversation_id`, rather than relying only on the current message and page context.

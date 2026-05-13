@@ -1,16 +1,41 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
+
+from ..storage.sqlite_store import get_store
 
 _SESSION_TTL_SECONDS = 6 * 60 * 60
 _MAX_FACTS = 8
 _MAX_RECENT_TOOLS = 6
 _MAX_GOAL_CHARS = 240
+_MAX_HYPOTHESES = 4
+_MAX_PENDING_QUESTIONS = 4
 _NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
+_QUESTION_PREFIXES = (
+    "what ",
+    "why ",
+    "how ",
+    "which ",
+    "when ",
+    "where ",
+    "who ",
+    "is ",
+    "are ",
+    "can ",
+    "could ",
+    "should ",
+    "do ",
+    "does ",
+    "did ",
+)
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -30,6 +55,8 @@ class ChatSessionState:
     selected_node_eui64: str | None = None
     selected_partition_ids: list[int] = field(default_factory=list)
     confirmed_facts: list[SessionFact] = field(default_factory=list)
+    hypotheses: list[str] = field(default_factory=list)
+    pending_questions: list[str] = field(default_factory=list)
     recent_tools: list[str] = field(default_factory=list)
 
 
@@ -45,6 +72,11 @@ class ChatSessionStore:
         if existing is not None:
             existing.updated_at = now
             return existing
+        persisted = self._load_persisted(session_id)
+        if persisted is not None:
+            persisted.updated_at = now
+            self._sessions[session_id] = persisted
+            return persisted
         state = ChatSessionState(
             conversation_id=session_id,
             created_at=now,
@@ -56,7 +88,12 @@ class ChatSessionStore:
     def build_prompt_context(self, conversation_id: str | None) -> dict[str, Any] | None:
         if not conversation_id:
             return None
-        state = self._sessions.get(str(conversation_id).strip())
+        session_id = str(conversation_id).strip()
+        state = self._sessions.get(session_id)
+        if state is None:
+            state = self._load_persisted(session_id)
+            if state is not None:
+                self._sessions[session_id] = state
         if state is None:
             return None
         payload: dict[str, Any] = {}
@@ -71,6 +108,10 @@ class ChatSessionStore:
             payload["focus"] = focus
         if state.confirmed_facts:
             payload["confirmed_facts"] = [fact.text for fact in state.confirmed_facts[:_MAX_FACTS]]
+        if state.hypotheses:
+            payload["hypotheses"] = state.hypotheses[:_MAX_HYPOTHESES]
+        if state.pending_questions:
+            payload["pending_questions"] = state.pending_questions[:_MAX_PENDING_QUESTIONS]
         if state.recent_tools:
             payload["recent_tools"] = state.recent_tools[:_MAX_RECENT_TOOLS]
         return payload or None
@@ -87,6 +128,8 @@ class ChatSessionStore:
         state.updated_at = time.time()
         goal = " ".join(str(message or "").split())
         state.current_goal = goal[:_MAX_GOAL_CHARS] if goal else state.current_goal
+        if self._looks_like_question(message):
+            self._push_pending_question(state, goal[:_MAX_GOAL_CHARS])
 
         selected_node = None
         if isinstance(page_context, dict):
@@ -101,6 +144,10 @@ class ChatSessionStore:
                         key="dashboard_partition_count",
                         text=f"Dashboard snapshot shows {partition_count} Thread partitions.",
                         source="page_context",
+                    )
+                    self._set_hypothesis(
+                        state,
+                        "Partition split or stale Thread dataset may explain the observed behavior.",
                     )
                 if distinct_networks > 1:
                     self._set_fact(
@@ -123,6 +170,7 @@ class ChatSessionStore:
             state.recent_tools = state.recent_tools[:_MAX_RECENT_TOOLS]
             result = call.get("result") if isinstance(call.get("result"), dict) else call.get("result")
             self._derive_facts_from_tool(state, name, result)
+        self._persist(state)
         return state
 
     def reset(self) -> None:
@@ -168,6 +216,11 @@ class ChatSessionStore:
                     text=f"Recent node timeline includes: {joined}.",
                     source=name,
                 )
+            if "re_attached_node" in notable:
+                self._set_hypothesis(
+                    state,
+                    "Recent recommission or identity churn may be relevant.",
+                )
             physical_identity = result.get("physical_identity") if isinstance(result.get("physical_identity"), dict) else None
             if physical_identity and int(physical_identity.get("duplicate_count") or 0) > 1:
                 self._set_fact(
@@ -175,6 +228,10 @@ class ChatSessionStore:
                     key=f"physical_identity:{eui64 or friendly}",
                     text=f"Physical identity appears under {int(physical_identity.get('duplicate_count') or 0)} EUI64s.",
                     source=name,
+                )
+                self._set_hypothesis(
+                    state,
+                    "Duplicate physical identity suggests a recommissioned or ghost device record.",
                 )
             return
         if name == "query_history" and isinstance(result, list):
@@ -212,6 +269,10 @@ class ChatSessionStore:
                     text=f"Current mesh state shows {len(partitions)} active partitions.",
                     source=name,
                 )
+                self._set_hypothesis(
+                    state,
+                    "Partition split or stale Thread dataset may explain the observed behavior.",
+                )
             return
         if name == "start_triage" and isinstance(result, dict):
             health = result.get("health") if isinstance(result.get("health"), dict) else {}
@@ -233,6 +294,101 @@ class ChatSessionStore:
                     source=name,
                 )
 
+    def _set_hypothesis(self, state: ChatSessionState, hypothesis: str) -> None:
+        text = " ".join(str(hypothesis or "").split())
+        if not text:
+            return
+        state.hypotheses = [item for item in state.hypotheses if item != text]
+        state.hypotheses.insert(0, text)
+        state.hypotheses = state.hypotheses[:_MAX_HYPOTHESES]
+
+    def _push_pending_question(self, state: ChatSessionState, question: str) -> None:
+        text = " ".join(str(question or "").split())
+        if not text:
+            return
+        state.pending_questions = [item for item in state.pending_questions if item != text]
+        state.pending_questions.insert(0, text)
+        state.pending_questions = state.pending_questions[:_MAX_PENDING_QUESTIONS]
+
+    def _persist(self, state: ChatSessionState) -> None:
+        created_at = self._to_iso(state.created_at)
+        updated_at = self._to_iso(state.updated_at)
+        expires_at = self._to_iso(state.updated_at + _SESSION_TTL_SECONDS)
+        payload = self._serialize_state(state)
+        try:
+            get_store().upsert_chat_session_memory(
+                conversation_id=state.conversation_id,
+                created_at=created_at,
+                updated_at=updated_at,
+                expires_at=expires_at,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("chat_memory: failed to persist session %s", state.conversation_id)
+
+    def _load_persisted(self, conversation_id: str) -> ChatSessionState | None:
+        try:
+            row = get_store().get_chat_session_memory(conversation_id)
+        except Exception:  # noqa: BLE001
+            log.exception("chat_memory: failed to load session %s", conversation_id)
+            return None
+        if not row:
+            return None
+        payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+        return self._deserialize_state(conversation_id, payload)
+
+    def _serialize_state(self, state: ChatSessionState) -> dict[str, Any]:
+        return {
+            "conversation_id": state.conversation_id,
+            "created_at": state.created_at,
+            "updated_at": state.updated_at,
+            "current_goal": state.current_goal,
+            "selected_node_eui64": state.selected_node_eui64,
+            "selected_partition_ids": state.selected_partition_ids[:4],
+            "confirmed_facts": [
+                {
+                    "key": fact.key,
+                    "text": fact.text,
+                    "source": fact.source,
+                    "observed_at": fact.observed_at,
+                }
+                for fact in state.confirmed_facts[:_MAX_FACTS]
+            ],
+            "hypotheses": state.hypotheses[:_MAX_HYPOTHESES],
+            "pending_questions": state.pending_questions[:_MAX_PENDING_QUESTIONS],
+            "recent_tools": state.recent_tools[:_MAX_RECENT_TOOLS],
+        }
+
+    def _deserialize_state(self, conversation_id: str, payload: dict[str, Any]) -> ChatSessionState:
+        facts_raw = payload.get("confirmed_facts") if isinstance(payload.get("confirmed_facts"), list) else []
+        facts = []
+        for row in facts_raw[:_MAX_FACTS]:
+            if not isinstance(row, dict):
+                continue
+            facts.append(
+                SessionFact(
+                    key=str(row.get("key") or "fact"),
+                    text=str(row.get("text") or "").strip(),
+                    source=str(row.get("source") or "unknown"),
+                    observed_at=float(row.get("observed_at") or time.time()),
+                )
+            )
+        return ChatSessionState(
+            conversation_id=conversation_id,
+            created_at=float(payload.get("created_at") or time.time()),
+            updated_at=float(payload.get("updated_at") or time.time()),
+            current_goal=str(payload.get("current_goal") or "").strip() or None,
+            selected_node_eui64=str(payload.get("selected_node_eui64") or "").strip().lower() or None,
+            selected_partition_ids=[int(value) for value in (payload.get("selected_partition_ids") or [])[:4]],
+            confirmed_facts=facts,
+            hypotheses=[str(value) for value in (payload.get("hypotheses") or [])[:_MAX_HYPOTHESES]],
+            pending_questions=[str(value) for value in (payload.get("pending_questions") or [])[:_MAX_PENDING_QUESTIONS]],
+            recent_tools=[str(value) for value in (payload.get("recent_tools") or [])[:_MAX_RECENT_TOOLS]],
+        )
+
+    def _to_iso(self, ts: float) -> str:
+        return datetime.fromtimestamp(ts, tz=UTC).isoformat()
+
     def _push_partition(self, state: ChatSessionState, partition_id: Any) -> None:
         try:
             value = int(partition_id)
@@ -249,6 +405,14 @@ class ChatSessionStore:
             return None
         return match.group(1).lower()
 
+    def _looks_like_question(self, text: str) -> bool:
+        normalized = " ".join(str(text or "").strip().lower().split())
+        if not normalized:
+            return False
+        if normalized.endswith("?"):
+            return True
+        return normalized.startswith(_QUESTION_PREFIXES)
+
     def _prune(self, now: float) -> None:
         stale = [
             key
@@ -257,6 +421,11 @@ class ChatSessionStore:
         ]
         for key in stale:
             self._sessions.pop(key, None)
+        cutoff = datetime.fromtimestamp(now - _SESSION_TTL_SECONDS, tz=UTC).isoformat()
+        try:
+            get_store().prune_chat_session_memory(stale_before=cutoff)
+        except Exception:  # noqa: BLE001
+            log.exception("chat_memory: failed to prune persisted sessions")
 
 
 _STORE = ChatSessionStore()

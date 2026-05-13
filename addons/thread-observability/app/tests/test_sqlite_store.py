@@ -8,10 +8,37 @@ from thread_observability.storage.sqlite_store import SQLiteStore
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 23
+    assert store.schema_version == 24
     stats = store.stats()
-    assert stats["schema_version"] == 23
+    assert stats["schema_version"] == 24
     assert stats["row_counts"]["events"] == 0
+    assert stats["row_counts"]["chat_session_memory"] == 0
+
+
+def test_chat_session_memory_round_trip(store: SQLiteStore) -> None:
+    payload = {
+        "current_goal": "Investigate why the mesh has two partitions.",
+        "selected_node_eui64": "e6684b9903e8970f",
+        "selected_partition_ids": [1846206278, 2107240925],
+        "confirmed_facts": [{"key": "mesh_partitions", "text": "Current mesh state shows 2 active partitions.", "source": "get_mesh_state", "observed_at": 1.0}],
+        "hypotheses": ["Partition split or stale Thread dataset may explain the observed behavior."],
+        "pending_questions": ["Why are nodes on the old partition unavailable in HA?"],
+        "recent_tools": ["get_mesh_state", "analyze_node"],
+    }
+    store.upsert_chat_session_memory(
+        conversation_id="conv-1",
+        created_at="2026-05-13T15:00:00+00:00",
+        updated_at="2026-05-13T15:05:00+00:00",
+        expires_at="2026-05-13T21:05:00+00:00",
+        payload=payload,
+    )
+
+    row = store.get_chat_session_memory("conv-1")
+    assert row is not None
+    assert row["conversation_id"] == "conv-1"
+    assert row["payload"]["selected_node_eui64"] == "e6684b9903e8970f"
+    assert row["payload"]["hypotheses"] == ["Partition split or stale Thread dataset may explain the observed behavior."]
+    assert row["payload"]["pending_questions"] == ["Why are nodes on the old partition unavailable in HA?"]
 
 
 def test_insert_event_updates_known_node_only(store: SQLiteStore) -> None:
@@ -189,7 +216,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 23
+    assert store.schema_version == 24
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
     eui = "cc" * 8

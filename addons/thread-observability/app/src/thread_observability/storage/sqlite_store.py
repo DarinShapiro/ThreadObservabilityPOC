@@ -591,6 +591,23 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_assessment_runs_verdict
         ON assessment_runs(verdict, assessed_at DESC);
     """,
+    # v24 (0.11.14): persisted chat session memory. Unlike the live mesh
+    # cache tables, this preserves short-term investigation context across
+    # add-on restarts so follow-up chat turns can keep structured facts,
+    # hypotheses, and pending questions without replaying full history.
+    """
+    CREATE TABLE IF NOT EXISTS chat_session_memory (
+        conversation_id  TEXT PRIMARY KEY,
+        created_at       TEXT NOT NULL,
+        updated_at       TEXT NOT NULL,
+        expires_at       TEXT,
+        payload_json     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_session_memory_updated_at
+        ON chat_session_memory(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_session_memory_expires_at
+        ON chat_session_memory(expires_at);
+    """,
 ]
 
 
@@ -2111,7 +2128,16 @@ class SQLiteStore:
         with self._lock:
             counts = {
                 t: int(self._conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0])
-                for t in ("nodes", "events", "issues", "metadata_cache", "ingest_state", "links", "network_data")
+                for t in (
+                    "nodes",
+                    "events",
+                    "issues",
+                    "metadata_cache",
+                    "ingest_state",
+                    "links",
+                    "network_data",
+                    "chat_session_memory",
+                )
             }
             oldest = self._conn.execute("SELECT MIN(ts) FROM events").fetchone()[0]
             newest = self._conn.execute("SELECT MAX(ts) FROM events").fetchone()[0]
@@ -2141,7 +2167,7 @@ class SQLiteStore:
         DB authoritative-by-construction: if a node/link reappears, it is
         real; if it does not, it was zombie data.
 
-        Preserves: ``schema_version`` (migrations stay applied).
+        Preserves: ``schema_version`` and ``chat_session_memory``.
         Wipes: ``nodes``, ``links``, ``events``, ``issues``,
         ``metadata_cache``, ``ingest_state``.
 
@@ -2174,6 +2200,57 @@ class SQLiteStore:
         except sqlite3.OperationalError:
             pass
         return total
+
+    def upsert_chat_session_memory(
+        self,
+        *,
+        conversation_id: str,
+        created_at: str,
+        updated_at: str,
+        expires_at: str | None,
+        payload: dict[str, Any],
+    ) -> None:
+        payload_json = json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+        with self._tx() as conn:
+            conn.execute(
+                """
+                INSERT INTO chat_session_memory (
+                    conversation_id, created_at, updated_at, expires_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    updated_at = excluded.updated_at,
+                    expires_at = excluded.expires_at,
+                    payload_json = excluded.payload_json
+                """,
+                (conversation_id, created_at, updated_at, expires_at, payload_json),
+            )
+
+    def get_chat_session_memory(self, conversation_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM chat_session_memory WHERE conversation_id = ?",
+                (conversation_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        payload_json = data.pop("payload_json", None)
+        if payload_json:
+            try:
+                data["payload"] = json.loads(payload_json)
+            except Exception:  # noqa: BLE001
+                data["payload"] = {"_raw": payload_json}
+        else:
+            data["payload"] = {}
+        return data
+
+    def prune_chat_session_memory(self, *, stale_before: str) -> int:
+        with self._tx() as conn:
+            cur = conn.execute(
+                "DELETE FROM chat_session_memory WHERE updated_at < ? OR (expires_at IS NOT NULL AND expires_at < ?)",
+                (stale_before, stale_before),
+            )
+            return int(cur.rowcount or 0)
 
     def close(self) -> None:
         with self._lock:
