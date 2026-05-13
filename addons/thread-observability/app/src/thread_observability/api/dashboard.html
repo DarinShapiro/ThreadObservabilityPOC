@@ -790,35 +790,33 @@ function renderPartitionsCard(s) {
 }
 
 function renderNetwork(s) {
-  const h = s.health || {};
-  $('#health-score').textContent = (h.score != null) ? h.score : '—';
-  $('#health-sub').textContent = (h.status || 'unknown') + ' · ' + ((h.active_issues && h.active_issues.count) || (h.issues_active || 0)) + ' issues';
-
-  const p = s.partitions || {};
-  $('#partition-count').textContent = p.partition_count != null ? p.partition_count : '—';
-  $('#partition-sub').textContent = p.summary || (p.partition_count > 1 ? 'split brain' : 'single partition');
-
+  // The four top summary cards (Thread Health / Partitions / Active
+  // Nodes / Phantom Nodes) were removed in issue #3 — the data they
+  // showed is already visible elsewhere (headline row, partitions
+  // panel, nodes table, stale links).
   const nodes = s.all_nodes || [];
-  const counts = s.node_counts || {};
-  const alive = (counts.online || 0) + (counts.offline || 0);
-  $('#node-count').textContent = alive;
-  $('#node-sub').textContent = (counts.online || 0) + ' online · ' + (counts.offline || 0) + ' offline';
-
-  const phantoms = (s.phantoms && s.phantoms.phantoms) || [];
-  $('#phantom-count').textContent = phantoms.length;
 
   // Populate area filter once per render (preserve selection if still present).
   const areaSelect = $('#nodes-filter-area');
   const areas = Array.from(new Set(nodes.map(n => n.area_name).filter(Boolean))).sort();
   const prevArea = areaSelect.value;
   areaSelect.innerHTML = '<option value="">all areas</option>';
-  // The four top summary cards (Thread Health / Partitions / Active
-  // Nodes / Phantom Nodes) were removed in issue #3 — the data they
-  // showed is already visible elsewhere (headline row, partitions
-  // panel, nodes table, stale links). The headline + hotspots +
-  // issues + partitions panels below carry the same information
-  // without taking the top fold.
-  const nodes = s.all_nodes || []
+  for (const a of areas) {
+    const opt = document.createElement('option');
+    opt.value = a;
+    opt.textContent = a;
+    areaSelect.appendChild(opt);
+  }
+  if (prevArea && areas.includes(prevArea)) areaSelect.value = prevArea;
+
+  renderHeadline(s);
+  renderHotSpots(s);
+  renderIssues(s);
+  renderPartitionsCard(s);
+  renderNodesTable(nodes);
+}
+
+function applyNodeFilters(nodes) {
   const statusF = $('#nodes-filter-status').value;
   const roleF = $('#nodes-filter-role').value;
   const areaF = $('#nodes-filter-area').value;

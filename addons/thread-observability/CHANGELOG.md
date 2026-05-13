@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.6 — Fix dashboard render regression
+
+- **Hotfix for 0.10.5.** The dashboard JS still referenced the four
+  removed summary cards (`#health-score`, `#partition-count`,
+  `#node-count`, `#phantom-count`), so `renderNetwork()` threw a
+  `TypeError: null` on first paint and aborted, leaving the page
+  empty. The function also accidentally inlined the body of
+  `applyNodeFilters`, leaving that helper undefined and breaking
+  `renderNodesTable`. Rewrote `renderNetwork()` to just populate
+  the area filter and call the headline/hot-spots/issues/partitions/
+  nodes-table sub-renders, and restored `applyNodeFilters()` as a
+  standalone helper.
+
 ## 0.10.5 — Drop noisy issues + clean up dashboard top
 
 - **#1 RouteTable self-destination row.** Some Thread stacks (Eve)
