@@ -80,6 +80,85 @@ def test_direct_chat_turn_executes_mcp_tool_and_returns_trace(monkeypatch) -> No
     assert json.loads(tool_message["content"])["data"]["status"] == "healthy"
 
 
+def test_direct_chat_turn_compacts_large_tool_results_for_prompt(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+    large_result = {
+        "rows": [
+            {
+                "eui64": f"node-{index:04d}",
+                "notes": "x" * 400,
+                "metrics": {"rssi": -70, "lqi": 3, "status": "online"},
+            }
+            for index in range(80)
+        ]
+    }
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-big",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_all_nodes",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        tool_message = next(msg for msg in body["messages"] if msg.get("role") == "tool")
+        assert len(tool_message["content"]) <= direct_chat._MAX_TOOL_RESULT_MESSAGE_CHARS
+        assert "_truncated_items" in tool_message["content"] or "[truncated" in tool_message["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I reviewed the node inventory.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "list_all_nodes"
+        assert arguments == {}
+        return large_result
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="List the current nodes.",
+            rendered_message="User message: List the current nodes.",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "I reviewed the node inventory."
+    assert len(result["tool_calls"]) == 1
+    assert len(result["tool_calls"][0]["result"]["rows"]) == 80
+
+
 def test_parse_tool_arguments_accepts_json_string() -> None:
     assert direct_chat._parse_tool_arguments('{"eui64":"AA"}') == {"eui64": "AA"}
 

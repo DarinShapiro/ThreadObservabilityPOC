@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.12 — Compact tool context for direct chat
+
+- **Prompt-size management.** Direct-model chat now compacts large tool results before feeding them back into the model prompt, instead of appending full raw JSON for every tool call.
+- **Preserve UI detail.** The full tool results are still returned to the dashboard for inspection; only the model-facing prompt payload is compacted.
+- **Lower risk of context overrun.** Node/history/topology investigations that call several rich tools are less likely to fail with `context_length_exceeded` on smaller-window models.
+
 ## 0.11.11 — Force recent evidence for node answers
 
 - **Backend recent-evidence enrichment.** For node-specific chat questions, the backend no longer relies on the model to choose and parameterize recent-history checks correctly. If the first answer is shallow, it now gathers recent node history and current mesh context server-side before asking the model to answer again.

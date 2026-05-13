@@ -25,6 +25,8 @@ _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
 _MAX_TOOL_DEFERRAL_RETRIES = 1
 _MAX_NODE_EVIDENCE_RETRIES = 1
+_MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
+_MAX_EVIDENCE_MESSAGE_CHARS = 5000
 _DEFAULT_SYSTEM_PROMPT = (
     "You are the Thread Observability dashboard troubleshooting assistant. Answer using only the provided "
     "Thread dashboard context, the user's request, and the available diagnostic tools. "
@@ -307,6 +309,86 @@ def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
     return bool(names & {"query_history", "get_mesh_state", "start_triage", "list_all_nodes"})
 
 
+def _truncate_prompt_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    omitted = len(text) - max_chars
+    if max_chars <= 64:
+        return text[:max_chars]
+    return text[: max_chars - 32] + f"... [truncated {omitted} chars]"
+
+
+def _compact_for_prompt(
+    value: Any,
+    *,
+    max_items: int,
+    max_keys: int,
+    max_string_chars: int,
+    max_depth: int,
+    _depth: int = 0,
+) -> Any:
+    if _depth >= max_depth:
+        if isinstance(value, dict):
+            return {"_summary": f"dict with {len(value)} keys"}
+        if isinstance(value, list):
+            return [f"list with {len(value)} items"]
+        if isinstance(value, str):
+            return _truncate_prompt_text(value, max_string_chars)
+        return value
+    if isinstance(value, dict):
+        items = list(value.items())
+        compact: dict[str, Any] = {}
+        for key, inner in items[:max_keys]:
+            compact[str(key)] = _compact_for_prompt(
+                inner,
+                max_items=max_items,
+                max_keys=max_keys,
+                max_string_chars=max_string_chars,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+            )
+        if len(items) > max_keys:
+            compact["_truncated_keys"] = len(items) - max_keys
+        return compact
+    if isinstance(value, list):
+        compact_list = [
+            _compact_for_prompt(
+                inner,
+                max_items=max_items,
+                max_keys=max_keys,
+                max_string_chars=max_string_chars,
+                max_depth=max_depth,
+                _depth=_depth + 1,
+            )
+            for inner in value[:max_items]
+        ]
+        if len(value) > max_items:
+            compact_list.append({"_truncated_items": len(value) - max_items})
+        return compact_list
+    if isinstance(value, str):
+        return _truncate_prompt_text(value, max_string_chars)
+    return value
+
+
+def _serialize_for_prompt(value: Any, *, max_chars: int) -> str:
+    for max_items, max_keys, max_string_chars, max_depth in (
+        (10, 28, 320, 4),
+        (6, 18, 220, 3),
+        (4, 12, 140, 2),
+    ):
+        compact = _compact_for_prompt(
+            value,
+            max_items=max_items,
+            max_keys=max_keys,
+            max_string_chars=max_string_chars,
+            max_depth=max_depth,
+        )
+        rendered = json.dumps(compact, separators=(",", ":"), ensure_ascii=True)
+        if len(rendered) <= max_chars:
+            return rendered
+    return _truncate_prompt_text(rendered, max_chars)
+
+
 def _extract_node_eui64(message: str, tool_trace: list[dict[str, Any]]) -> str | None:
     for row in reversed(tool_trace):
         if str(row.get("name") or "") != "analyze_node":
@@ -522,7 +604,7 @@ async def direct_chat_turn(
                     "below before answering. Do not describe the node as long-stable if the recent evidence "
                     "shows a fresh attach, recommission, parent change, partition transition, or other recent "
                     "state change. Explicitly call out recent-change evidence when present.\n\n"
-                    + json.dumps(evidence, separators=(",", ":"), ensure_ascii=True)
+                    + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
                     if evidence is not None
                     else "This is a node-specific troubleshooting question. Gather node-specific and recent-change "
                     "evidence yourself before answering."
@@ -556,7 +638,7 @@ async def direct_chat_turn(
                 {
                     "role": "tool",
                     "tool_call_id": tool_call["id"],
-                    "content": json.dumps(result, separators=(",", ":"), ensure_ascii=True),
+                    "content": _serialize_for_prompt(result, max_chars=_MAX_TOOL_RESULT_MESSAGE_CHARS),
                 }
             )
         if tool_calls_used >= _MAX_TOOL_CALLS:
