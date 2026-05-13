@@ -11,7 +11,9 @@ The Supervisor injects ``SUPERVISOR_TOKEN`` and exposes its API at
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from typing import Any
 
 import httpx
@@ -23,6 +25,10 @@ DEFAULT_TIMEOUT = 10.0
 
 class SupervisorUnavailable(RuntimeError):
     """Raised when the Supervisor API cannot be reached or auth is missing."""
+
+
+class NoConversationAgentConfigured(RuntimeError):
+    """Raised when HA has no usable conversation agent configured."""
 
 
 def _token() -> str:
@@ -75,6 +81,129 @@ async def _post(path: str, json_body: dict[str, Any] | None = None) -> dict[str,
             return resp.json()
         except Exception:
             return {"status": "ok"}
+
+
+async def _core_get_json(path: str, *, timeout: float = DEFAULT_TIMEOUT) -> Any:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.get(f"{SUPERVISOR_URL}{path}", headers=_headers())
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _core_post_json(
+    path: str,
+    json_body: dict[str, Any],
+    *,
+    timeout: float = 60.0,
+) -> Any:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        resp = await client.post(
+            f"{SUPERVISOR_URL}{path}",
+            headers=_headers(),
+            json=json_body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _core_ws_command(command: str, *, timeout: float = 10.0) -> Any:
+    try:
+        import websockets  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError as exc:
+        raise SupervisorUnavailable("websockets package not installed") from exc
+
+    token = _token()
+    ws_url = SUPERVISOR_URL.replace("http://", "ws://").replace("https://", "wss://")
+    ws_url = f"{ws_url}/core/websocket"
+    request_id = int(time.time() * 1000) % 1_000_000_000
+
+    async with websockets.connect(ws_url, open_timeout=timeout) as ws:
+        hello = json.loads(await ws.recv())
+        if hello.get("type") != "auth_required":
+            raise SupervisorUnavailable(f"unexpected HA WS greeting: {hello!r}")
+        await ws.send(json.dumps({"type": "auth", "access_token": token}))
+        auth_resp = json.loads(await ws.recv())
+        if auth_resp.get("type") != "auth_ok":
+            raise SupervisorUnavailable(f"HA WS auth failed: {auth_resp!r}")
+        await ws.send(json.dumps({"id": request_id, "type": command}))
+        while True:
+            data = json.loads(await ws.recv())
+            if isinstance(data, dict) and data.get("id") == request_id:
+                if not data.get("success", False):
+                    raise RuntimeError(str(data.get("error") or f"{command} failed"))
+                return data.get("result")
+
+
+def _normalize_agent_row(row: dict[str, Any], *, source: str) -> dict[str, Any]:
+    agent_id = row.get("id") or row.get("agent_id") or row.get("entity_id")
+    name = row.get("name") or row.get("title") or row.get("friendly_name") or agent_id
+    return {
+        "agent_id": str(agent_id or "").strip(),
+        "name": str(name or "").strip() or None,
+        "source": source,
+    }
+
+
+async def list_conversation_agents() -> dict[str, Any]:
+    """Return available conversation agents, preferring HA's WS command."""
+    try:
+        result = await _core_ws_command("conversation/agent/list")
+        rows = result if isinstance(result, list) else []
+        agents = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized = _normalize_agent_row(row, source="ws")
+            if normalized["agent_id"]:
+                agents.append(normalized)
+        if agents:
+            return {"agents": agents, "count": len(agents), "source": "ws"}
+    except Exception:
+        pass
+
+    states = await _core_get_json("/core/api/states")
+    agents: list[dict[str, Any]] = []
+    if isinstance(states, list):
+        for row in states:
+            if not isinstance(row, dict):
+                continue
+            entity_id = str(row.get("entity_id") or "")
+            if not entity_id.startswith("conversation."):
+                continue
+            attrs = row.get("attributes") or {}
+            agents.append(
+                {
+                    "agent_id": entity_id,
+                    "name": attrs.get("friendly_name") or entity_id,
+                    "source": "entity_scan",
+                }
+            )
+    return {"agents": agents, "count": len(agents), "source": "entity_scan"}
+
+
+async def conversation_process(
+    *,
+    text: str,
+    conversation_id: str | None = None,
+    agent_id: str | None = None,
+) -> dict[str, Any]:
+    """Proxy to HA Core's conversation endpoint through the Supervisor proxy."""
+    body: dict[str, Any] = {"text": text}
+    if conversation_id:
+        body["conversation_id"] = conversation_id
+    if agent_id:
+        body["agent_id"] = agent_id
+    try:
+        payload = await _core_post_json("/core/api/conversation/process", body)
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text if exc.response is not None else str(exc)
+        if exc.response is not None and exc.response.status_code in (400, 404):
+            if "agent" in detail.lower():
+                raise NoConversationAgentConfigured(detail or "No conversation agent configured") from exc
+        raise
+    if not isinstance(payload, dict):
+        raise RuntimeError("unexpected conversation response shape")
+    return payload
 
 
 async def _post_self_disruptive(path: str, action: str) -> dict[str, Any]:

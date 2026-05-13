@@ -12,6 +12,7 @@ from thread_observability.services.assessment.engine import (
     EnvelopeParseError,
     VerdictEnvelope,
     finding_key_for,
+    normalize_finding_type,
     parse_envelope,
 )
 from thread_observability.storage.sqlite_store import SQLiteStore
@@ -84,6 +85,11 @@ def test_parse_envelope_caps_headline() -> None:
         }
     )
     assert len(env.headline) <= 120
+
+
+def test_normalize_finding_type_slugifies_dynamic_values() -> None:
+    assert normalize_finding_type(" Parent-Flapping!!! ") == "parent_flapping"
+    assert normalize_finding_type(" Link quality / drop ") == "link_quality_drop"
 
 
 def test_finding_key_stable_per_node_and_type() -> None:
@@ -240,3 +246,50 @@ def test_engine_respects_suppression(store: SQLiteStore) -> None:
     r2 = _run(eng.run_once())
     assert r2.suppressed is True
     assert r2.finding_id is None
+
+
+def test_engine_applies_per_model_recent_findings_budget(store: SQLiteStore) -> None:
+    for idx in range(6):
+        store.upsert_assessment_finding(
+            finding_id=f"evid-{idx}",
+            finding_key=f"key-{idx}",
+            verdict="watch",
+            severity="watch",
+            confidence=0.4,
+            headline=f"finding {idx}",
+            evidence=[{"tool": "x", "key_finding": "y"}],
+            finding_type="parent_flapping",
+        )
+
+    seen: dict[str, object] = {}
+
+    async def agent(*, prompt, context):  # noqa: ARG001
+        seen.update(context)
+        return json.dumps(
+            {
+                "verdict": "ok",
+                "severity": "watch",
+                "confidence": 0.9,
+                "headline": "all good",
+                "evidence": [],
+            }
+        )
+
+    eng = AssessmentEngine(
+        agent=agent,
+        store=store,
+        context_recent_findings_default=2,
+        context_recent_findings_by_model={"claude-sonnet-4-5": 5},
+    )
+    _run(eng.run_once(extra_context={"model": "claude-sonnet-4-5"}))
+    assert seen["context_budget"]["recent_findings"] == 5
+    assert len(seen["recent_findings"]) == 5
+
+
+def test_engine_records_assessment_run_history(store: SQLiteStore) -> None:
+    eng = AssessmentEngine(agent=None, store=store)
+    _run(eng.run_once(extra_context={"model": "claude-sonnet-4-5"}))
+    rows = store.list_assessment_runs(limit=5)
+    assert len(rows) == 1
+    assert rows[0]["verdict"] == "ok"
+    assert rows[0]["model_name"] == "claude-sonnet-4-5"

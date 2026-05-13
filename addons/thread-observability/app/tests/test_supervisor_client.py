@@ -22,6 +22,46 @@ import pytest
 from thread_observability.api import supervisor_client as sc
 
 
+def test_list_conversation_agents_falls_back_to_entities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_ws(command: str, *, timeout: float = 10.0) -> object:  # noqa: ARG001
+        raise RuntimeError("ws unavailable")
+
+    async def fake_core_get(path: str, *, timeout: float = sc.DEFAULT_TIMEOUT) -> object:  # noqa: ARG001
+        assert path == "/core/api/states"
+        return [
+            {
+                "entity_id": "conversation.claude",
+                "attributes": {"friendly_name": "Claude"},
+            },
+            {"entity_id": "light.kitchen", "attributes": {}},
+        ]
+
+    monkeypatch.setattr(sc, "_core_ws_command", fake_ws)
+    monkeypatch.setattr(sc, "_core_get_json", fake_core_get)
+
+    result = asyncio.run(sc.list_conversation_agents())
+    assert result["count"] == 1
+    assert result["agents"][0]["agent_id"] == "conversation.claude"
+    assert result["source"] == "entity_scan"
+
+
+def test_conversation_process_raises_no_agent_for_agent_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("POST", "http://supervisor/core/api/conversation/process")
+    response = httpx.Response(400, request=request, text="No default agent configured")
+
+    async def fake_core_post(path: str, json_body: dict[str, object], *, timeout: float = 60.0) -> object:  # noqa: ARG001
+        raise httpx.HTTPStatusError("boom", request=request, response=response)
+
+    monkeypatch.setattr(sc, "_core_post_json", fake_core_post)
+
+    with pytest.raises(sc.NoConversationAgentConfigured):
+        asyncio.run(sc.conversation_process(text="hello"))
+
+
 def _patch_config(monkeypatch: pytest.MonkeyPatch, ha_admin_token: str = "") -> None:
     """Make ``get_config()`` (lazy-imported inside update_addon) return a stub."""
     import thread_observability.config as cfg_mod

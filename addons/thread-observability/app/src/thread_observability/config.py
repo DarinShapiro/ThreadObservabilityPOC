@@ -48,6 +48,8 @@ class AssessmentConfig(BaseModel):
     engaged_interval_minutes: int = Field(default=5, ge=1, le=60)
     engaged_decay_minutes: int = Field(default=60, ge=10, le=720)
     daily_budget_calls: int = Field(default=12, ge=1, le=288)
+    context_recent_findings_default: int = Field(default=10, ge=1, le=100)
+    context_recent_findings_by_model: dict[str, int] = Field(default_factory=dict)
 
 
 class SchedulerConfig(BaseModel):

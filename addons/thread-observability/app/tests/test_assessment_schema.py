@@ -1,4 +1,4 @@
-"""Tests for the Background Diagnostics SQLite schema (#18-#22)."""
+"""Tests for the Background Diagnostics SQLite schema (#18-#23)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 from thread_observability.storage.sqlite_store import SQLiteStore
 
 
-def test_schema_v22_tables_exist(store: SQLiteStore) -> None:
-    assert store.schema_version >= 22
+def test_schema_v23_tables_exist(store: SQLiteStore) -> None:
+    assert store.schema_version >= 23
     with store._lock:
         names = {
             r[0]
@@ -17,7 +17,12 @@ def test_schema_v22_tables_exist(store: SQLiteStore) -> None:
                 "SELECT name FROM sqlite_master WHERE type='table'"
             ).fetchall()
         }
-    assert {"assessment_schedule", "assessment_findings", "assessment_feedback"} <= names
+    assert {
+        "assessment_schedule",
+        "assessment_findings",
+        "assessment_feedback",
+        "assessment_runs",
+    } <= names
 
 
 def test_upsert_schedule_initial_defaults(store: SQLiteStore) -> None:
@@ -113,3 +118,23 @@ def test_feedback_summary(store: SQLiteStore) -> None:
     summary = store.assessment_feedback_summary()
     assert summary["total_findings"] == 1
     assert summary["by_outcome"]["resolved"] == 1
+
+
+def test_assessment_runs_history_round_trip(store: SQLiteStore) -> None:
+    run = store.record_assessment_run(
+        verdict="watch",
+        severity="watch",
+        confidence=0.7,
+        headline="check this link",
+        finding_key="abc",
+        finding_id="evid-1",
+        finding_type="link_quality_drop",
+        node_eui64="AA",
+        parse_attempts=1,
+        duration_seconds=1.25,
+        model_name="claude-sonnet-4-5",
+    )
+    rows = store.list_assessment_runs(limit=10)
+    assert rows[0]["id"] == run["id"]
+    assert rows[0]["model_name"] == "claude-sonnet-4-5"
+    assert rows[0]["headline"] == "check this link"

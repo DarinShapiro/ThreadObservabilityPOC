@@ -210,6 +210,33 @@ class DevStatusResponse(_Base):
     pipeline: dict[str, Any]
 
 
+class ChatTurnInnerResponse(_Base):
+    text: str
+    card: dict[str, Any] | None = None
+
+
+class ChatTurnResponse(_Base):
+    conversation_id: str | None = None
+    agent_id: str | None = None
+    response: ChatTurnInnerResponse
+    tool_calls: list[dict[str, Any]]
+    duration_ms: int
+    model: str | None = None
+    streaming: bool
+
+
+class ChatAgentRow(_Base):
+    agent_id: str
+    name: str | None = None
+    source: str | None = None
+
+
+class ChatAgentsResponse(_Base):
+    count: int
+    agents: list[ChatAgentRow]
+    source: str | None = None
+
+
 __all__ = [
     "HealthResponse",
     "TopologyNode",
@@ -229,4 +256,8 @@ __all__ = [
     "NodeCounts",
     "DevStatusPartitions",
     "DevStatusResponse",
+    "ChatTurnInnerResponse",
+    "ChatTurnResponse",
+    "ChatAgentRow",
+    "ChatAgentsResponse",
 ]

@@ -6,13 +6,15 @@ JSON endpoints under ``/v1/...`` for programmatic access.
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
 
 from . import supervisor_client
@@ -31,6 +33,54 @@ from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
 log = logging.getLogger(__name__)
+
+
+def _render_chat_message(message: str, page_context: dict[str, object] | None) -> str:
+    text = message.strip()
+    if not page_context:
+        return text
+    context_blob = json.dumps(page_context, separators=(",", ":"), ensure_ascii=True)
+    return f"Page context: {context_blob}\n\nUser message: {text}"
+
+
+def _extract_chat_turn(
+    payload: dict[str, object],
+    *,
+    requested_agent_id: str | None,
+    duration_ms: int,
+) -> dict[str, object]:
+    response_block = payload.get("response")
+    if isinstance(response_block, list) and response_block:
+        response_block = response_block[0]
+    response_dict = response_block if isinstance(response_block, dict) else {}
+    speech = response_dict.get("speech") if isinstance(response_dict, dict) else {}
+    speech = speech if isinstance(speech, dict) else {}
+    plain = speech.get("plain") if isinstance(speech, dict) else {}
+    plain = plain if isinstance(plain, dict) else {}
+    data = response_dict.get("data") if isinstance(response_dict, dict) else {}
+    data = data if isinstance(data, dict) else {}
+    intent_extras = data.get("intent_extras")
+    tool_calls = data.get("tool_calls") or payload.get("tool_calls") or []
+    if not isinstance(tool_calls, list):
+        tool_calls = [tool_calls] if tool_calls else []
+    card = data.get("card") if isinstance(data.get("card"), dict) else None
+    if card is None and isinstance(intent_extras, dict):
+        maybe_card = intent_extras.get("card")
+        if isinstance(maybe_card, dict):
+            card = maybe_card
+    model = data.get("model") or response_dict.get("model") or payload.get("model")
+    return {
+        "conversation_id": payload.get("conversation_id"),
+        "agent_id": payload.get("agent_id") or requested_agent_id,
+        "response": {
+            "text": str(plain.get("speech") or data.get("text") or ""),
+            "card": card,
+        },
+        "tool_calls": tool_calls,
+        "duration_ms": duration_ms,
+        "model": model,
+        "streaming": False,
+    }
 
 
 def _read_addon_version() -> str:
@@ -184,6 +234,72 @@ def create_core_app() -> FastAPI:
     @app.get("/api")
     def api_root() -> dict[str, str]:
         return {"service": "core", "name": "thread-observability", "version": ADDON_VERSION}
+
+    @app.get("/v1/chat/agents")
+    async def chat_agents() -> dict[str, object]:
+        try:
+            return await supervisor_client.list_conversation_agents()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to list conversation agents: {exc}",
+            ) from exc
+
+    @app.post("/v1/chat/turn")
+    async def chat_turn(payload: dict[str, object]) -> dict[str, object]:
+        message = str((payload or {}).get("message") or "").strip()
+        if not message:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="message required",
+            )
+        if bool((payload or {}).get("streaming")):
+            raise HTTPException(
+                status_code=status.HTTP_501_NOT_IMPLEMENTED,
+                detail="streaming not implemented yet; retry with streaming=false",
+            )
+
+        conversation_id = (payload or {}).get("conversation_id")
+        conversation_id = str(conversation_id).strip() if conversation_id else None
+        agent_id = (payload or {}).get("agent_id")
+        agent_id = str(agent_id).strip() if agent_id else None
+        page_context = (payload or {}).get("page_context")
+        page_context = page_context if isinstance(page_context, dict) else None
+
+        started = time.perf_counter()
+        try:
+            upstream = await supervisor_client.conversation_process(
+                text=_render_chat_message(message, page_context),
+                conversation_id=conversation_id,
+                agent_id=agent_id,
+            )
+        except supervisor_client.NoConversationAgentConfigured as exc:
+            raise HTTPException(
+                status_code=status.HTTP_412_PRECONDITION_FAILED,
+                detail=(
+                    "No Home Assistant conversation agent is configured. "
+                    "Set one up in HA Assist / Conversations, then retry. "
+                    f"Upstream detail: {exc}"
+                ),
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text if exc.response is not None else str(exc)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"HA conversation.process failed: {detail}",
+            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"HA conversation proxy failed: {exc}",
+            ) from exc
+
+        duration_ms = max(0, int((time.perf_counter() - started) * 1000))
+        return _extract_chat_turn(
+            upstream,
+            requested_agent_id=agent_id,
+            duration_ms=duration_ms,
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -633,15 +749,44 @@ def create_core_app() -> FastAPI:
                 "enabled": snap.enabled,
                 "state": snap.state,
                 "current_interval_seconds": snap.current_interval_seconds,
-                "next_check_at": snap.next_check_at,
-                "last_check_at": snap.last_check_at,
-                "last_verdict": snap.last_verdict,
-                "calls_today": snap.calls_today,
-                "daily_budget": snap.daily_budget,
-                "probation_checks_remaining": snap.probation_checks_remaining,
+                "next_check_at": snap.next_assessment_at,
+                "last_check_at": snap.last_assessment_at,
+                "last_verdict": snap.reason,
+                "calls_today": snap.budget_calls_used,
+                "daily_budget": snap.daily_budget_calls,
+                "probation_checks_remaining": max(0, cfg.probation_checks - snap.consecutive_ok),
+                "reason": snap.reason,
             }
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
+
+    def _assessment_scheduler():
+        from ..services.assessment.scheduler import AssessmentScheduler, ScheduleConfig
+
+        cfg = ScheduleConfig.from_dict(get_config().assessment.model_dump())
+        return AssessmentScheduler(store=get_store(), config=cfg)
+
+    def _assessment_engine():
+        from ..services.assessment.engine import AssessmentEngine
+
+        cfg = get_config().assessment
+        return AssessmentEngine(
+            store=get_store(),
+            context_recent_findings_default=cfg.context_recent_findings_default,
+            context_recent_findings_by_model=cfg.context_recent_findings_by_model,
+        )
+
+    def _assessment_result_payload(result) -> dict[str, object]:
+        return {
+            "envelope": result.envelope.to_dict(),
+            "finding_id": result.finding_id,
+            "finding_key": result.finding_key,
+            "dedup_hit": result.dedup_hit,
+            "parse_attempts": result.parse_attempts,
+            "duration_seconds": result.duration_seconds,
+            "cleared_count": result.cleared_count,
+            "suppressed": result.suppressed,
+        }
 
     @app.get("/v1/assessment/findings")
     def assessment_findings(state: str = "open", limit: int = 50) -> dict[str, object]:
@@ -650,6 +795,51 @@ def create_core_app() -> FastAPI:
             return {"findings": rows, "count": len(rows)}
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc), "findings": []}
+
+    @app.get("/v1/assessment/history")
+    def assessment_history(limit: int = 20, offset: int = 0) -> dict[str, object]:
+        try:
+            safe_limit = max(1, min(int(limit), 100))
+            safe_offset = max(0, int(offset))
+            rows = get_store().list_assessment_runs(
+                limit=safe_limit + 1,
+                offset=safe_offset,
+            )
+            return {
+                "runs": rows[:safe_limit],
+                "count": len(rows[:safe_limit]),
+                "limit": safe_limit,
+                "offset": safe_offset,
+                "has_more": len(rows) > safe_limit,
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "runs": []}
+
+    @app.post("/v1/assessment/run-now")
+    def assessment_run_now(payload: dict[str, object] | None = None) -> dict[str, object]:
+        try:
+            scheduler = _assessment_scheduler()
+            decision = scheduler.decide(force=True)
+            decision_payload = {
+                "should_run": decision.should_run,
+                "reason": decision.reason,
+                "next_run_at": decision.next_run_at,
+                "state": decision.state,
+                "budget_exhausted": decision.budget_exhausted,
+            }
+            if not decision.should_run:
+                return {"ok": False, "decision": decision_payload}
+
+            result = asyncio.run(_assessment_engine().run_once(extra_context=payload))
+            snapshot = scheduler.record_assessment(verdict=result.envelope.verdict)
+            return {
+                "ok": True,
+                "decision": decision_payload,
+                "result": _assessment_result_payload(result),
+                "schedule": snapshot.as_dict(),
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": str(exc)}
 
     @app.post("/v1/assessment/findings/{finding_id}/dismiss")
     def assessment_dismiss(

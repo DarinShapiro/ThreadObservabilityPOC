@@ -562,6 +562,35 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_feedback_finding_type
         ON assessment_feedback(finding_type);
     """,
+    # v23 (0.11.1 / Phase 4 follow-up): assessment_runs — append-only
+    # execution history for the Adaptive Monitoring side-panel. Unlike
+    # assessment_findings (which dedups active concerns by finding_key),
+    # this keeps a row per run so the UI can show recent "ok" / "watch"
+    # checks and the backend can paginate history cleanly.
+    """
+    CREATE TABLE IF NOT EXISTS assessment_runs (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        assessed_at             TEXT NOT NULL,
+        verdict                 TEXT NOT NULL,
+        severity                TEXT NOT NULL,
+        confidence              REAL NOT NULL,
+        headline                TEXT NOT NULL,
+        finding_key             TEXT,
+        finding_id              TEXT,
+        finding_type            TEXT,
+        node_eui64              TEXT,
+        parse_attempts          INTEGER NOT NULL DEFAULT 0,
+        duration_seconds        REAL NOT NULL DEFAULT 0,
+        suppressed              INTEGER NOT NULL DEFAULT 0,
+        dedup_hit               INTEGER NOT NULL DEFAULT 0,
+        cleared_count           INTEGER NOT NULL DEFAULT 0,
+        model_name              TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_assessment_runs_assessed_at
+        ON assessment_runs(assessed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_assessment_runs_verdict
+        ON assessment_runs(verdict, assessed_at DESC);
+    """,
 ]
 
 
@@ -2621,6 +2650,72 @@ class SQLiteStore:
             )
         return self.get_assessment_finding(finding_id)
 
+    def record_assessment_run(
+        self,
+        *,
+        verdict: str,
+        severity: str,
+        confidence: float,
+        headline: str,
+        finding_key: str | None = None,
+        finding_id: str | None = None,
+        finding_type: str | None = None,
+        node_eui64: str | None = None,
+        parse_attempts: int = 0,
+        duration_seconds: float = 0.0,
+        suppressed: bool = False,
+        dedup_hit: bool = False,
+        cleared_count: int = 0,
+        model_name: str | None = None,
+    ) -> dict[str, Any]:
+        assessed_at = _utc_now()
+        with self._tx() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO assessment_runs (
+                    assessed_at, verdict, severity, confidence, headline,
+                    finding_key, finding_id, finding_type, node_eui64,
+                    parse_attempts, duration_seconds, suppressed, dedup_hit,
+                    cleared_count, model_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    assessed_at,
+                    verdict,
+                    severity,
+                    confidence,
+                    headline,
+                    finding_key,
+                    finding_id,
+                    finding_type,
+                    node_eui64,
+                    int(parse_attempts),
+                    float(duration_seconds),
+                    1 if suppressed else 0,
+                    1 if dedup_hit else 0,
+                    int(cleared_count),
+                    model_name,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM assessment_runs WHERE id = ?",
+                (cur.lastrowid,),
+            ).fetchone()
+        return _row_to_assessment_run(row)
+
+    def list_assessment_runs(
+        self,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM assessment_runs ORDER BY assessed_at DESC LIMIT ? OFFSET ?",
+                (int(limit), int(offset)),
+            ).fetchall()
+        return [_row_to_assessment_run(r) for r in rows]
+
     def is_finding_key_suppressed(self, finding_key: str, *, at: str | None = None) -> bool:
         """Return True if any dismissed row with the same key has suppress_until > now."""
         ts = at or _utc_now()
@@ -2715,6 +2810,15 @@ def _row_to_finding(row: sqlite3.Row | None) -> dict[str, Any]:
             d["evidence"] = {"_raw": evj}
     else:
         d["evidence"] = []
+    return d
+
+
+def _row_to_assessment_run(row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return {}
+    d = dict(row)
+    d["suppressed"] = bool(d.get("suppressed"))
+    d["dedup_hit"] = bool(d.get("dedup_hit"))
     return d
 
 

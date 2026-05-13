@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -46,6 +47,16 @@ VALID_SEVERITIES = {"watch", "investigate", "critical"}
 MAX_HEADLINE = 120
 MAX_STARTER_PROMPT = 200
 MAX_EVIDENCE_ITEMS = 6
+DEFAULT_RECENT_FINDINGS_CONTEXT = 10
+PREFERRED_FINDING_TYPES = {
+    "parent_flapping",
+    "partition_anomaly",
+    "link_quality_drop",
+    "child_unreachable",
+    "phantom_persisted",
+    "parse_failure",
+    "unknown",
+}
 
 
 @dataclass(slots=True)
@@ -74,6 +85,22 @@ class VerdictEnvelope:
 
 class EnvelopeParseError(ValueError):
     """Raised when the agent's reply doesn't conform to the envelope."""
+
+
+def normalize_finding_type(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    slug = str(raw).strip().lower()
+    if not slug:
+        return None
+    slug = re.sub(r"[^a-z0-9]+", "_", slug)
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    if not slug:
+        return None
+    slug = slug[:64].strip("_") or None
+    if slug and slug not in PREFERRED_FINDING_TYPES:
+        log.info("assessment observed novel finding_type=%s", slug)
+    return slug
 
 
 def parse_envelope(raw: str | dict[str, Any]) -> VerdictEnvelope:
@@ -145,9 +172,7 @@ def parse_envelope(raw: str | dict[str, Any]) -> VerdictEnvelope:
     if eui64 is not None:
         eui64 = str(eui64).strip().upper() or None
 
-    finding_type = data.get("finding_type")
-    if finding_type is not None:
-        finding_type = str(finding_type).strip().lower() or None
+    finding_type = normalize_finding_type(data.get("finding_type"))
 
     return VerdictEnvelope(
         verdict=verdict,
@@ -179,12 +204,14 @@ def _infer_finding_type(headline: str) -> str:
     if "partition" in h:
         return "partition_anomaly"
     if "lqi" in h or "rssi" in h or "link" in h:
-        return "weak_link"
+        return "link_quality_drop"
+    if "child" in h and ("unreach" in h or "drop" in h or "offline" in h):
+        return "child_unreachable"
     if "retry" in h or "retries" in h:
         return "tx_retry_spike"
     if "phantom" in h or "stale" in h:
-        return "stale_or_phantom"
-    return "generic"
+        return "phantom_persisted"
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -229,6 +256,9 @@ Rules:
 * Headline is direct, neutral, free of marketing words. No emoji.
 * Cite only tools that are actually present in the context payload.
 * No PII. No internal IDs beyond EUI-64.
+* Prefer these finding_type values when they fit: parent_flapping,
+    partition_anomaly, link_quality_drop, child_unreachable,
+    phantom_persisted. If none fit, invent a short snake_case identifier.
 """
 
 
@@ -259,11 +289,21 @@ class AssessmentEngine:
         triage_fn: Callable[[], Awaitable[dict[str, Any]]] | None = None,
         store: SQLiteStore | None = None,
         system_prompt: str = SYSTEM_PROMPT,
+        context_recent_findings_default: int = DEFAULT_RECENT_FINDINGS_CONTEXT,
+        context_recent_findings_by_model: dict[str, int] | None = None,
     ) -> None:
         self._agent = agent
         self._triage_fn = triage_fn
         self._store = store or get_store()
         self._system_prompt = system_prompt
+        self._context_recent_findings_default = max(
+            1, int(context_recent_findings_default)
+        )
+        self._context_recent_findings_by_model = {
+            str(k).strip().lower(): max(1, int(v))
+            for k, v in (context_recent_findings_by_model or {}).items()
+            if str(k).strip()
+        }
 
     async def run_once(
         self,
@@ -277,6 +317,22 @@ class AssessmentEngine:
         result = self._persist(envelope)
         result.parse_attempts = attempts
         result.duration_seconds = time.monotonic() - start
+        self._store.record_assessment_run(
+            verdict=result.envelope.verdict,
+            severity=result.envelope.severity,
+            confidence=result.envelope.confidence,
+            headline=result.envelope.headline,
+            finding_key=result.finding_key,
+            finding_id=result.finding_id,
+            finding_type=result.envelope.finding_type,
+            node_eui64=result.envelope.node_eui64,
+            parse_attempts=result.parse_attempts,
+            duration_seconds=result.duration_seconds,
+            suppressed=result.suppressed,
+            dedup_hit=result.dedup_hit,
+            cleared_count=result.cleared_count,
+            model_name=self._context_model_name(extra_context),
+        )
         return result
 
     # ----- internals --------------------------------------------------
@@ -293,10 +349,36 @@ class AssessmentEngine:
             except Exception as exc:  # noqa: BLE001
                 log.warning("triage call failed during assessment: %s", exc)
                 triage = {"error": str(exc)}
-        context = {"triage": triage}
+        model_name = self._context_model_name(extra)
+        findings_limit = self._recent_findings_limit(model_name)
+        context = {
+            "triage": triage,
+            "recent_findings": self._store.list_assessment_findings(
+                state=None,
+                limit=findings_limit,
+            ),
+            "context_budget": {
+                "recent_findings": findings_limit,
+                "model": model_name,
+            },
+        }
         if extra:
             context["extra"] = extra
         return context
+
+    def _context_model_name(self, extra: dict[str, Any] | None) -> str | None:
+        if not extra:
+            return None
+        for key in ("model", "agent_model", "model_name"):
+            value = extra.get(key)
+            if value:
+                return str(value).strip().lower() or None
+        return None
+
+    def _recent_findings_limit(self, model_name: str | None) -> int:
+        if model_name and model_name in self._context_recent_findings_by_model:
+            return self._context_recent_findings_by_model[model_name]
+        return self._context_recent_findings_default
 
     async def _ask_agent(
         self,
