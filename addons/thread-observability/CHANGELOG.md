@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.16 — Topology history chat guard and snapshot stats fix
+
+- **Chat fallback guard.** Direct-model chat now treats an empty `list_topology_history` result as missing history data and explicitly avoids the misleading `get_topology_history_entry {}` fallback, steering follow-up reasoning toward `get_mesh_state`, `query_history`, `analyze_node`, or `start_triage` instead.
+- **Accurate storage stats.** `get_storage_stats` now reports the `topology_snapshots` table row count, so storage stats stay consistent with `list_topology_history` when snapshots are already persisted.
+- **Regression coverage.** Added focused tests for the empty-topology-history retry guidance and the topology snapshot row count in SQLite stats.
+
 ## 0.11.15 — More deliberate memory updates from assistant outcomes
 
 - **Resolved-question handling.** Session memory now clears a pending question when the assistant returns a non-blocked, tool-backed answer, instead of keeping every prior question open by default.

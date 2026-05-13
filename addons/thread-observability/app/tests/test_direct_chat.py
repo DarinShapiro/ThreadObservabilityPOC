@@ -398,3 +398,90 @@ def test_direct_chat_turn_retries_for_node_question_without_history_context(monk
 
     assert result["response"]["text"] == "The node is online now, but recent history shows a very recent re-attach or partition-related change that matters for troubleshooting."
     assert [row["name"] for row in result["tool_calls"]] == ["analyze_node", "query_history", "get_mesh_state"]
+
+
+def test_direct_chat_turn_guides_away_from_empty_topology_history_fallback(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-topo-1",
+                                    "type": "function",
+                                    "function": {"name": "list_topology_history", "arguments": '{"limit": 10}'},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            note = next(
+                msg for msg in body["messages"]
+                if msg.get("role") == "system" and "Topology history returned no persisted snapshots" in str(msg.get("content") or "")
+            )
+            assert "Do not call get_topology_history_entry with empty arguments" in note["content"]
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-topo-2",
+                                    "type": "function",
+                                    "function": {"name": "get_mesh_state", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "There are no persisted topology snapshots for that window, so I used current mesh state instead.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "list_topology_history":
+            return {"snapshots": [], "count": 0}
+        if name == "get_mesh_state":
+            return {"partition_id": 1846206278, "nodes": [], "links": [], "node_count": 0, "link_count": 0}
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Which devices recently changed partitions?",
+            rendered_message="User message: Which devices recently changed partitions?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "There are no persisted topology snapshots for that window, so I used current mesh state instead."
+    assert [row["name"] for row in result["tool_calls"]] == ["list_topology_history", "get_mesh_state"]

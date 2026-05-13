@@ -309,6 +309,17 @@ def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
     return bool(names & {"query_history", "get_mesh_state", "start_triage", "list_all_nodes"})
 
 
+def _topology_history_is_empty(result: Any) -> bool:
+    if isinstance(result, dict):
+        snapshots = result.get("snapshots")
+        count = result.get("count")
+        if isinstance(snapshots, list):
+            return len(snapshots) == 0
+        if isinstance(count, int):
+            return count == 0
+    return False
+
+
 def _truncate_prompt_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
@@ -559,6 +570,7 @@ async def direct_chat_turn(
     tool_calls_used = 0
     tool_deferral_retries = 0
     node_evidence_retries = 0
+    topology_history_empty_hints = 0
     final_text = ""
     node_question = _looks_like_node_question(message)
 
@@ -641,6 +653,24 @@ async def direct_chat_turn(
                     "content": _serialize_for_prompt(result, max_chars=_MAX_TOOL_RESULT_MESSAGE_CHARS),
                 }
             )
+            if (
+                tool_call["name"] == "list_topology_history"
+                and topology_history_empty_hints < 1
+                and _topology_history_is_empty(result)
+            ):
+                topology_history_empty_hints += 1
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Topology history returned no persisted snapshots for the requested window. "
+                            "Do not call get_topology_history_entry with empty arguments as a fallback; that cannot "
+                            "recover missing history. Instead, explain that topology-history data is unavailable and "
+                            "fall back to current-state or event-based tools such as get_mesh_state, query_history, "
+                            "analyze_node, or start_triage."
+                        ),
+                    }
+                )
         if tool_calls_used >= _MAX_TOOL_CALLS:
             final_text = "I hit the current tool-call limit while gathering evidence. Please narrow the question."
             break

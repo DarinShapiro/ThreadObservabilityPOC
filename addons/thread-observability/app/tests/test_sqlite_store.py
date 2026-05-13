@@ -12,6 +12,7 @@ def test_migrations_apply(store: SQLiteStore) -> None:
     stats = store.stats()
     assert stats["schema_version"] == 24
     assert stats["row_counts"]["events"] == 0
+    assert stats["row_counts"]["topology_snapshots"] == 0
     assert stats["row_counts"]["chat_session_memory"] == 0
 
 

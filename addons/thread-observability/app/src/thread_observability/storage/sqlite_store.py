@@ -2136,6 +2136,7 @@ class SQLiteStore:
                     "ingest_state",
                     "links",
                     "network_data",
+                    "topology_snapshots",
                     "chat_session_memory",
                 )
             }
