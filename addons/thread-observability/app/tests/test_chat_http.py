@@ -272,8 +272,7 @@ def test_chat_turn_injects_session_memory_on_direct_followup(monkeypatch: pytest
         assert "Recent node timeline includes: re_attached_node." in rendered_message
         assert "hypotheses" in rendered_message
         assert "Partition split or stale Thread dataset may explain the observed behavior." in rendered_message
-        assert "pending_questions" in rendered_message
-        assert "What is going on with node e6684b9903e8970f?" in rendered_message
+        assert "pending_questions" not in rendered_message
         return {
             "conversation_id": str(conversation_id),
             "agent_id": target.agent_id,
@@ -314,6 +313,115 @@ def test_chat_turn_injects_session_memory_on_direct_followup(monkeypatch: pytest
     )
     assert second.status_code == 200
     assert second.json()["response"]["text"] == "Second reply"
+
+
+def test_chat_turn_keeps_pending_question_when_reply_is_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = ThreadObsConfig(
+        ai=AIConfig(
+            enabled=True,
+            provider="cerebras",
+            chat_backend="direct",
+            model="llama-4-scout",
+            api_key="secret",
+        )
+    )
+    rendered_messages: list[str] = []
+
+    async def fake_direct_turn(*, target, message: str, rendered_message: str, conversation_id: str | None):  # noqa: ANN001
+        rendered_messages.append(rendered_message)
+        if len(rendered_messages) == 1:
+            return {
+                "conversation_id": str(conversation_id),
+                "agent_id": target.agent_id,
+                "response": {"text": "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request.", "card": None},
+                "tool_calls": [],
+                "duration_ms": 6,
+                "model": target.model,
+                "streaming": False,
+            }
+        assert "pending_questions" in rendered_message
+        assert "Which offline nodes look most suspicious right now?" in rendered_message
+        return {
+            "conversation_id": str(conversation_id),
+            "agent_id": target.agent_id,
+            "response": {"text": "Follow-up reply", "card": None},
+            "tool_calls": [],
+            "duration_ms": 6,
+            "model": target.model,
+            "streaming": False,
+        }
+
+    import thread_observability.api.http_api as http_api
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    monkeypatch.setattr(direct_chat, "direct_chat_turn", fake_direct_turn)
+    client = TestClient(create_core_app())
+
+    first = client.post(
+        "/v1/chat/turn",
+        json={"message": "Which offline nodes look most suspicious right now?"},
+    )
+    assert first.status_code == 200
+    conversation_id = first.json()["conversation_id"]
+    chat_memory.reset()
+
+    second = client.post(
+        "/v1/chat/turn",
+        json={"message": "Try again.", "conversation_id": conversation_id},
+    )
+    assert second.status_code == 200
+
+
+def test_chat_turn_promotes_curated_hypothesis_from_reply_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    cfg = ThreadObsConfig(
+        ai=AIConfig(
+            enabled=True,
+            provider="cerebras",
+            chat_backend="direct",
+            model="llama-4-scout",
+            api_key="secret",
+        )
+    )
+    rendered_messages: list[str] = []
+
+    async def fake_direct_turn(*, target, message: str, rendered_message: str, conversation_id: str | None):  # noqa: ANN001
+        rendered_messages.append(rendered_message)
+        if len(rendered_messages) == 1:
+            return {
+                "conversation_id": str(conversation_id),
+                "agent_id": target.agent_id,
+                "response": {"text": "A stale Thread dataset is still plausible here.", "card": None},
+                "tool_calls": [],
+                "duration_ms": 5,
+                "model": target.model,
+                "streaming": False,
+            }
+        assert "hypotheses" in rendered_message
+        assert "Stale Thread dataset or credentials mismatch may explain the observed behavior." in rendered_message
+        return {
+            "conversation_id": str(conversation_id),
+            "agent_id": target.agent_id,
+            "response": {"text": "Follow-up reply", "card": None},
+            "tool_calls": [],
+            "duration_ms": 5,
+            "model": target.model,
+            "streaming": False,
+        }
+
+    import thread_observability.api.http_api as http_api
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+    monkeypatch.setattr(direct_chat, "direct_chat_turn", fake_direct_turn)
+    client = TestClient(create_core_app())
+
+    first = client.post("/v1/chat/turn", json={"message": "What could cause this partition split?"})
+    assert first.status_code == 200
+    conversation_id = first.json()["conversation_id"]
+    chat_memory.reset()
+
+    second = client.post(
+        "/v1/chat/turn",
+        json={"message": "What should I verify next?", "conversation_id": conversation_id},
+    )
+    assert second.status_code == 200
 
 
 def test_chat_turn_explicit_ha_agent_overrides_direct_default(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -34,6 +34,35 @@ _QUESTION_PREFIXES = (
     "does ",
     "did ",
 )
+_RESPONSE_BLOCKERS = (
+    "request failed",
+    "i couldn't complete",
+    "i could not complete",
+    "please retry",
+    "need more evidence",
+    "i don't know",
+    "i do not know",
+    "not enough evidence",
+    "context_length_exceeded",
+)
+_RESPONSE_HYPOTHESIS_PATTERNS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("stale thread dataset", "stale dataset", "credentials mismatch"),
+        "Stale Thread dataset or credentials mismatch may explain the observed behavior.",
+    ),
+    (
+        ("partition split", "split-brain", "two partitions"),
+        "Partition split may explain the observed behavior.",
+    ),
+    (
+        ("recommission", "identity churn", "ghost device", "duplicate physical identity"),
+        "Recent recommission or identity churn may be relevant.",
+    ),
+    (
+        ("weak link", "weak rf", "poor rssi", "link quality"),
+        "Weak RF link quality may be contributing to the issue.",
+    ),
+)
 
 log = logging.getLogger(__name__)
 
@@ -123,13 +152,15 @@ class ChatSessionStore:
         message: str,
         page_context: dict[str, Any] | None,
         tool_calls: list[dict[str, Any]] | None,
+        response_text: str | None = None,
     ) -> ChatSessionState:
         state = self.ensure_session(conversation_id)
         state.updated_at = time.time()
         goal = " ".join(str(message or "").split())
         state.current_goal = goal[:_MAX_GOAL_CHARS] if goal else state.current_goal
-        if self._looks_like_question(message):
-            self._push_pending_question(state, goal[:_MAX_GOAL_CHARS])
+        asked_question = goal[:_MAX_GOAL_CHARS] if self._looks_like_question(message) else None
+        if asked_question:
+            self._push_pending_question(state, asked_question)
 
         selected_node = None
         if isinstance(page_context, dict):
@@ -170,6 +201,12 @@ class ChatSessionStore:
             state.recent_tools = state.recent_tools[:_MAX_RECENT_TOOLS]
             result = call.get("result") if isinstance(call.get("result"), dict) else call.get("result")
             self._derive_facts_from_tool(state, name, result)
+        self._update_from_response(
+            state,
+            asked_question=asked_question,
+            response_text=response_text,
+            tool_call_count=len(tool_calls or []),
+        )
         self._persist(state)
         return state
 
@@ -301,6 +338,33 @@ class ChatSessionStore:
         state.hypotheses = [item for item in state.hypotheses if item != text]
         state.hypotheses.insert(0, text)
         state.hypotheses = state.hypotheses[:_MAX_HYPOTHESES]
+
+    def _update_from_response(
+        self,
+        state: ChatSessionState,
+        *,
+        asked_question: str | None,
+        response_text: str | None,
+        tool_call_count: int,
+    ) -> None:
+        text = " ".join(str(response_text or "").split())
+        if not text:
+            return
+        normalized = text.lower()
+        for patterns, hypothesis in _RESPONSE_HYPOTHESIS_PATTERNS:
+            if any(pattern in normalized for pattern in patterns):
+                self._set_hypothesis(state, hypothesis)
+        if asked_question and self._response_resolves_question(normalized, tool_call_count=tool_call_count):
+            state.pending_questions = [item for item in state.pending_questions if item != asked_question]
+
+    def _response_resolves_question(self, normalized_response: str, *, tool_call_count: int) -> bool:
+        if not normalized_response:
+            return False
+        if any(marker in normalized_response for marker in _RESPONSE_BLOCKERS):
+            return False
+        if tool_call_count > 0:
+            return True
+        return len(normalized_response) >= 24
 
     def _push_pending_question(self, state: ChatSessionState, question: str) -> None:
         text = " ".join(str(question or "").split())
@@ -445,12 +509,14 @@ def record_turn(
     message: str,
     page_context: dict[str, Any] | None,
     tool_calls: list[dict[str, Any]] | None,
+    response_text: str | None = None,
 ) -> ChatSessionState:
     return _STORE.record_turn(
         conversation_id=conversation_id,
         message=message,
         page_context=page_context,
         tool_calls=tool_calls,
+        response_text=response_text,
     )
 
 

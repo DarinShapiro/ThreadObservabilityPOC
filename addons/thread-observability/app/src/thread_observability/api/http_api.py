@@ -368,6 +368,7 @@ def create_core_app() -> FastAPI:
                         message=message,
                         page_context=page_context,
                         tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
+                        response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
                     )
                 return result
             except direct_chat.DirectChatConfigError as exc:
@@ -427,6 +428,7 @@ def create_core_app() -> FastAPI:
                 message=message,
                 page_context=page_context,
                 tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
+                response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
             )
         return result
 

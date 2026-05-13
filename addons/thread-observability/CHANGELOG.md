@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.15 — More deliberate memory updates from assistant outcomes
+
+- **Resolved-question handling.** Session memory now clears a pending question when the assistant returns a non-blocked, tool-backed answer, instead of keeping every prior question open by default.
+- **Blocked-question carryover.** If the assistant reply indicates failure or insufficient evidence, the question stays in `pending_questions` for the next turn.
+- **Curated hypothesis promotion.** Assistant replies can now promote a small curated set of hypotheses into session memory, such as partition split, stale dataset, recommission/identity churn, and weak RF link quality.
+
 ## 0.11.14 — Persisted chat memory and richer session state
 
 - **Restart-safe chat memory.** Structured chat session state now persists in SQLite, so compact investigation context can survive add-on restarts instead of living only in process memory.
