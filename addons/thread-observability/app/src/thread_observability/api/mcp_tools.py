@@ -88,7 +88,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
     },
     {
         "name": "list_active_issues",
-        "description": "Return all currently-open Thread network issues from the SQLite issues table.",
+        "description": (
+            "Return all currently-open Thread network issues from the SQLite issues table. "
+            "NOTE: Issue detection is currently paused pending a redesign of the rule set "
+            "(see tracking issue #5). Until new rules ship, this tool returns an empty list "
+            "with `status: \"placeholder\"`. Do NOT infer \"all clear\" from the empty list — "
+            "instead, reason from the raw data (topology, partitions, links, nodes)."
+        ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },    {
         "name": "get_health_snapshot",
@@ -834,6 +840,17 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "list_active_issues":
+        # Mirrors /v1/issues/active. Issue detection is paused
+        # pending redesign (#5); return an explicit placeholder so AI
+        # consumers don't infer "all clear" from an empty list.
+        from ..pipeline.reasoner import ISSUES_PAUSED, ISSUES_PAUSED_NOTE
+        if ISSUES_PAUSED:
+            return {
+                "count": 0,
+                "issues": [],
+                "status": "placeholder",
+                "note": ISSUES_PAUSED_NOTE,
+            }
         try:
             issues = get_store().list_active_issues()
             return {"count": len(issues), "issues": issues}

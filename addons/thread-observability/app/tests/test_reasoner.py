@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
+from thread_observability.pipeline import reasoner as reasoner_mod
 from thread_observability.pipeline.reasoner import (
     ATTACH_FAIL_THRESHOLD,
     MESH_DISAGREEMENT_PCT_THRESHOLD,
@@ -14,6 +17,16 @@ from thread_observability.pipeline.reasoner import (
     run_reasoner,
 )
 from thread_observability.storage.sqlite_store import SQLiteStore
+
+
+@pytest.fixture(autouse=True)
+def _unpause_reasoner(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Issue detection is paused globally (see #4/#5) but these tests
+    cover the rule implementations themselves, so we override the
+    pause flag for the duration of this file. The rules are preserved
+    behind the pause so the redesign can re-enable them incrementally.
+    """
+    monkeypatch.setattr(reasoner_mod, "ISSUES_PAUSED", False)
 
 
 def _now() -> datetime:
@@ -354,4 +367,18 @@ def test_wrong_network_no_issue_when_all_match(store: SQLiteStore) -> None:
     assert not [i for i in store.list_active_issues() if i["kind"] == "wrong_network"]
 
 
-
+def test_run_reasoner_paused_closes_residuals_and_returns_status(
+    store: SQLiteStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue detection paused (#4): residual open issues are closed
+    and the summary carries ``status: "paused"`` plus a note. The
+    rules are not evaluated."""
+    # Seed an open issue, then enable pause and re-run.
+    issue_id = store.open_issue(kind="parent_churn", severity="warn", eui64="aa" * 8)
+    monkeypatch.setattr(reasoner_mod, "ISSUES_PAUSED", True)
+    out = run_reasoner(store=store)
+    assert out["status"] == "paused"
+    assert out["opened"] == []
+    assert issue_id in out["closed"]
+    assert store.list_active_issues() == []
+    assert "note" in out and out["note"]

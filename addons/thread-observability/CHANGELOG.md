@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.10.5 — Drop noisy issues + clean up dashboard top
+
+- **#1 RouteTable self-destination row.** Some Thread stacks (Eve)
+  emit a route_table row whose destination is the reporter's own
+  EUI64 (`path_cost=0`, indirect link). It was a no-op routing entry
+  that polluted the links table, `/v1/neighbors/{eui}`, and the
+  dashboard route table. Now filtered at ingest (`device_discovery`)
+  and defensively on read (`list_neighbors_enriched`) so old rows
+  also disappear without a migration.
+
+- **#4 Issue detection paused.** The previous reasoner rules largely
+  restated state already visible elsewhere (partition count, phantom
+  count, stale-link count) and risked biasing AI consumers toward
+  specific diagnostic paths. `run_reasoner` is now a no-op that
+  closes any residual open issues; `/v1/issues/active` and the
+  `list_active_issues` MCP tool return `status: "placeholder"` with
+  an explicit `note` so consumers know absence of issues is not "all
+  clear". The dashboard Issues card renders the note verbatim. Rule
+  bodies and plumbing are preserved for the redesign (tracking
+  issue #5).
+
+- **#3 Top summary cards removed.** The four redundant headline
+  cards (Thread Health / Partitions / Active Nodes / Phantom Nodes)
+  are gone — the headline row, partitions panel, nodes table, and
+  stale-links view already carry the same information without the
+  vertical space cost.
+
 ## 0.10.4 — Node detail pane
 
 Clicking any row in the Thread Nodes table now opens a detail modal

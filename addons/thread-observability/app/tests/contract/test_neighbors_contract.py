@@ -50,7 +50,10 @@ def test_neighbors_three_routers_contract(client, store) -> None:
     assert body.reporter_eui64 == rb
     assert body.reporter_name == "Router B"
     assert body.neighbor_count == 2
-    assert body.route_count == 3
+    # 2 not 3: the fixture seeds a self-destination route_table row
+    # (rb -> rb) but the enricher defensively filters it. See #1.
+    assert body.route_count == 2
+    assert all(rt.neighbor_eui64 != rb for rt in body.routes)
     # Routes must have next_hop_router_id and (where resolvable) next_hop_eui64.
     rc_route = next(rt for rt in body.routes if rt.neighbor_eui64 == rc)
     assert rc_route.next_hop_router_id == 12

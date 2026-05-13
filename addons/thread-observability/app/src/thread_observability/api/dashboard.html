@@ -215,28 +215,6 @@
       <div id="headline-body" class="muted">computing…</div>
       <div id="headline-warnings" class="warnings-row"></div>
     </div>
-    <div class="grid">
-      <div class="card">
-        <h2>Thread Health</h2>
-        <div class="big" id="health-score">—</div>
-        <div class="sub" id="health-sub">computing…</div>
-      </div>
-      <div class="card">
-        <h2>Partitions</h2>
-        <div class="big" id="partition-count">—</div>
-        <div class="sub" id="partition-sub">—</div>
-      </div>
-      <div class="card">
-        <h2>Active Nodes</h2>
-        <div class="big" id="node-count">—</div>
-        <div class="sub" id="node-sub">—</div>
-      </div>
-      <div class="card">
-        <h2>Phantom Nodes</h2>
-        <div class="big" id="phantom-count">—</div>
-        <div class="sub muted">not seen in any router's tables &gt; 24 h</div>
-      </div>
-    </div>
 
     <div class="card full" id="hotspots-card">
       <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
@@ -724,6 +702,16 @@ function renderIssues(s) {
   const pillsHost = $('#issues-sev-pills');
   issuesBody.innerHTML = '';
   pillsHost.innerHTML = '';
+  // Issue detection is paused pending redesign (#5). The API returns
+  // `status: "placeholder"` until new rules ship. Render the note
+  // verbatim so users (and any AI consumer scraping the dashboard)
+  // don't read an empty list as "all clear".
+  if (s.issues && s.issues.status === 'placeholder') {
+    const note = s.issues.note
+      || 'Issue detection is paused pending redesign.';
+    issuesBody.appendChild(el('div', {class: 'muted', style: 'padding: 6px 0;'}, note));
+    return;
+  }
   const issues = ((s.issues && s.issues.issues) || []).slice();
   if (!issues.length) {
     issuesBody.appendChild(el('div', {class:'empty'}, 'No active issues.'));
@@ -824,22 +812,13 @@ function renderNetwork(s) {
   const areas = Array.from(new Set(nodes.map(n => n.area_name).filter(Boolean))).sort();
   const prevArea = areaSelect.value;
   areaSelect.innerHTML = '<option value="">all areas</option>';
-  for (const a of areas) {
-    const opt = el('option', {value: a}, a);
-    if (a === prevArea) opt.setAttribute('selected', 'selected');
-    areaSelect.appendChild(opt);
-  }
-  if (prevArea && !areas.includes(prevArea)) areaSelect.value = '';
-
-  renderHeadline(s);
-  renderHotSpots(s);
-  renderIssues(s);
-  renderPartitionsCard(s);
-  renderNodesTable(nodes);
-}
-
-function applyNodeFilters(nodes) {
-  const showPhantoms = $('#show-phantoms').checked;
+  // The four top summary cards (Thread Health / Partitions / Active
+  // Nodes / Phantom Nodes) were removed in issue #3 — the data they
+  // showed is already visible elsewhere (headline row, partitions
+  // panel, nodes table, stale links). The headline + hotspots +
+  // issues + partitions panels below carry the same information
+  // without taking the top fold.
+  const nodes = s.all_nodes || []
   const statusF = $('#nodes-filter-status').value;
   const roleF = $('#nodes-filter-role').value;
   const areaF = $('#nodes-filter-area').value;

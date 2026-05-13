@@ -326,6 +326,13 @@ def list_neighbors_enriched(
     for r in rows:
         d = dict(r)
         nei = d.get("neighbor_eui64")
+        # Defensive: drop any route_table row whose destination is the
+        # reporter itself. These are no-op self-entries some Thread
+        # stacks emit; we filter them out on write in device_discovery
+        # but old rows may still be in the table from prior ingests.
+        # See issue #1.
+        if d.get("source") == "route_table" and nei == reporter_eui:
+            continue
         name = name_by_eui.get(nei) if nei else None
         if d.get("source") == "neighbor_table":
             neighbors.append({

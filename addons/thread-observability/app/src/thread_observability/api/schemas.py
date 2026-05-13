@@ -160,6 +160,11 @@ class PartitionsResponse(_Base):
 class IssuesResponse(_Base):
     count: int
     issues: list[dict[str, Any]]
+    # Issue detection is paused pending redesign (#5). When paused,
+    # ``status`` is ``"placeholder"`` and ``note`` carries an explicit
+    # message so consumers don't read an empty list as "all clear".
+    status: str | None = None
+    note: str | None = None
 
 
 # -- /v1/phantoms -----------------------------------------------------------

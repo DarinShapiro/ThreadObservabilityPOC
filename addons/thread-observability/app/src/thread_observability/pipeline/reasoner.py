@@ -68,6 +68,24 @@ MESH_DISAGREEMENT_MAX_AGE_MIN = 30
 OBSERVER_SUPPRESSION_GRACE_SEC = 90
 
 
+# Issue detection is paused pending a redesign of the rule set. See
+# tracking issue #5 ("Redesign issue definitions") and #4 (placeholder
+# implementation). The previous rules largely restated state already
+# visible elsewhere and biased AI consumers toward specific diagnostic
+# paths that were not always correct. Until new rules ship that pass
+# the bar described in #5, ``run_reasoner`` is a no-op: it closes any
+# residual open issues on first call so the table doesn't leak stale
+# rows, then returns a paused-status summary.
+#
+# The full rule body below is intentionally retained so the redesign
+# can re-enable rules incrementally without re-implementing plumbing.
+ISSUES_PAUSED = True
+ISSUES_PAUSED_NOTE = (
+    "Issue detection is paused pending redesign. See tracking issue #5. "
+    "No issues will be reported until the new rule set lands."
+)
+
+
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
@@ -84,6 +102,26 @@ def run_reasoner(
     """
     s = store or get_store()
     now_dt = now or datetime.now(tz=UTC)
+
+    if ISSUES_PAUSED:
+        # Close any leftover open issues so the table doesn't leak
+        # stale rows while the rules are paused. This is idempotent:
+        # subsequent calls find nothing to close and return immediately.
+        residual_closed: list[int] = []
+        for issue in s.list_active_issues():
+            try:
+                if s.close_issue(int(issue["id"])):
+                    residual_closed.append(int(issue["id"]))
+            except Exception:  # noqa: BLE001
+                pass
+        return {
+            "status": "paused",
+            "note": ISSUES_PAUSED_NOTE,
+            "opened": [],
+            "closed": residual_closed,
+            "skipped": [],
+            "computed_at": now_dt.isoformat(),
+        }
 
     opened: list[int] = []
     closed: list[int] = []

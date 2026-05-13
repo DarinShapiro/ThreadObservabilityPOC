@@ -69,7 +69,10 @@ def test_list_neighbors_enriched(store) -> None:
     assert out["reporter_eui64"] == rb
     assert out["reporter_name"] == "Router B"
     assert out["neighbor_count"] == 2
-    assert out["route_count"] == 3
+    # 2 not 3: the fixture seeds a self-destination row (rb → rb) but
+    # ``list_neighbors_enriched`` defensively filters it. See issue #1.
+    assert out["route_count"] == 2
+    assert all(r["neighbor_eui64"] != rb for r in out["routes"])
     # OTBR neighbor should be enriched with its friendly name.
     otbr_row = next(n for n in out["neighbors"] if n["neighbor_eui64"] == otbr)
     assert otbr_row["name"] == "HA Yellow OTBR"

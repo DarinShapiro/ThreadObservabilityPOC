@@ -1169,9 +1169,22 @@ async def _persist_matter_diagnostics(
         # start would fire link_acquired for every existing edge.
         link_partition_id = diag.get("partition_id")
         try:
+            # Drop the reporter's own EUI from its route_table before
+            # persistence. Some Thread stacks (e.g. Eve) include a self
+            # destination row (path_cost=0, indirect link); it's a no-op
+            # routing entry that pollutes the links table, the
+            # /v1/neighbors/{eui} view, and any consumer reasoning over
+            # the routing graph. The self-row is still consulted below
+            # to derive the reporter's own RouterId — that lookup runs
+            # against ``route_table`` (the in-memory list), not the
+            # filtered copy, so router-ID discovery is preserved.
+            # See issue #1.
+            route_table_persist = [
+                r for r in route_table if r.get("neighbor_eui64") != eui
+            ]
             for source, table in (
                 ("neighbor_table", neighbor_table),
-                ("route_table", route_table),
+                ("route_table", route_table_persist),
             ):
                 diff = s.replace_links_for_reporter(
                     eui, source, table,
