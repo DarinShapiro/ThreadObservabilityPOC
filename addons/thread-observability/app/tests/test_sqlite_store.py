@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from thread_observability.storage.sqlite_store import SQLiteStore
+from thread_observability.storage.sqlite_store import SQLiteStore, _MIGRATIONS
 
 
 def test_migrations_apply(store: SQLiteStore) -> None:
-    assert store.schema_version == 24
+    assert store.schema_version == len(_MIGRATIONS)
     stats = store.stats()
-    assert stats["schema_version"] == 24
+    assert stats["schema_version"] == len(_MIGRATIONS)
     assert stats["row_counts"]["events"] == 0
     assert stats["row_counts"]["topology_snapshots"] == 0
     assert stats["row_counts"]["chat_session_memory"] == 0
@@ -217,7 +217,7 @@ def test_reset_data_wipes_cache_tables_preserves_schema(store: SQLiteStore) -> N
     assert counts["events"] == 0
     assert counts["issues"] == 0
     # Schema migrations still recorded.
-    assert store.schema_version == 24
+    assert store.schema_version == len(_MIGRATIONS)
 
 def test_upsert_node_metadata_persists_ha_fields(store: SQLiteStore) -> None:
     eui = "cc" * 8

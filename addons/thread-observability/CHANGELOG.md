@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.35 — Proactive surfacing checkpoint
+
+This checkpoint release tightens how Adaptive Monitoring findings are surfaced
+to operators and records the backlog in clearer delivery buckets.
+
+**Highlights:**
+- makes the top Adaptive Monitoring finding harder to miss by surfacing it in
+  the Network-tab warning strip and by enriching the assessment banner with
+  clearer urgency, context, and a direct "Run fresh check" action
+- reuses the same manual assessment path from both the banner and the
+  Adaptive Monitoring rail, including a clearer budget-exhausted error when a
+  forced check cannot run
+- adds a repository work-buckets document so the remaining GitHub backlog is
+  grouped into rational execution streams instead of floating as a flat list
+
 ## 0.11.34 — Partition chip count alignment
 
 This patch fixes a Network-tab mismatch discovered during live 0.11.33
