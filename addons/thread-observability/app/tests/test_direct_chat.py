@@ -1554,3 +1554,182 @@ def test_direct_chat_turn_falls_back_when_rf_answer_invents_get_node_history_and
     )
     assert result["tool_calls"][0]["result"] == {"error": "invalid eui64 argument: expected 16 hex characters"}
     assert result["tool_calls"][-1]["name"] == "list_all_nodes"
+
+
+def test_direct_chat_turn_clamps_forced_history_answer_without_history_tools(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) <= 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": f"call-mesh-{len(calls)}",
+                                    "type": "function",
+                                    "function": {"name": "get_mesh_state", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "Based on the available evidence, the current channel is 11, but 24 hours ago, the channel was not "
+                            "available in the mesh state. This suggests that the channel may have changed between now and 24 hours ago."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "get_mesh_state"
+        return {
+            "data": {"channel": 11, "node_count": 19, "partition_id": 1846206278},
+            "meta": {"tool": name},
+        }
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_MAX_TOOL_ROUNDS", 1)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did the channel change between now and 24h ago?",
+            rendered_message="User message: Did the channel change between now and 24h ago?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I don't have channel-specific history for the retained comparison anchors, so I can't determine whether the "
+        "Thread channel changed in that window."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["get_mesh_state", "get_mesh_state"]
+
+
+def test_direct_chat_turn_clamps_forced_internal_tool_answer_that_requests_node_selection(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_counter_series",
+                                        "arguments": '{"eui64":null,"counter_names":["tx_retry","tx_err_cca"]}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters-2",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_counter_series",
+                                        "arguments": '{"eui64":null,"counter_names":["tx_retry","tx_err_cca"]}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "Based on the current evidence, the selected node EUI64 is still null. This means that I do not have "
+                            "enough evidence to determine whether RF caused the channel change. To proceed, please select a node "
+                            "from the dashboard."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "list_all_nodes":
+            return {
+                "data": {
+                    "count": 1,
+                    "nodes": [
+                        {
+                            "eui64": "e6684b9903e8970f",
+                            "friendly_name": "Family Room Track Lights",
+                            "status": "online",
+                            "partition_id": 1846206278,
+                        }
+                    ],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_MAX_TOOL_ROUNDS", 1)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What internal MCP tool should I call to verify whether RF caused the channel change?",
+            rendered_message="User message: What internal MCP tool should I call to verify whether RF caused the channel change?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I can't ask you to call internal MCP tools directly. I can't determine whether RF conditions caused the channel "
+        "change from the available evidence because the counter query was not grounded to a real 16-hex EUI64 from the mesh "
+        "inventory and the returned counter series was empty."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["get_counter_series", "get_counter_series"]

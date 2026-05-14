@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.26 — Reapply deterministic history/RF clamps after forced answers
+
+- **Forced-answer clamp fix.** Direct chat now reapplies the deterministic history, RF, and internal-tool-refusal fallbacks after forced-answer paths too, so repeated tool rounds cannot bypass the grounded fallback logic.
+- **Live-shaped regressions.** Added focused regressions for the exact live `0.11.25` escape routes: repeated `get_mesh_state` leading to speculative history answers, and repeated invalid counter grounding leading to node-selection guidance in the final answer.
+- **No matrix/schema churn.** Existing browser-authenticated smoke coverage and matrix checks continue to parse without additional schema changes.
+
 ## 0.11.25 — Clamp remaining live node-selection drift in RF and refusal paths
 
 - **Internal-tool refusal tightening.** Direct chat now treats live answer shapes like `selected node EUI64 is still null` and `please select a node from the dashboard` as refusal-path drift and clamps them to the deterministic internal-tool refusal instead of surfacing node-selection guidance.

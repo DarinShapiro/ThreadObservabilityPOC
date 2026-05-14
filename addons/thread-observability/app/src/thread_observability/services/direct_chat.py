@@ -794,6 +794,27 @@ def _internal_tool_answer_needs_refusal(message: str, candidate_text: str, tool_
     )
 
 
+def _apply_deterministic_fallbacks(
+    *,
+    message: str,
+    candidate_text: str,
+    tool_trace: list[dict[str, Any]],
+    history_comparison_question: bool,
+    counter_question: bool,
+    internal_tool_request: bool,
+) -> str:
+    if history_comparison_question and (
+        _history_comparison_is_unreliable(message, tool_trace)
+        or _history_answer_overclaims_channel_change(message, candidate_text, tool_trace)
+    ):
+        return _build_history_insufficient_response(tool_trace)
+    if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
+        return _build_internal_tool_refusal_response(message, tool_trace)
+    if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
+        return _build_counter_insufficient_response(tool_trace)
+    return candidate_text
+
+
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
     if name in {"get_counter_series", "analyze_node"}:
         eui64 = arguments.get("eui64")
@@ -1284,18 +1305,6 @@ async def direct_chat_turn(
                     }
                 )
                 continue
-            if history_comparison_question and (
-                _history_comparison_is_unreliable(message, tool_trace)
-                or _history_answer_overclaims_channel_change(message, candidate_text, tool_trace)
-            ):
-                final_text = _build_history_insufficient_response(tool_trace)
-                break
-            if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
-                final_text = _build_internal_tool_refusal_response(message, tool_trace)
-                break
-            if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
-                final_text = _build_counter_insufficient_response(tool_trace)
-                break
             if node_question and node_evidence_retries < _MAX_NODE_EVIDENCE_RETRIES and not _has_sufficient_node_evidence(tool_trace):
                 node_evidence_retries += 1
                 evidence = await _gather_backend_node_evidence(message, tool_trace)
@@ -1316,7 +1325,14 @@ async def direct_chat_turn(
                     }
                 )
                 continue
-            final_text = candidate_text
+            final_text = _apply_deterministic_fallbacks(
+                message=message,
+                candidate_text=candidate_text,
+                tool_trace=tool_trace,
+                history_comparison_question=history_comparison_question,
+                counter_question=counter_question,
+                internal_tool_request=internal_tool_request,
+            )
             break
 
         for tool_call in tool_calls:
@@ -1374,6 +1390,14 @@ async def direct_chat_turn(
             final_text = await _force_answer_from_existing_evidence(target, messages)
         if not final_text:
             final_text = "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request."
+    final_text = _apply_deterministic_fallbacks(
+        message=message,
+        candidate_text=final_text,
+        tool_trace=tool_trace,
+        history_comparison_question=history_comparison_question,
+        counter_question=counter_question,
+        internal_tool_request=internal_tool_request,
+    )
     duration_ms = max(0, int((time.perf_counter() - started) * 1000))
     return {
         "conversation_id": conversation_id or f"direct-{uuid.uuid4()}",
