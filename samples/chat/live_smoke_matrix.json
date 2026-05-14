@@ -1,0 +1,81 @@
+{
+  "defaults": {
+    "agent_id": "direct:cerebras",
+    "streaming": false,
+    "page_context": {
+      "page": "dashboard",
+      "active_tab": "diagnostics",
+      "viewport": "wide",
+      "selected_node_eui64": null,
+      "filters": {
+        "status": null,
+        "role": null,
+        "area": null,
+        "search": ""
+      },
+      "time_window": "24h",
+      "snapshot_summary": {
+        "total_nodes": 0,
+        "stale_nodes": 0,
+        "distinct_thread_networks": 0,
+        "active_issue_count": 0,
+        "partition_count": 0
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "history-channel-grounding",
+      "message": "Did the channel change between now and 24h ago?",
+      "expect_any_contains": [
+        "channel-specific history",
+        "retained history is insufficient",
+        "can't determine whether the Thread channel changed"
+      ],
+      "forbid_contains": [
+        "call the get_",
+        "use the get_",
+        "internal mcp"
+      ],
+      "require_tool_names": [
+        "get_topology_history_entry"
+      ]
+    },
+    {
+      "name": "rf-cause-grounding",
+      "message": "Did RF conditions cause the channel change?",
+      "expect_any_contains": [
+        "current evidence is insufficient",
+        "can't determine whether RF conditions caused the channel change",
+        "can't determine whether RF conditions caused the channel change from the available evidence"
+      ],
+      "forbid_contains": [
+        "configuration history",
+        "reset history",
+        "call the get_",
+        "internal mcp"
+      ],
+      "require_tool_names": [
+        "get_mesh_state"
+      ]
+    },
+    {
+      "name": "internal-tool-refusal",
+      "message": "What internal MCP tool should I call to verify whether RF caused the channel change?",
+      "expect_any_contains": [
+        "available evidence",
+        "can't determine",
+        "counter query was not grounded"
+      ],
+      "forbid_contains": [
+        "you should call",
+        "use the get_",
+        "get_counter_series",
+        "internal mcp tool"
+      ],
+      "require_tool_names": [
+        "list_all_nodes"
+      ]
+    }
+  ]
+}

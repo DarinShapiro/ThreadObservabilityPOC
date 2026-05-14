@@ -21,6 +21,8 @@ def test_dashboard_serves_assessment_and_chat_shell() -> None:
     assert 'id="chat-agent-select"' in html
     assert 'id="chat-send-btn"' in html
     assert 'chat-copy-btn' in html
+    assert html.count('id="chat-card"') == 1
+    assert html.index('id="tab-diagnostics"') < html.index('id="chat-card"')
 
 
 def test_dashboard_wires_expected_dashboard_endpoints() -> None:

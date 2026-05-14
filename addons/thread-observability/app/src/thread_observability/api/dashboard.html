@@ -172,6 +172,7 @@
     padding:6px 10px; font-size:12px; cursor:pointer;
   }
   .suggestion-chip:hover { background:#153962; }
+  .chat-panel { margin-top:16px; }
   .history-list, .finding-list { display:flex; flex-direction:column; gap:8px; }
   .history-item, .finding-item {
     padding:10px 12px; border:1px solid var(--border); border-radius:10px; background: var(--panel2);
@@ -423,32 +424,6 @@
           <div id="assessment-detail-body" class="detail-box muted">Pick a background finding to inspect what the agent saw.</div>
         </div>
 
-        <div class="card" id="chat-card">
-          <div class="rail-card-head">
-            <h2>Chat</h2>
-            <button id="chat-reset-btn" class="action-btn">New conversation</button>
-          </div>
-          <div class="rail-sub">Dashboard + node context are sent on each turn. Tool calls stay visible.</div>
-          <div class="stack" style="margin-top:10px;">
-            <div>
-              <label class="rail-sub" for="chat-agent-select">Agent</label><br>
-              <select id="chat-agent-select" class="chat-select"><option value="">Home Assistant default</option></select>
-            </div>
-            <div id="chat-suggestions" class="suggestion-list"></div>
-            <div id="chat-messages" class="chat-messages"><div class="empty">No conversation yet. Ask about a node, partition split, or recent finding.</div></div>
-            <div class="chat-composer">
-              <textarea id="chat-input" placeholder="Ask about this mesh…"></textarea>
-              <div class="chat-controls">
-                <div class="chat-controls-left">
-                  <button id="chat-node-btn" class="action-btn">Ask about selected node</button>
-                </div>
-                <div class="chat-controls-right">
-                  <button id="chat-send-btn" class="action-btn primary">Send</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </aside>
     </div>
   </section>
@@ -528,6 +503,35 @@
       <summary>Raw config (token redacted)</summary>
       <pre class="log" id="config-body">…</pre>
     </details>
+  </section>
+
+  <section id="chat-panel" class="chat-panel">
+    <div class="card full" id="chat-card">
+      <div class="rail-card-head">
+        <h2>Chat</h2>
+        <button id="chat-reset-btn" class="action-btn">New conversation</button>
+      </div>
+      <div class="rail-sub">Dashboard + active-tab context are sent on each turn. Tool calls stay visible.</div>
+      <div class="stack" style="margin-top:10px;">
+        <div>
+          <label class="rail-sub" for="chat-agent-select">Agent</label><br>
+          <select id="chat-agent-select" class="chat-select"><option value="">Home Assistant default</option></select>
+        </div>
+        <div id="chat-suggestions" class="suggestion-list"></div>
+        <div id="chat-messages" class="chat-messages"><div class="empty">No conversation yet. Ask about a node, partition split, or recent finding.</div></div>
+        <div class="chat-composer">
+          <textarea id="chat-input" placeholder="Ask about this mesh…"></textarea>
+          <div class="chat-controls">
+            <div class="chat-controls-left">
+              <button id="chat-node-btn" class="action-btn">Ask about selected node</button>
+            </div>
+            <div class="chat-controls-right">
+              <button id="chat-send-btn" class="action-btn primary">Send</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -654,6 +658,7 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    renderChatSuggestions();
     if (btn.dataset.tab === 'graph') renderGraph();
   });
 });
@@ -954,16 +959,20 @@ function renderChatSuggestions() {
   const host = $('#chat-suggestions');
   if (!host) return;
   const prompts = [];
+  const activeTab = ((currentPageContext() || {}).active_tab) || 'network';
   const top = topAssessmentFinding();
   if (top && top.suggested_starter_prompt) prompts.push(top.suggested_starter_prompt);
   const summary = (lastStatus && lastStatus.health && lastStatus.health.summary) || {};
   const partitions = (lastStatus && lastStatus.partitions && lastStatus.partitions.partition_count) || 0;
+  if (activeTab === 'diagnostics') prompts.push('Summarize anything unusual in the add-on health, storage, and ingestion state.');
+  if (activeTab === 'graph') prompts.push('Explain the current forwarding paths and any weak links visible on the graph.');
   if ((summary.distinct_thread_networks || 0) > 1 || partitions > 1) prompts.push('Why are there two partitions right now?');
   if ((lastStatus && lastStatus.node_counts && lastStatus.node_counts.offline) > 0) prompts.push('Which offline nodes look most suspicious right now?');
   if (selectedNodeEui) prompts.push('Tell me what is going on with node ' + selectedNodeEui + '.');
   if (!prompts.length) prompts.push('Give me a quick health summary of this Thread mesh.');
+  const deduped = [...new Set(prompts)];
   host.innerHTML = '';
-  prompts.slice(0, 4).forEach(prompt => {
+  deduped.slice(0, 4).forEach(prompt => {
     const chip = el('button', { class: 'suggestion-chip', type: 'button' }, prompt);
     chip.addEventListener('click', () => primeChatPrompt(prompt));
     host.appendChild(chip);

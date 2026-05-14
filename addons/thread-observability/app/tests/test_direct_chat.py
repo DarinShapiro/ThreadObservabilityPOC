@@ -1192,3 +1192,205 @@ def test_direct_chat_turn_rejects_placeholder_counter_node_and_unsupported_follo
     assert result["tool_calls"][0]["result"] == {"error": "invalid eui64 argument: expected 16 hex characters"}
     assert result["tool_calls"][1]["name"] == "list_all_nodes"
     assert len(calls) == 3
+
+
+def test_direct_chat_turn_does_not_map_topology_diff_to_channel_stability_claim(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        if not hasattr(fake_post_chat_completions, "calls"):
+            fake_post_chat_completions.calls = []
+        fake_post_chat_completions.calls.append(json.loads(json.dumps(body)))
+        if len(fake_post_chat_completions.calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-now",
+                                    "type": "function",
+                                    "function": {"name": "get_topology_history_entry", "arguments": '{"at":"now"}'},
+                                },
+                                {
+                                    "id": "call-24h",
+                                    "type": "function",
+                                    "function": {"name": "get_topology_history_entry", "arguments": '{"at":"24h ago"}'},
+                                },
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The channel did not change between now and 24h ago. It is the same channel in both retained snapshots.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "get_topology_history_entry":
+            return {
+                "data": {"id": 73, "captured_at": "2026-05-14T01:04:46Z", "partition_id": 1846206278},
+                "meta": {"tool": name},
+            }
+        if name == "list_topology_history":
+            return {
+                "data": {
+                    "snapshots": [
+                        {"id": 73, "captured_at": "2026-05-14T01:04:46Z", "partition_id": 1846206278, "node_count": 19, "link_count": 59},
+                        {"id": 44, "captured_at": "2026-05-13T00:53:46Z", "partition_id": 2107240925, "node_count": 15, "link_count": 48},
+                    ],
+                    "count": 2,
+                },
+                "meta": {"tool": name},
+            }
+        if name == "diff_topology_history":
+            return {
+                "data": {
+                    "snapshot_id_a": 44,
+                    "snapshot_id_b": 73,
+                    "added_nodes": [{"eui64": "e6684b9903e8970f"}],
+                    "removed_nodes": [],
+                    "changed_nodes": [],
+                    "added_links": [],
+                    "removed_links": [],
+                    "summary": {"added_node_count": 1, "removed_node_count": 0, "changed_node_count": 0},
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did the channel change between now and 24h ago?",
+            rendered_message="User message: Did the channel change between now and 24h ago?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I can see retained topology changes between the comparison snapshots (1 added nodes, 0 removed nodes, 0 changed nodes), "
+        "but I don't have channel-specific history for those anchors, so I can't determine whether the Thread channel changed."
+    )
+
+
+def test_direct_chat_turn_falls_back_when_counter_answer_relies_on_unsupported_config_history(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_counter_series",
+                                        "arguments": '{"eui64":"e6684b9903e8970f","counter_names":["tx_retry","tx_err_cca"]}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The node shows no useful RF counters, so this was likely a configuration history or reset history event rather than RF.",
+                        }
+                    }
+                ]
+            }
+        note = next(
+            msg for msg in calls[2]["messages"]
+            if msg.get("role") == "system" and "Do not recommend config-history or reset-history evidence" in str(msg.get("content") or "")
+        )
+        assert "mesh inventory" in note["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The node shows no useful RF counters, so this was likely a configuration history or reset history event rather than RF.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "get_counter_series":
+            assert arguments["eui64"] == "e6684b9903e8970f"
+            return {
+                "data": {"series": [], "eui64": "e6684b9903e8970f"},
+                "meta": {"tool": name},
+            }
+        if name == "list_all_nodes":
+            return {
+                "data": {
+                    "count": 1,
+                    "nodes": [
+                        {
+                            "eui64": "e6684b9903e8970f",
+                            "friendly_name": "Family Room Track Lights",
+                            "status": "online",
+                            "partition_id": 1846206278,
+                        }
+                    ],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did RF conditions cause the channel change?",
+            rendered_message="User message: Did RF conditions cause the channel change?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I can't determine whether RF conditions caused the channel change from the available evidence because the returned counter series was empty."
+    )
+    assert result["tool_calls"][0]["name"] == "get_counter_series"
+    assert result["tool_calls"][1]["name"] == "list_all_nodes"
+    assert len(calls) == 3

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.11.22 — Chat smoke harness, broader regressions, and shared dashboard chat
+
+- **Reusable live smoke checks.** Added a PowerShell chat smoke harness plus a reusable prompt matrix for history-grounding, RF-cause grounding, and internal-tool refusal checks against the live `/v1/chat/turn` endpoint.
+- **Broader direct-chat regressions.** Added focused tests for topology-only evidence falsely implying channel stability and for RF answers that drift into unsupported config/reset-history reasoning even when grounded to a real node.
+- **Shared chat panel.** Moved dashboard chat out of the Network-only rail into a shared panel below the tab content so chat stays available from Network, Graph, and Diagnostics.
+- **Tab-aware prompts.** Starter prompts now adapt to the active tab, including Diagnostics and Graph-specific prompts while preserving node and partition-driven prompts.
+
 ## 0.11.21 — Tighter channel and counter grounding for direct chat
 
 - **No channel claims from topology-only diffs.** Direct chat now treats retained topology diffs as topology evidence only and will not turn them into channel-change claims unless channel-specific history is actually present in the gathered evidence.

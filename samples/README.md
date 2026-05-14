@@ -5,6 +5,7 @@ Useful for offline schema inspection and parser test fixtures.
 
 Sources captured (one folder each):
 
+- `chat/` — reusable live-chat smoke matrices for add-on acceptance runs
 - `mcp/` — Thread Observability MCP tool responses (`http://192.168.68.90:8100/mcp`)
 - `matter_server/` — `python-matter-server` WebSocket API responses (`ws://core-matter-server:5580/ws`)
 - `otbr/` — OpenThread Border Router REST API (`/api/topology`, etc.)
