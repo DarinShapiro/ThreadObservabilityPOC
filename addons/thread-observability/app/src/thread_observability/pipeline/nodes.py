@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..storage.sqlite_store import SQLiteStore, get_store
-from ..utils.datetime import utc_now_iso
+from ..utils.datetime import parse_iso_datetime, utc_now_iso
 
 
 def _utc_now() -> str:
@@ -122,9 +122,9 @@ def infer_node_status(node: dict[str, Any], stale_minutes: int = 60) -> str:
     if not last_seen:
         return "offline"
     try:
-        ts = datetime.fromisoformat(last_seen)
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=UTC)
+        ts = parse_iso_datetime(str(last_seen))
+        if ts is None:
+            return "offline"
         age = datetime.now(tz=UTC) - ts
         threshold = timedelta(minutes=stale_minutes)
         if age < threshold:
@@ -396,9 +396,8 @@ def _build_sed_mesh_state(s: SQLiteStore) -> dict[str, dict[str, Any]]:
         latest = r["latest"]
         if not nei or not latest:
             continue
-        try:
-            obs = datetime.fromisoformat(latest.replace("Z", "+00:00"))
-        except (ValueError, AttributeError):
+        obs = parse_iso_datetime(str(latest))
+        if obs is None:
             continue
         age = max(0, int((now - obs).total_seconds()))
         alive = age <= _SED_MESH_ALIVE_WINDOW_SECONDS

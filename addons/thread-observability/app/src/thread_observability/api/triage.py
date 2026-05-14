@@ -20,7 +20,7 @@ from typing import Any
 from ..health import build_health_snapshot
 from ..pipeline.runner import get_runner_state
 from ..storage.sqlite_store import get_store
-from ..utils.datetime import utc_now_iso
+from ..utils.datetime import parse_iso_datetime, utc_now_iso
 from . import supervisor_client
 
 
@@ -136,7 +136,7 @@ def _build_network_section() -> dict[str, Any]:
         for n in nodes
         if n.get("routing_role") == "leader" and n.get("eui64")
     ]
-    partitions = sorted({n.get("partition_id") for n in nodes if n.get("partition_id") is not None})
+    partitions = sorted({pid for n in nodes if isinstance((pid := n.get("partition_id")), int)})
     primary: dict[str, Any] = {}
     if networks:
         first = networks[0]
@@ -299,7 +299,9 @@ def _build_recommendations(
     stale = False
     if last_finished:
         try:
-            finished_dt = datetime.fromisoformat(last_finished)
+            finished_dt = parse_iso_datetime(str(last_finished))
+            if finished_dt is None:
+                raise ValueError("invalid timestamp")
             age = (datetime.now(tz=UTC) - finished_dt).total_seconds()
             stale = interval and age > (interval * 3)
         except ValueError:

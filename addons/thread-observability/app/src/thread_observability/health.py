@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .storage.sqlite_store import SQLiteStore, get_store
+from .utils.datetime import parse_iso_datetime
 
 STALE_THRESHOLD_MIN = 5
 OFFLINE_THRESHOLD_MIN = 30
@@ -80,10 +81,9 @@ def build_health_snapshot(*, store: SQLiteStore | None = None) -> dict[str, Any]
 
     data_age: float | None = None
     if newest:
-        try:
-            data_age = (now - datetime.fromisoformat(newest)).total_seconds()
-        except ValueError:
-            data_age = None
+        parsed_newest = parse_iso_datetime(str(newest))
+        if parsed_newest is not None:
+            data_age = (now - parsed_newest).total_seconds()
 
     overall = "ok"
     if by_sev.get("crit"):
