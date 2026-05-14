@@ -978,6 +978,8 @@ function currentPageContext() {
     time_window: '24h',
     snapshot_summary: {
       total_nodes: counts.total || 0,
+      online_nodes: counts.online || 0,
+      offline_nodes: counts.offline || 0,
       stale_nodes: ((lastStatus && lastStatus.health && lastStatus.health.summary) || {}).stale_nodes || 0,
       distinct_thread_networks: ((lastStatus && lastStatus.health && lastStatus.health.summary) || {}).distinct_thread_networks || 0,
       active_issue_count: ((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0,

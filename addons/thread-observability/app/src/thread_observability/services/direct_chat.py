@@ -74,6 +74,9 @@ _NODE_HISTORY_WINDOW = timedelta(hours=2)
 _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bset\s+otbr\s+slug\b", re.IGNORECASE),
     re.compile(r"\brestart\s+pipeline\b", re.IGNORECASE),
+    re.compile(r"\btoggl(?:e|ed)\b.*\bcurrent\b.*\bhistorical\b.*\bview", re.IGNORECASE),
+    re.compile(r"\bcurrent\s+and\s+historical\s+views\b", re.IGNORECASE),
+    re.compile(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", re.IGNORECASE),
 )
 _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:1|one)\s+partition\b", re.IGNORECASE),
@@ -83,6 +86,16 @@ _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS: tuple[re.Pattern[str], ...] = (
 _PAGE_CONTEXT_UNIFIED_NETWORK_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bsingle\s+unified\s+thread\s+network\b", re.IGNORECASE),
     re.compile(r"\bsingle\s+thread\s+network\b", re.IGNORECASE),
+)
+_PAGE_CONTEXT_NO_OFFLINE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:0|zero)\s+offline\s+nodes?\b", re.IGNORECASE),
+    re.compile(r"\bno\s+offline\s+(?:devices|nodes?)\b", re.IGNORECASE),
+    re.compile(r"\ball\s+nodes\s+are\s+online\b", re.IGNORECASE),
+    re.compile(r"\bfully\s+operational\b", re.IGNORECASE),
+)
+_PAGE_CONTEXT_NO_STALE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:0|zero)\s+stale\s+nodes?\b", re.IGNORECASE),
+    re.compile(r"\bno\s+stale\s+(?:devices|nodes?)\b", re.IGNORECASE),
 )
 
 
@@ -874,6 +887,12 @@ def _build_unsupported_dashboard_action_response(candidate_text: str) -> str:
         blocked.append("set the OTBR slug")
     if re.search(r"\brestart\s+pipeline\b", normalized, re.IGNORECASE):
         blocked.append("restart the pipeline")
+    if re.search(r"\btoggl(?:e|ed)\b.*\bcurrent\b.*\bhistorical\b.*\bview", normalized, re.IGNORECASE) or re.search(
+        r"\bcurrent\s+and\s+historical\s+views\b", normalized, re.IGNORECASE
+    ):
+        blocked.append("toggle between current and historical partition views")
+    if re.search(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", normalized, re.IGNORECASE):
+        blocked.append("click a warning icon in graph diagnostics")
     actions = ", ".join(blocked) if blocked else "use that dashboard action"
     return (
         "I can’t point you to that dashboard action because the current UI does not expose a control to "
@@ -922,6 +941,21 @@ def _extract_page_context_from_message(message: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _extract_named_count(candidate_text: str, *labels: str) -> int | None:
+    normalized = " ".join(str(candidate_text or "").lower().split())
+    if not normalized:
+        return None
+    for label in labels:
+        pattern = re.compile(rf"\b{re.escape(label)}\b[^0-9]{{0,24}}(\d+)\b", re.IGNORECASE)
+        match = pattern.search(normalized)
+        if match:
+            try:
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def _answer_contradicts_page_context(message: str, candidate_text: str) -> bool:
     page_context = _extract_page_context_from_message(message)
     if not page_context:
@@ -940,9 +974,41 @@ def _answer_contradicts_page_context(message: str, candidate_text: str) -> bool:
         distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
     except (TypeError, ValueError):
         distinct_thread_networks = 0
+    try:
+        total_nodes = int(summary.get("total_nodes") or 0)
+    except (TypeError, ValueError):
+        total_nodes = 0
+    try:
+        stale_nodes = int(summary.get("stale_nodes") or 0)
+    except (TypeError, ValueError):
+        stale_nodes = 0
+    try:
+        offline_nodes = int(summary.get("offline_nodes") or 0)
+    except (TypeError, ValueError):
+        offline_nodes = 0
+    try:
+        online_nodes = int(summary.get("online_nodes") or 0)
+    except (TypeError, ValueError):
+        online_nodes = 0
     if partition_count > 1 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS):
         return True
     if distinct_thread_networks > 1 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_UNIFIED_NETWORK_PATTERNS):
+        return True
+    if offline_nodes > 0 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_NO_OFFLINE_PATTERNS):
+        return True
+    if stale_nodes > 0 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_NO_STALE_PATTERNS):
+        return True
+    claimed_total = _extract_named_count(normalized, "total nodes", "nodes total")
+    if total_nodes > 0 and claimed_total is not None and claimed_total != total_nodes:
+        return True
+    claimed_offline = _extract_named_count(normalized, "offline nodes", "offline devices", "offline")
+    if offline_nodes >= 0 and claimed_offline is not None and claimed_offline != offline_nodes:
+        return True
+    claimed_online = _extract_named_count(normalized, "online nodes", "healthy nodes", "online")
+    if online_nodes > 0 and claimed_online is not None and claimed_online != online_nodes:
+        return True
+    claimed_stale = _extract_named_count(normalized, "stale nodes", "stale")
+    if stale_nodes >= 0 and claimed_stale is not None and claimed_stale != stale_nodes:
         return True
     return False
 
@@ -959,7 +1025,29 @@ def _build_page_context_contradiction_response(message: str) -> str:
         distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
     except (TypeError, ValueError):
         distinct_thread_networks = 0
+    try:
+        total_nodes = int(summary.get("total_nodes") or 0)
+    except (TypeError, ValueError):
+        total_nodes = 0
+    try:
+        online_nodes = int(summary.get("online_nodes") or 0)
+    except (TypeError, ValueError):
+        online_nodes = 0
+    try:
+        offline_nodes = int(summary.get("offline_nodes") or 0)
+    except (TypeError, ValueError):
+        offline_nodes = 0
+    try:
+        stale_nodes = int(summary.get("stale_nodes") or 0)
+    except (TypeError, ValueError):
+        stale_nodes = 0
     details = []
+    if total_nodes > 0:
+        details.append(f"{total_nodes} total node{'s' if total_nodes != 1 else ''}")
+    if online_nodes > 0 or offline_nodes > 0:
+        details.append(f"{online_nodes} online / {offline_nodes} offline")
+    if stale_nodes > 0:
+        details.append(f"{stale_nodes} stale node{'s' if stale_nodes != 1 else ''}")
     if partition_count > 0:
         details.append(f"{partition_count} partition{'s' if partition_count != 1 else ''}")
     if distinct_thread_networks > 0:
@@ -1494,10 +1582,11 @@ async def direct_chat_turn(
     conversation_id: str | None,
 ) -> dict[str, Any]:
     started = time.perf_counter()
+    context_message = rendered_message or message
     tool_deferral_retry_budget = _tool_deferral_retry_budget(target)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": _DEFAULT_SYSTEM_PROMPT},
-        {"role": "user", "content": rendered_message or message},
+        {"role": "user", "content": context_message},
     ]
     tools = _chat_tools()
     tool_trace: list[dict[str, Any]] = []
@@ -1610,7 +1699,7 @@ async def direct_chat_turn(
                 continue
             review = await _evaluate_answer_candidate(
                 target,
-                message=message,
+                message=context_message,
                 candidate_text=candidate_text,
                 tool_trace=tool_trace,
                 internal_tool_request=internal_tool_request,
@@ -1628,7 +1717,7 @@ async def direct_chat_turn(
                 )
                 continue
             final_text = _apply_deterministic_fallbacks(
-                message=message,
+                message=context_message,
                 candidate_text=candidate_text,
                 tool_trace=tool_trace,
                 history_comparison_question=history_comparison_question,
@@ -1679,7 +1768,7 @@ async def direct_chat_turn(
                         ),
                     }
                 )
-        exact_count_response = _build_exact_count_response(message, tool_trace)
+        exact_count_response = _build_exact_count_response(context_message, tool_trace)
         if exact_count_response is not None:
             final_text = exact_count_response
             break
@@ -1693,7 +1782,7 @@ async def direct_chat_turn(
         if not final_text:
             final_text = "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request."
     final_text = _apply_deterministic_fallbacks(
-        message=message,
+        message=context_message,
         candidate_text=final_text,
         tool_trace=tool_trace,
         history_comparison_question=history_comparison_question,

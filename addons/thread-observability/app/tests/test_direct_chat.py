@@ -1881,6 +1881,24 @@ def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() 
     assert "restart the pipeline" in text
 
 
+def test_apply_deterministic_fallbacks_rewrites_nonexistent_graph_history_guidance() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message="Why are there two partitions right now?",
+        candidate_text=(
+            "The dashboard UI sometimes displays a Partitions badge that can be toggled between current and historical "
+            "views. You can click the warning icon in the graph diagnostics to inspect weak_link and high_error edges."
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "does not expose a control" in text
+    assert "toggle between current and historical partition views" in text
+    assert "click a warning icon in graph diagnostics" in text
+
+
 def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradiction() -> None:
     text = direct_chat._apply_deterministic_fallbacks(
         message=(
@@ -1898,6 +1916,69 @@ def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradic
 
     assert "can't flatten this into a single unified mesh" in text
     assert "2 partitions" in text
+
+
+    def test_apply_deterministic_fallbacks_rewrites_page_context_node_count_contradiction() -> None:
+        text = direct_chat._apply_deterministic_fallbacks(
+            message=(
+                'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
+                'User message: What is the overall health of my network right now?'
+            ),
+            candidate_text=(
+                "The mesh is fully operational with 23 healthy nodes, 0 stale nodes, 0 offline nodes, and 23 total nodes."
+            ),
+            tool_trace=[],
+            history_comparison_question=False,
+            counter_question=False,
+            internal_tool_request=False,
+        )
+
+        assert "active discrepancy" in text
+        assert "16 total nodes" in text
+        assert "15 online / 1 offline" in text
+
+
+    def test_direct_chat_turn_uses_rendered_page_context_for_contradiction_checks(monkeypatch) -> None:
+        target = direct_chat.DirectChatTarget(
+            provider="cerebras",
+            model="llama-4-scout",
+            base_url="https://api.cerebras.ai/v1",
+            api_key="secret",
+            temperature=0.2,
+        )
+
+        async def fake_post_chat_completions(target, body):  # noqa: ANN001
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The mesh is fully operational with 23 healthy nodes, 0 offline nodes, and 23 total nodes.",
+                        }
+                    }
+                ]
+            }
+
+        async def fake_evaluate_answer_candidate(*args, **kwargs):  # noqa: ANN001, ARG001
+            return direct_chat.AnswerReview(verdict="pass")
+
+        monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+        monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_evaluate_answer_candidate)
+
+        result = asyncio.run(
+            direct_chat.direct_chat_turn(
+                target=target,
+                message="What is the overall health of my network right now?",
+                rendered_message=(
+                    'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
+                    'User message: What is the overall health of my network right now?'
+                ),
+                conversation_id=None,
+            )
+        )
+
+        assert "active discrepancy" in result["response"]["text"]
+        assert "15 online / 1 offline" in result["response"]["text"]
     assert "2 distinct Thread networks" in text
 
 

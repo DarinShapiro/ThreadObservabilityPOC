@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.38 — Chat page-context grounding follow-up
+
+This patch packages the direct-chat fix needed after 0.11.37 live validation.
+
+**Fixes:**
+- passes the rendered dashboard page context through the direct-chat evaluator
+  and deterministic fallback path instead of checking only the raw user text
+- extends page-context contradiction checks to catch mismatched online,
+  offline, stale, and total-node claims before those answers reach the user
+- sends online/offline counts from the dashboard page context so health and
+  offline-node answers stay aligned with the live UI summary
+
 ## 0.11.37 — Dashboard grounding and cleanup pass
 
 This release packages the validated backlog work completed after the 0.11.36
