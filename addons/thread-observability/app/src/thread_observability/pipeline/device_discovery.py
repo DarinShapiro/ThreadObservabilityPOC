@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..storage.sqlite_store import SQLiteStore, get_store
+from ..utils.coercion import coerce_int
 
 log = logging.getLogger(__name__)
 
@@ -253,11 +254,7 @@ def _field(struct: dict[str, Any], int_key: int, *str_keys: str) -> Any:
 
 
 def _coerce_int(v: Any) -> int | None:
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int):
-        return v
-    return None
+    return coerce_int(v)
 
 
 def _decode_neighbor_table(raw: Any) -> list[dict[str, Any]]:

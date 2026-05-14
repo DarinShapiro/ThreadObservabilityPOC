@@ -27,27 +27,14 @@ import logging
 from typing import Any
 
 from ..storage.sqlite_store import SQLiteStore
+from ..utils.coercion import coerce_int
 from . import otbr_rest
 
 log = logging.getLogger(__name__)
 
 
 def _coerce_int(v: Any) -> int | None:
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int):
-        return v
-    if isinstance(v, str):
-        s = v.strip()
-        if not s:
-            return None
-        try:
-            return int(s, 16) if s.lower().startswith("0x") else int(s)
-        except ValueError:
-            return None
-    return None
+    return coerce_int(v, allow_strings=True)
 
 
 def _extract_mac_counters(payload: dict[str, Any]) -> dict[str, int | None]:

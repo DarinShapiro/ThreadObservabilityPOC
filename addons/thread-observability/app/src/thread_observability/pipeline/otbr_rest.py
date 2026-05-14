@@ -24,6 +24,7 @@ from typing import Any
 import httpx
 
 from ..storage.sqlite_store import SQLiteStore, get_store
+from ..utils.coercion import coerce_int
 
 log = logging.getLogger(__name__)
 
@@ -352,21 +353,7 @@ def _otbr_eui_from(entry: dict[str, Any]) -> str | None:
 
 
 def _otbr_coerce_int(v: Any) -> int | None:
-    if v is None:
-        return None
-    if isinstance(v, bool):
-        return int(v)
-    if isinstance(v, int):
-        return v
-    if isinstance(v, str):
-        s = v.strip()
-        try:
-            if s.startswith("0x") or s.startswith("0X"):
-                return int(s, 16)
-            return int(s)
-        except ValueError:
-            return None
-    return None
+    return coerce_int(v, allow_strings=True)
 
 
 def _otbr_tri(v: Any) -> int | None:
