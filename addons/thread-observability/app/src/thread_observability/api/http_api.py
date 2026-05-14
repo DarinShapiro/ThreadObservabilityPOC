@@ -37,6 +37,22 @@ from ..storage.sqlite_store import get_store
 
 log = logging.getLogger(__name__)
 
+_CONFIG_SECRET_KEYS = frozenset({"token", "api_key", "ha_admin_token"})
+
+
+def _redact_config_secrets(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[str, object] = {}
+        for key, item in value.items():
+            if key in _CONFIG_SECRET_KEYS and item:
+                redacted[key] = "***"
+            else:
+                redacted[key] = _redact_config_secrets(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_config_secrets(item) for item in value]
+    return value
+
 
 def _render_chat_message(
     message: str,
@@ -740,11 +756,7 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             ts_health = {"backend": "unknown", "error": str(exc)}
         try:
-            cfg = get_config().model_dump()
-            if cfg.get("influx", {}).get("token"):
-                cfg["influx"]["token"] = "***"
-            if cfg.get("ai", {}).get("api_key"):
-                cfg["ai"]["api_key"] = "***"
+            cfg = _redact_config_secrets(get_config().model_dump())
         except Exception as exc:  # noqa: BLE001
             cfg = {"error": str(exc)}
         try:

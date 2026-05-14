@@ -8,7 +8,9 @@ response so the UI never has to fan-out.
 
 from __future__ import annotations
 
+from thread_observability.api import http_api
 from thread_observability.api.schemas import DevStatusResponse
+from thread_observability.config import AIConfig, InfluxConfig, ThreadObsConfig
 from ..test_nodes import _setup_three_router_partition  # type: ignore[import-not-found]
 
 
@@ -66,3 +68,20 @@ def test_dev_status_pipeline_stages_failed_present(client, store) -> None:
     if isinstance(pipeline.get("stages"), dict):
         assert "stages_failed" in pipeline
         assert isinstance(pipeline["stages_failed"], list)
+
+
+def test_dev_status_redacts_config_secrets(client, monkeypatch) -> None:
+    cfg = ThreadObsConfig(
+        ha_admin_token="SECRET-LLT-XYZ",
+        ai=AIConfig(api_key="OPENAI-SECRET"),
+        influx=InfluxConfig(token="INFLUX-SECRET"),
+    )
+    monkeypatch.setattr(http_api, "get_config", lambda: cfg)
+
+    r = client.get("/v1/dev/status")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["config"]["ha_admin_token"] == "***"
+    assert body["config"]["ai"]["api_key"] == "***"
+    assert body["config"]["influx"]["token"] == "***"

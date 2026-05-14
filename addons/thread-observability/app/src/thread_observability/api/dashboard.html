@@ -478,31 +478,41 @@
         <h2>OTBR Ingestion</h2>
         <div id="ingest-body" class="muted">…</div>
       </div>
+      <div class="card">
+        <h2>Advanced Debug</h2>
+        <label style="display:flex; gap:8px; align-items:center; font-size:14px;">
+          <input type="checkbox" id="diag-advanced-toggle">
+          <span>Show raw config, endpoint list, and recent logs</span>
+        </label>
+        <div class="muted" style="margin-top:8px;">Sensitive debug surfaces stay hidden until you explicitly enable them.</div>
+      </div>
     </div>
 
-    <details>
-      <summary>Recent logs</summary>
-      <pre class="log" id="logs-body">…</pre>
-    </details>
+    <div id="diagnostics-advanced-panels" hidden>
+      <details>
+        <summary>Recent logs</summary>
+        <pre class="log" id="logs-body">…</pre>
+      </details>
 
-    <details>
-      <summary>Endpoints</summary>
-      <ul style="font-size:12px; line-height:1.7;">
-        <li><code>GET /v1/health/snapshot</code></li>
-        <li><code>GET /v1/issues/active</code></li>
-        <li><code>GET /v1/topology?include_phantoms=</code></li>
-        <li><code>GET /v1/partitions?include_phantoms=</code></li>
-        <li><code>GET /v1/phantoms</code></li>
-        <li><code>GET /v1/dev/status?include_phantoms=</code></li>
-        <li><code>GET /v1/counters/deltas</code></li>
-        <li><code>GET /v1/ingest/state</code></li>
-      </ul>
-    </details>
+      <details>
+        <summary>Endpoints</summary>
+        <ul style="font-size:12px; line-height:1.7;">
+          <li><code>GET /v1/health/snapshot</code></li>
+          <li><code>GET /v1/issues/active</code></li>
+          <li><code>GET /v1/topology?include_phantoms=</code></li>
+          <li><code>GET /v1/partitions?include_phantoms=</code></li>
+          <li><code>GET /v1/phantoms</code></li>
+          <li><code>GET /v1/dev/status?include_phantoms=</code></li>
+          <li><code>GET /v1/counters/deltas</code></li>
+          <li><code>GET /v1/ingest/state</code></li>
+        </ul>
+      </details>
 
-    <details>
-      <summary>Raw config (token redacted)</summary>
-      <pre class="log" id="config-body">…</pre>
-    </details>
+      <details>
+        <summary>Raw config (secrets redacted)</summary>
+        <pre class="log" id="config-body">…</pre>
+      </details>
+    </div>
   </section>
 
   <section id="chat-panel" class="chat-panel">
@@ -1625,6 +1635,20 @@ function renderDiagnostics(s) {
 
   $('#logs-body').textContent = (s.recent_logs || []).join('\n') || '(no log file yet)';
   $('#config-body').textContent = JSON.stringify(s.config || {}, null, 2);
+}
+
+function setDiagnosticsAdvancedMode(enabled) {
+  const panel = $('#diagnostics-advanced-panels');
+  if (!panel) return;
+  panel.hidden = !enabled;
+}
+
+const diagnosticsAdvancedToggle = $('#diag-advanced-toggle');
+if (diagnosticsAdvancedToggle) {
+  diagnosticsAdvancedToggle.addEventListener('change', (event) => {
+    setDiagnosticsAdvancedMode(Boolean(event.target && event.target.checked));
+  });
+  setDiagnosticsAdvancedMode(Boolean(diagnosticsAdvancedToggle.checked));
 }
 
 let cy = null;
