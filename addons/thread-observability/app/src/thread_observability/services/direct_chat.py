@@ -858,6 +858,8 @@ def _apply_deterministic_fallbacks(
         return _build_unsupported_dashboard_action_response(candidate_text)
     if _answer_contradicts_page_context(message, candidate_text):
         return _build_page_context_contradiction_response(message)
+    if _answer_leaks_internal_tool_names(candidate_text):
+        return _build_internal_tool_name_leak_response()
     if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
         return _build_internal_tool_refusal_response(message, tool_trace)
     if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
@@ -884,6 +886,35 @@ def _build_unsupported_dashboard_action_response(candidate_text: str) -> str:
         "I can’t point you to that dashboard action because the current UI does not expose a control to "
         f"{actions}. I can still help diagnose the issue from the available Thread evidence and describe any "
         "required manual action in plain terms instead of referring to a nonexistent button or menu."
+    )
+
+
+def _answer_leaks_internal_tool_names(candidate_text: str) -> bool:
+    normalized = " ".join(str(candidate_text or "").lower().split())
+    if not normalized:
+        return False
+    if not any(
+        phrase in normalized
+        for phrase in (
+            "use ",
+            "call ",
+            "query ",
+            "check ",
+            "recommend ",
+            "investigate further",
+            "tool ",
+            "function ",
+            "mcp ",
+        )
+    ):
+        return False
+    return _looks_like_tool_deferral(candidate_text)
+
+
+def _build_internal_tool_name_leak_response() -> str:
+    return (
+        "I shouldn't send you to internal MCP tools or backend function names directly. I should either use those "
+        "tools myself and answer from the evidence, or describe the next diagnostic step in plain operator terms."
     )
 
 

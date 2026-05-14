@@ -1899,3 +1899,19 @@ def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradic
     assert "can't flatten this into a single unified mesh" in text
     assert "2 partitions" in text
     assert "2 distinct Thread networks" in text
+
+
+def test_apply_deterministic_fallbacks_rewrites_internal_tool_name_leak() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message="Why is this node unstable?",
+        candidate_text=(
+            "Use analyze_node and get_counter_series first, then query_history if you still need more evidence."
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "shouldn't send you to internal MCP tools" in text
+    assert "plain operator terms" in text
