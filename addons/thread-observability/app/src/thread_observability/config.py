@@ -23,6 +23,14 @@ OPTIONS_PATH = Path(os.getenv("THREAD_OBS_OPTIONS_PATH", "/data/options.json"))
 class RetentionConfig(BaseModel):
     full_resolution_days: int = Field(default=3, ge=1, le=30)
     sampled_archive_days: int = Field(default=14, ge=1, le=60)
+    chat_days: int = Field(default=14, ge=1, le=90)
+
+
+class ChatConfig(BaseModel):
+    enabled: bool = False
+    default_agent_id: str = ""
+    send_page_context: bool = True
+    persist_transcripts: bool = False
 
 
 class AIConfig(BaseModel):
@@ -96,6 +104,7 @@ class ThreadObsConfig(BaseModel):
     ha_admin_token: str = Field(default="", repr=False)
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     ai: AIConfig = Field(default_factory=AIConfig)
+    chat: ChatConfig = Field(default_factory=ChatConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     influx: InfluxConfig = Field(default_factory=InfluxConfig)
     assessment: AssessmentConfig = Field(default_factory=AssessmentConfig)

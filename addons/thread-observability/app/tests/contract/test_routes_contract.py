@@ -40,6 +40,8 @@ def test_routes_direct_contract(client, store) -> None:
     assert body.hops[0].eui64 == rb
     assert body.hops[-1].eui64 == otbr
     assert body.hops[-1].is_otbr is True
+    assert body.summary is not None
+    assert body.summary.first_upstream_eui64 == otbr
 
 
 def test_routes_multihop_contract(client, store) -> None:
@@ -51,6 +53,8 @@ def test_routes_multihop_contract(client, store) -> None:
     assert body.complete is True
     assert body.hop_count == 3
     assert [h.eui64 for h in body.hops] == [rc, rb, otbr]
+    assert body.summary is not None
+    assert body.summary.first_upstream_eui64 == rb
 
 
 def test_routes_self_is_otbr_contract(client, store) -> None:

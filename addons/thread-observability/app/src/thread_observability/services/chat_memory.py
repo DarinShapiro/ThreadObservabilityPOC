@@ -153,6 +153,8 @@ class ChatSessionStore:
         page_context: dict[str, Any] | None,
         tool_calls: list[dict[str, Any]] | None,
         response_text: str | None = None,
+        persist: bool = True,
+        persist_days: int | None = None,
     ) -> ChatSessionState:
         state = self.ensure_session(conversation_id)
         state.updated_at = time.time()
@@ -207,7 +209,8 @@ class ChatSessionStore:
             response_text=response_text,
             tool_call_count=len(tool_calls or []),
         )
-        self._persist(state)
+        if persist:
+            self._persist(state, persist_days=persist_days)
         return state
 
     def reset(self) -> None:
@@ -374,10 +377,13 @@ class ChatSessionStore:
         state.pending_questions.insert(0, text)
         state.pending_questions = state.pending_questions[:_MAX_PENDING_QUESTIONS]
 
-    def _persist(self, state: ChatSessionState) -> None:
+    def _persist(self, state: ChatSessionState, *, persist_days: int | None = None) -> None:
         created_at = self._to_iso(state.created_at)
         updated_at = self._to_iso(state.updated_at)
-        expires_at = self._to_iso(state.updated_at + _SESSION_TTL_SECONDS)
+        if persist_days is not None:
+            expires_at = self._to_iso(state.updated_at + (max(1, int(persist_days)) * 24 * 60 * 60))
+        else:
+            expires_at = self._to_iso(state.updated_at + _SESSION_TTL_SECONDS)
         payload = self._serialize_state(state)
         try:
             get_store().upsert_chat_session_memory(
@@ -510,6 +516,8 @@ def record_turn(
     page_context: dict[str, Any] | None,
     tool_calls: list[dict[str, Any]] | None,
     response_text: str | None = None,
+    persist: bool = True,
+    persist_days: int | None = None,
 ) -> ChatSessionState:
     return _STORE.record_turn(
         conversation_id=conversation_id,
@@ -517,6 +525,8 @@ def record_turn(
         page_context=page_context,
         tool_calls=tool_calls,
         response_text=response_text,
+        persist=persist,
+        persist_days=persist_days,
     )
 
 

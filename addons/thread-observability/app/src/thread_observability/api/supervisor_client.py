@@ -137,10 +137,23 @@ async def _core_ws_command(command: str, *, timeout: float = 10.0) -> Any:
 def _normalize_agent_row(row: dict[str, Any], *, source: str) -> dict[str, Any]:
     agent_id = row.get("id") or row.get("agent_id") or row.get("entity_id")
     name = row.get("name") or row.get("title") or row.get("friendly_name") or agent_id
+    tool_names: list[str] = []
+    for key in ("tools", "tool_names"):
+        value = row.get(key)
+        if not isinstance(value, list):
+            continue
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                tool_names.append(item.strip())
+            elif isinstance(item, dict):
+                candidate = item.get("name") or item.get("tool_name") or item.get("id")
+                if isinstance(candidate, str) and candidate.strip():
+                    tool_names.append(candidate.strip())
     return {
         "agent_id": str(agent_id or "").strip(),
         "name": str(name or "").strip() or None,
         "source": source,
+        "tool_names": sorted(set(tool_names)) if tool_names else [],
     }
 
 

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
+import re
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import supervisor_client
@@ -25,6 +29,44 @@ from ..storage.sqlite_store import get_store
 MCP_PROTOCOL_VERSION = "2024-11-05"
 LOG_PATH = Path(os.getenv("THREAD_OBS_LOG_FILE", "/data/thread-observability/addon.log"))
 LOG_TAIL_LINES = 200
+
+
+def _find_repo_root() -> Path:
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if (parent / "documentation").exists():
+            return parent
+    return current.parents[6]
+
+
+REPO_ROOT = _find_repo_root()
+ADDON_CONFIG_PATH = REPO_ROOT / "addons" / "thread-observability" / "config.yaml"
+GLOSSARY_PATH = REPO_ROOT / "documentation" / "glossary.md"
+RESOURCE_DEFS: list[dict[str, str]] = [
+    {
+        "uri": "thread-observability://glossary",
+        "name": "glossary",
+        "title": "Thread and Matter glossary",
+        "description": (
+            "Shared background for Thread, Matter, and Home Assistant terms used across the MCP tool catalog, "
+            "including spec links and field meanings such as RLOC16, partition_id, LQI, and MAC/MLE counters."
+        ),
+        "mimeType": "text/markdown",
+    },
+]
+_RESOURCE_BY_NAME = {row["name"]: row for row in RESOURCE_DEFS}
+_RESOURCE_BY_URI = {row["uri"]: row for row in RESOURCE_DEFS}
+
+
+def _read_addon_version() -> str:
+    try:
+        match = re.search(r"^version:\s*([^\s#]+)", ADDON_CONFIG_PATH.read_text(encoding="utf-8"), re.MULTILINE)
+    except OSError:
+        match = None
+    return str(match.group(1)).strip() if match else "unknown"
+
+
+ADDON_VERSION = _read_addon_version()
 
 
 def _utc_now() -> str:
@@ -45,6 +87,18 @@ def _tail_log(n: int = LOG_TAIL_LINES) -> list[str]:
             except OSError:
                 continue
     return ["[no log file found]"]
+
+
+def _read_resource_text(resource_name_or_uri: str) -> tuple[dict[str, str], str]:
+    resource = _RESOURCE_BY_NAME.get(resource_name_or_uri) or _RESOURCE_BY_URI.get(resource_name_or_uri)
+    if resource is None:
+        raise KeyError(resource_name_or_uri)
+    if resource["name"] == "glossary":
+        try:
+            return resource, GLOSSARY_PATH.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise FileNotFoundError(f"Unable to read glossary resource: {exc}") from exc
+    raise KeyError(resource_name_or_uri)
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +163,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "description": "Manually close an active issue by id.",
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "integer"}},
+            "properties": {"id": {"type": "integer", "description": "Open issue id to close."}},
             "required": ["id"],
         },
     },
@@ -316,7 +370,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "ISO-8601 upper bound (inclusive). Defaults to now.",
                 },
-                "eui64": {"type": "string"},
+                "eui64": {"type": "string", "description": "Optional EUI-64 to limit the merged timeline to one node."},
                 "kinds": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -333,6 +387,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 },
                 "limit": {
                     "type": "integer",
+                    "description": "Maximum rows to return, newest first. Default 500.",
                     "default": 500,
                     "minimum": 1,
                     "maximum": 5000,
@@ -352,7 +407,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "snapshot_id": {"type": "integer", "minimum": 1},
+                "snapshot_id": {"type": "integer", "minimum": 1, "description": "Exact topology snapshot id to fetch."},
                 "at": {"type": "string", "description": "ISO-8601 timestamp"},
             },
             "required": [],
@@ -373,6 +428,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "until": {"type": "string", "description": "ISO-8601 upper bound"},
                 "limit": {
                     "type": "integer",
+                    "description": "Maximum snapshot summaries to return. Default 100.",
                     "default": 100,
                     "minimum": 1,
                     "maximum": 1000,
@@ -392,8 +448,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "snapshot_id_a": {"type": "integer", "minimum": 1},
-                "snapshot_id_b": {"type": "integer", "minimum": 1},
+                "snapshot_id_a": {"type": "integer", "minimum": 1, "description": "Older or baseline snapshot id."},
+                "snapshot_id_b": {"type": "integer", "minimum": 1, "description": "Newer or comparison snapshot id."},
             },
             "required": ["snapshot_id_a", "snapshot_id_b"],
         },
@@ -420,9 +476,9 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "playbook_id": {"type": "string"},
-                "kind": {"type": "string"},
-                "query": {"type": "string"},
+                "playbook_id": {"type": "string", "description": "Exact playbook id to fetch."},
+                "kind": {"type": "string", "description": "Issue kind to match against a playbook's applies_to list."},
+                "query": {"type": "string", "description": "Case-insensitive free-text search across playbook id, title, and summary."},
             },
             "required": [],
         },
@@ -439,15 +495,17 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "eui64": {"type": "string"},
+                "eui64": {"type": "string", "description": "Target node EUI-64 to analyze."},
                 "timeline_hours": {
                     "type": "integer",
+                    "description": "How many recent hours of unified timeline to include. Default 24.",
                     "default": 24,
                     "minimum": 1,
                     "maximum": 720,
                 },
                 "baseline_days": {
                     "type": "integer",
+                    "description": "How many historical days to use for baseline rate comparisons. Default 7.",
                     "default": 7,
                     "minimum": 1,
                     "maximum": 90,
@@ -483,7 +541,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         ),
         "inputSchema": {
             "type": "object",
-            "properties": {"slug": {"type": "string"}},
+            "properties": {"slug": {"type": "string", "description": "Supervisor add-on slug to treat as the OTBR log source."}},
             "required": ["slug"],
         },
     },
@@ -573,7 +631,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20, "description": "Maximum recent pipeline ticks to return. Default 20."},
             },
             "required": [],
         },
@@ -592,11 +650,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "eui64": {"type": "string"},
-                "counter_names": {"type": "array", "items": {"type": "string"}},
+                "eui64": {"type": "string", "description": "Target node EUI-64 whose counter samples should be returned."},
+                "counter_names": {"type": "array", "items": {"type": "string"}, "description": "Optional subset of counter names to include; omit for the default diagnostic set."},
                 "since": {"type": "string", "description": "ISO-8601; default 6h ago"},
                 "until": {"type": "string", "description": "ISO-8601; default now"},
-                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw"},
+                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw", "description": "Return raw stored samples or a 5-minute rollup."},
             },
             "required": ["eui64"],
         },
@@ -613,12 +671,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "eui64_a": {"type": "string"},
-                "eui64_b": {"type": "string"},
-                "counter_names": {"type": "array", "items": {"type": "string"}},
-                "since": {"type": "string"},
-                "until": {"type": "string"},
-                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw"},
+                "eui64_a": {"type": "string", "description": "First node EUI-64 to compare."},
+                "eui64_b": {"type": "string", "description": "Second node EUI-64 to compare against the first."},
+                "counter_names": {"type": "array", "items": {"type": "string"}, "description": "Optional subset of counters to compare; omit for the default diagnostic set."},
+                "since": {"type": "string", "description": "ISO-8601 lower bound for both series; default 6h ago."},
+                "until": {"type": "string", "description": "ISO-8601 upper bound for both series; default now."},
+                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw", "description": "Return raw samples or 5-minute rollups for both nodes."},
             },
             "required": ["eui64_a", "eui64_b"],
         },
@@ -647,8 +705,9 @@ TOOL_DEFS: list[dict[str, Any]] = [
                     "type": "string",
                     "enum": ["open", "cleared", "dismissed", "all"],
                     "default": "open",
+                    "description": "Which finding state bucket to return. Default open.",
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50, "description": "Maximum findings to return. Default 50."},
             },
             "required": [],
         },
@@ -663,12 +722,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "finding_id": {"type": "string"},
+                "finding_id": {"type": "string", "description": "Assessment finding id to update."},
                 "outcome": {
                     "type": "string",
                     "enum": ["resolved", "wrong", "ignored_dismissed"],
+                    "description": "Outcome to record for the finding.",
                 },
-                "notes": {"type": "string"},
+                "notes": {"type": "string", "description": "Optional operator notes explaining why the outcome was chosen."},
             },
             "required": ["finding_id", "outcome"],
         },
@@ -1285,13 +1345,100 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
 # ---------------------------------------------------------------------------
 
 def create_mcp_app() -> FastAPI:
-    app = FastAPI(title="Thread Observability MCP", version="0.1.0")
+    app = FastAPI(title="Thread Observability MCP", version=ADDON_VERSION)
+    sse_sessions: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+
+    def _jsonrpc_ok(req_id: Any, result: Any) -> dict[str, Any]:
+        return {"jsonrpc": "2.0", "id": req_id, "result": result}
+
+    def _jsonrpc_error(req_id: Any, code: int, message: str) -> dict[str, Any]:
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}}
+
+    async def _handle_mcp_jsonrpc(body: dict[str, Any]) -> tuple[dict[str, Any], int]:
+        req_id = body.get("id")
+        method = body.get("method", "")
+        params = body.get("params", {})
+
+        if method == "initialize":
+            return _jsonrpc_ok(
+                req_id,
+                {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}, "resources": {}},
+                    "serverInfo": {"name": "thread-observability", "version": ADDON_VERSION},
+                    "transport": {
+                        "legacy_jsonrpc_post": "/mcp",
+                        "sse": "/mcp/sse",
+                        "message_post_template": "/mcp/messages/{session_id}",
+                        "streamable_http_post": "/mcp/stream",
+                    },
+                },
+            ), 200
+
+        if method == "notifications/initialized":
+            return {}, 204
+
+        if method == "tools/list":
+            return _jsonrpc_ok(req_id, {"tools": TOOL_DEFS}), 200
+
+        if method == "resources/list":
+            return _jsonrpc_ok(req_id, {"resources": RESOURCE_DEFS}), 200
+
+        if method == "resources/read":
+            resource_name = params.get("uri") or params.get("name")
+            if not resource_name:
+                return _jsonrpc_error(req_id, -32602, "Missing resource uri"), 200
+            try:
+                resource, contents = _read_resource_text(resource_name)
+            except KeyError:
+                return _jsonrpc_error(req_id, -32602, f"Unknown resource: {resource_name}"), 200
+            except FileNotFoundError as exc:
+                return _jsonrpc_error(req_id, -32603, str(exc)), 200
+            return _jsonrpc_ok(
+                req_id,
+                {
+                    "contents": [
+                        {
+                            "uri": resource["uri"],
+                            "mimeType": resource["mimeType"],
+                            "text": contents,
+                        }
+                    ]
+                },
+            ), 200
+
+        if method == "tools/call":
+            tool_name = params.get("name", "")
+            arguments = params.get("arguments", {})
+            if tool_name not in _TOOL_MAP:
+                return _jsonrpc_error(req_id, -32602, f"Unknown tool: {tool_name}"), 200
+            result = await _dispatch_and_wrap(tool_name, arguments)
+            return _jsonrpc_ok(req_id, {"content": [{"type": "text", "text": json.dumps(result, default=str)}]}), 200
+
+        return _jsonrpc_error(req_id, -32601, f"Method not found: {method}"), 200
+
+    def _encode_sse(event: str, data: dict[str, Any]) -> bytes:
+        return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n".encode("utf-8")
+
+    def _register_sse_session() -> tuple[str, asyncio.Queue[dict[str, Any]], dict[str, str]]:
+        session_id = uuid.uuid4().hex
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        sse_sessions[session_id] = queue
+        endpoint_payload = {
+            "session_id": session_id,
+            "url": f"/mcp/messages/{session_id}",
+        }
+        return session_id, queue, endpoint_payload
+
+    app.state.mcp_sse_sessions = sse_sessions
+    app.state.register_mcp_sse_session = _register_sse_session
+    app.state.encode_mcp_sse_event = _encode_sse
 
     # ── simple REST convenience endpoints ────────────────────────────────────
 
     @app.get("/")
     def root() -> dict[str, str]:
-        return {"service": "mcp", "name": "thread-observability", "version": "0.9.5"}
+        return {"service": "mcp", "name": "thread-observability", "version": ADDON_VERSION}
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -1300,6 +1447,71 @@ def create_mcp_app() -> FastAPI:
     @app.get("/mcp/tools")
     def list_tools_rest() -> dict[str, object]:
         return {"tools": TOOL_DEFS, "count": len(TOOL_DEFS)}
+
+    @app.get("/mcp/resources")
+    def list_resources_rest() -> dict[str, object]:
+        return {"resources": RESOURCE_DEFS, "count": len(RESOURCE_DEFS)}
+
+    @app.get("/mcp/resources/{resource_name}")
+    def read_resource_rest(resource_name: str) -> dict[str, object]:
+        try:
+            resource, contents = _read_resource_text(resource_name)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=f"Unknown resource: {resource_name}") from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        return {"resource": resource, "contents": contents, "read_at": _utc_now()}
+
+    @app.get("/mcp/sse")
+    async def open_mcp_sse(request: Request) -> StreamingResponse:
+        session_id, queue, endpoint_payload = _register_sse_session()
+
+        async def event_stream() -> Any:
+            try:
+                yield _encode_sse("endpoint", endpoint_payload)
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        payload = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except TimeoutError:
+                        yield _encode_sse("ping", {"ts": _utc_now()})
+                        continue
+                    yield _encode_sse("message", payload)
+            finally:
+                sse_sessions.pop(session_id, None)
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    @app.post("/mcp/messages/{session_id}")
+    async def post_mcp_sse_message(session_id: str, request: Request) -> JSONResponse:
+        queue = sse_sessions.get(session_id)
+        if queue is None:
+            raise HTTPException(status_code=404, detail=f"Unknown MCP SSE session: {session_id}")
+        try:
+            body = await request.json()
+        except Exception:
+            payload = _jsonrpc_error(None, -32700, "Parse error")
+            await queue.put(payload)
+            return JSONResponse(payload, status_code=400)
+        payload, status_code = await _handle_mcp_jsonrpc(body)
+        if status_code != 204 and body.get("id") is not None:
+            await queue.put(payload)
+        return JSONResponse({"accepted": True, "session_id": session_id}, status_code=202)
+
+    @app.post("/mcp/stream")
+    async def mcp_streamable_http(request: Request) -> JSONResponse:
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
+                status_code=400,
+            )
+        payload, status_code = await _handle_mcp_jsonrpc(body)
+        if status_code == 204:
+            return JSONResponse({}, status_code=204)
+        return JSONResponse(payload, status_code=status_code)
 
     @app.post("/mcp/call/{tool_name}")
     async def call_tool_rest(tool_name: str, request: ToolCallRequest) -> dict[str, object]:
@@ -1320,38 +1532,9 @@ def create_mcp_app() -> FastAPI:
                 status_code=400,
             )
 
-        req_id = body.get("id")
-        method = body.get("method", "")
-        params = body.get("params", {})
-
-        def ok(result: Any) -> JSONResponse:
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "result": result})
-
-        def err(code: int, message: str) -> JSONResponse:
-            return JSONResponse({"jsonrpc": "2.0", "id": req_id, "error": {"code": code, "message": message}})
-
-        if method == "initialize":
-            return ok({
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "thread-observability", "version": "0.9.5"},
-            })
-
-        if method == "notifications/initialized":
+        payload, status_code = await _handle_mcp_jsonrpc(body)
+        if status_code == 204:
             return JSONResponse({}, status_code=204)
-
-        if method == "tools/list":
-            return ok({"tools": TOOL_DEFS})
-
-        if method == "tools/call":
-            tool_name = params.get("name", "")
-            arguments = params.get("arguments", {})
-            if tool_name not in _TOOL_MAP:
-                return err(-32602, f"Unknown tool: {tool_name}")
-            result = await _dispatch_and_wrap(tool_name, arguments)
-            import json as _json
-            return ok({"content": [{"type": "text", "text": _json.dumps(result, default=str)}]})
-
-        return err(-32601, f"Method not found: {method}")
+        return JSONResponse(payload, status_code=status_code)
 
     return app

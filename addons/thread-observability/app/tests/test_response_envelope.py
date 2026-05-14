@@ -118,6 +118,25 @@ def test_phase2_catalog_shape() -> None:
     missing = renamed - registered
     assert not missing, f"Phase 2 renamed tools missing: {sorted(missing)}"
 
+
+def test_all_tool_properties_have_descriptions() -> None:
+    missing: list[str] = []
+    for tool in mcp_tools.TOOL_DEFS:
+        properties = tool.get("inputSchema", {}).get("properties", {})
+        for prop_name, schema in properties.items():
+            if not str(schema.get("description", "")).strip():
+                missing.append(f"{tool['name']}.{prop_name}")
+    assert not missing, f"Missing parameter descriptions: {missing}"
+
+
+def test_tool_description_budget_stays_reasonable() -> None:
+    total_chars = 0
+    for tool in mcp_tools.TOOL_DEFS:
+        total_chars += len(tool.get("description", ""))
+        properties = tool.get("inputSchema", {}).get("properties", {})
+        total_chars += sum(len(schema.get("description", "")) for schema in properties.values())
+    assert total_chars < 50000
+
 def test_get_config_redacts_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """Secret-bearing config fields must never appear in plaintext."""
     from thread_observability import config as cfg_mod

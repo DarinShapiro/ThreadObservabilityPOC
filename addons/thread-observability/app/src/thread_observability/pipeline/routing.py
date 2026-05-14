@@ -66,6 +66,55 @@ def _router_id_index(nodes: list[dict[str, Any]], partition_id: Any) -> dict[int
     return out
 
 
+def _finalize_route_walk(route: dict[str, Any]) -> dict[str, Any]:
+    """Attach a compact upstream/fragility summary to a route walk result."""
+    hops = [row for row in (route.get("hops") or []) if isinstance(row, dict)]
+    if len(hops) < 2:
+        route["summary"] = None
+        route["hop_count"] = len(hops)
+        return route
+
+    first_upstream = hops[1]
+    candidates: list[dict[str, Any]] = []
+    for hop in hops[1:]:
+        lqis = [int(v) for v in (hop.get("lqi_in"), hop.get("lqi_out")) if isinstance(v, int)]
+        lqi_floor = min(lqis) if lqis else 255
+        link_established = hop.get("link_established")
+        unstable_rank = 2 if link_established is False else (1 if link_established is None else 0)
+        candidates.append(
+            {
+                "hop": hop,
+                "lqi_floor": lqi_floor,
+                "unstable_rank": unstable_rank,
+                "path_cost": int(hop.get("path_cost") or 0),
+            }
+        )
+    candidates.sort(
+        key=lambda row: (row["unstable_rank"], -row["lqi_floor"], row["path_cost"]),
+        reverse=True,
+    )
+    weakest = candidates[0]["hop"] if candidates else None
+    weakest_lqi_values = [int(v) for v in (weakest.get("lqi_in"), weakest.get("lqi_out")) if isinstance(v, int)] if weakest else []
+    weakest_lqi = min(weakest_lqi_values) if weakest_lqi_values else None
+    route["summary"] = {
+        "first_upstream_eui64": first_upstream.get("eui64"),
+        "first_upstream_name": first_upstream.get("name"),
+        "weakest_hop_eui64": weakest.get("eui64") if weakest else None,
+        "weakest_hop_name": weakest.get("name") if weakest else None,
+        "weakest_lqi": weakest_lqi,
+        "weakest_path_cost": weakest.get("path_cost") if weakest else None,
+        "has_marginal_hop": bool(
+            weakest
+            and (
+                weakest.get("link_established") is False
+                or (weakest_lqi is not None and weakest_lqi <= 1)
+            )
+        ),
+    }
+    route["hop_count"] = len(hops)
+    return route
+
+
 def walk_route_to_otbr(
     source_eui: str,
     *,
@@ -124,7 +173,7 @@ def walk_route_to_otbr(
     }
     if not otbr:
         out["issues"].append({"code": "no_otbr", "detail": "OTBR not yet discovered"})
-        return out
+        return _finalize_route_walk(out)
 
     otbr_eui = otbr["eui64"]
     otbr_partition = otbr.get("partition_id")
@@ -143,8 +192,7 @@ def walk_route_to_otbr(
             "link_established": None,
             "is_otbr": True,
         })
-        out["hop_count"] = 1
-        return out
+        return _finalize_route_walk(out)
 
     source_node = next((n for n in nodes if n.get("eui64") == source_eui), None)
     if source_node and source_node.get("partition_id") != otbr_partition:
@@ -154,7 +202,7 @@ def walk_route_to_otbr(
                       f"!= OTBR partition {otbr_partition}",
         })
         # Don't try to walk — partition-scoped router IDs aren't comparable.
-        return out
+        return _finalize_route_walk(out)
 
     router_by_id = _router_id_index(nodes, otbr_partition)
 
@@ -190,7 +238,7 @@ def walk_route_to_otbr(
                 "code": "no_route_to_otbr",
                 "detail": f"{current_eui} has no route_table entry for OTBR",
             })
-            return out
+            return _finalize_route_walk(out)
         nh_rid = row["next_hop_router_id"]
         path_cost = row["path_cost"]
         lqi_in = row["lqi_in"]
@@ -242,8 +290,7 @@ def walk_route_to_otbr(
                     "link_established": link_est_b,
                     "is_otbr": False,
                 })
-                out["hop_count"] = len(out["hops"])
-                return out
+                return _finalize_route_walk(out)
             next_eui = resolved["eui64"]
             next_rid = int(nh_rid)
 
@@ -252,8 +299,7 @@ def walk_route_to_otbr(
                 "code": "loop_detected",
                 "detail": f"next-hop {next_eui} already in path",
             })
-            out["hop_count"] = len(out["hops"])
-            return out
+            return _finalize_route_walk(out)
         seen.add(next_eui)
 
         is_otbr = next_eui == otbr_eui
@@ -270,8 +316,7 @@ def walk_route_to_otbr(
 
         if is_otbr:
             out["complete"] = True
-            out["hop_count"] = len(out["hops"])
-            return out
+            return _finalize_route_walk(out)
 
         current_eui = next_eui
 
@@ -279,8 +324,7 @@ def walk_route_to_otbr(
         "code": "max_hops_exceeded",
         "detail": f"path did not terminate within {MAX_HOPS} hops",
     })
-    out["hop_count"] = len(out["hops"])
-    return out
+    return _finalize_route_walk(out)
 
 
 def list_neighbors_enriched(

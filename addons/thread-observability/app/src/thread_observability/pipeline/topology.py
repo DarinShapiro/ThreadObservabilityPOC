@@ -64,6 +64,39 @@ HIGH_ERROR_PERCENT = 10  # frame_error_rate / message_error_rate threshold
 ASYMMETRY_DB = 10        # |A->B rssi - B->A rssi| > this is asymmetric
 
 
+def _find_articulation_points(adjacency: dict[str, set[str]]) -> set[str]:
+    discovery: dict[str, int] = {}
+    low: dict[str, int] = {}
+    parent: dict[str, str | None] = {}
+    articulation: set[str] = set()
+    time = 0
+
+    def dfs(node: str) -> None:
+        nonlocal time
+        time += 1
+        discovery[node] = time
+        low[node] = time
+        child_count = 0
+        for neighbor in sorted(adjacency.get(node, set())):
+            if neighbor not in discovery:
+                parent[neighbor] = node
+                child_count += 1
+                dfs(neighbor)
+                low[node] = min(low[node], low[neighbor])
+                if parent.get(node) is None and child_count > 1:
+                    articulation.add(node)
+                if parent.get(node) is not None and low[neighbor] >= discovery[node]:
+                    articulation.add(node)
+            elif neighbor != parent.get(node):
+                low[node] = min(low[node], discovery[neighbor])
+
+    for node in sorted(adjacency):
+        if node not in discovery:
+            parent[node] = None
+            dfs(node)
+    return articulation
+
+
 def build_topology(
     *,
     freshness_minutes: int = FRESHNESS_DEFAULT_MINUTES,
@@ -88,10 +121,14 @@ def build_topology(
             SELECT
               n.eui64,
               n.friendly_name,
+              n.area_name,
               n.role,
               n.routing_role,
               n.partition_id,
               n.leader_router_id,
+              n.vendor_id,
+              n.product_id,
+              n.serial_number,
               n.last_seen,
               n.status,
               n.last_referenced_at,
@@ -164,10 +201,14 @@ def build_topology(
             {
                 "eui64": eui,
                 "friendly_name": d.get("friendly_name"),
+                "area_name": d.get("area_name"),
                 "role": d.get("role"),
                 "routing_role": d.get("routing_role"),
                 "partition_id": pid,
                 "leader_router_id": d.get("leader_router_id"),
+                "vendor_id": d.get("vendor_id"),
+                "product_id": d.get("product_id"),
+                "serial_number": d.get("serial_number"),
                 "last_seen": last_seen,
                 "parent_eui64": parent,
                 "last_rssi": d.get("last_rssi"),
@@ -270,3 +311,177 @@ def build_topology(
         "nodes": nodes,
         "links": links,
     }
+
+
+def derive_graph_diagnostics(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Derive simple graph-backed diagnostic facts from a topology snapshot.
+
+    These are intentionally conservative, evidence-bound summaries that UI and
+    AI can both consume without re-implementing topology heuristics client-side.
+    """
+    nodes = list(snapshot.get("nodes") or [])
+    links = list(snapshot.get("links") or [])
+    facts: list[dict[str, Any]] = []
+    router_roles = {"leader", "router", "reed"}
+
+    if snapshot.get("split") and int(snapshot.get("node_count") or 0) > 0:
+        facts.append({
+            "kind": "split_mesh",
+            "severity": "warn",
+            "title": "The mesh is split across multiple partitions",
+            "detail": f"{len(snapshot.get('partitions') or [])} partitions are currently visible in the topology graph.",
+        })
+
+    weak_links = [
+        link for link in links
+        if "weak_link" in (link.get("tags") or []) or "high_error" in (link.get("tags") or [])
+    ]
+    if weak_links:
+        facts.append({
+            "kind": "weak_links",
+            "severity": "warn",
+            "title": "Weak or error-prone links are present",
+            "detail": f"{len(weak_links)} graph edges are tagged weak_link or high_error in the retained topology.",
+        })
+
+    children_by_parent: dict[str, list[str]] = {}
+    for node in nodes:
+        parent = node.get("parent_eui64")
+        eui = node.get("eui64")
+        if parent and eui:
+            children_by_parent.setdefault(str(parent), []).append(str(eui))
+    dependent_parents = [
+        {"parent_eui64": parent, "child_count": len(children)}
+        for parent, children in children_by_parent.items()
+        if len(children) >= 2
+    ]
+    dependent_parents.sort(key=lambda row: row["child_count"], reverse=True)
+    if dependent_parents:
+        top = dependent_parents[0]
+        facts.append({
+            "kind": "subtree_dependency",
+            "severity": "warn",
+            "title": "A single parent is carrying multiple child devices",
+            "detail": f"Parent {top['parent_eui64']} currently has {top['child_count']} child devices attached, which reduces path diversity for that subtree.",
+            "parent_eui64": top["parent_eui64"],
+            "child_count": top["child_count"],
+        })
+
+    router_partition_counts: dict[int, int] = {}
+    for node in nodes:
+        pid = node.get("partition_id")
+        if isinstance(pid, int) and node.get("routing_role") in router_roles:
+            router_partition_counts[pid] = router_partition_counts.get(pid, 0) + 1
+
+    healthy_peer_neighbors: dict[str, set[str]] = {}
+    total_peer_neighbors: dict[str, set[str]] = {}
+    peer_neighbors_by_partition: dict[int, dict[str, set[str]]] = {}
+    for link in links:
+        if link.get("edge_class") != "peer":
+            continue
+        left = str(link.get("from") or "").strip()
+        right = str(link.get("to") or "").strip()
+        if not left or not right:
+            continue
+        total_peer_neighbors.setdefault(left, set()).add(right)
+        total_peer_neighbors.setdefault(right, set()).add(left)
+        left_partition = next((n.get("partition_id") for n in nodes if n.get("eui64") == left), None)
+        right_partition = next((n.get("partition_id") for n in nodes if n.get("eui64") == right), None)
+        if isinstance(left_partition, int) and left_partition == right_partition:
+            part_adj = peer_neighbors_by_partition.setdefault(left_partition, {})
+            part_adj.setdefault(left, set()).add(right)
+            part_adj.setdefault(right, set()).add(left)
+        tags = set(link.get("tags") or [])
+        if not ({"weak_link", "high_error"} & tags):
+            healthy_peer_neighbors.setdefault(left, set()).add(right)
+            healthy_peer_neighbors.setdefault(right, set()).add(left)
+
+    choke_points: list[dict[str, Any]] = []
+    for partition_id, adjacency in peer_neighbors_by_partition.items():
+        if len(adjacency) < 3:
+            continue
+        for eui64 in sorted(_find_articulation_points(adjacency)):
+            choke_points.append({
+                "partition_id": partition_id,
+                "eui64": eui64,
+                "peer_degree": len(adjacency.get(eui64, set())),
+            })
+    choke_points.sort(key=lambda row: (-row["peer_degree"], row["eui64"]))
+    if choke_points:
+        top = choke_points[0]
+        facts.append({
+            "kind": "choke_point",
+            "severity": "warn",
+            "title": "A router is acting as a choke point in the mesh",
+            "detail": (
+                f"Router {top['eui64']} is a peer-graph articulation point in partition {top['partition_id']}, "
+                "so losing it would split otherwise-connected router paths."
+            ),
+            "eui64": top["eui64"],
+            "partition_id": top["partition_id"],
+            "peer_degree": top["peer_degree"],
+        })
+
+    low_diversity_candidates: list[dict[str, Any]] = []
+    for node in nodes:
+        eui = str(node.get("eui64") or "").strip()
+        pid = node.get("partition_id")
+        routing_role = node.get("routing_role")
+        if not eui or not isinstance(pid, int) or routing_role not in router_roles:
+            continue
+        if router_partition_counts.get(pid, 0) < 3:
+            continue
+        healthy_count = len(healthy_peer_neighbors.get(eui, set()))
+        if healthy_count > 1:
+            continue
+        low_diversity_candidates.append(
+            {
+                "eui64": eui,
+                "partition_id": pid,
+                "routing_role": routing_role,
+                "healthy_peer_count": healthy_count,
+                "total_peer_count": len(total_peer_neighbors.get(eui, set())),
+            }
+        )
+    low_diversity_candidates.sort(key=lambda row: (row["healthy_peer_count"], row["total_peer_count"], row["eui64"]))
+    if low_diversity_candidates:
+        top = low_diversity_candidates[0]
+        facts.append({
+            "kind": "low_path_diversity",
+            "severity": "warn",
+            "title": "A router has limited healthy peer-path diversity",
+            "detail": (
+                f"Router {top['eui64']} has {top['healthy_peer_count']} healthy peer links in partition "
+                f"{top['partition_id']}, which leaves little routing redundancy if that peer degrades."
+            ),
+            "eui64": top["eui64"],
+            "partition_id": top["partition_id"],
+            "healthy_peer_count": top["healthy_peer_count"],
+            "total_peer_count": top["total_peer_count"],
+        })
+        weak_low_diversity_candidates = []
+        for candidate in low_diversity_candidates:
+            weak_links_for_candidate = [
+                link for link in links
+                if link.get("edge_class") == "peer"
+                and candidate["eui64"] in {link.get("from"), link.get("to")}
+                and ({"weak_link", "high_error"} & set(link.get("tags") or []))
+            ]
+            if weak_links_for_candidate:
+                weak_low_diversity_candidates.append((candidate, weak_links_for_candidate))
+        if weak_low_diversity_candidates:
+            candidate, _weak_links_for_candidate = weak_low_diversity_candidates[0]
+            facts.append({
+                "kind": "intermediary_router_opportunity",
+                "severity": "warn",
+                "title": "An intermediary router would likely improve this path",
+                "detail": (
+                    f"Router {candidate['eui64']} has only {candidate['healthy_peer_count']} healthy peer path and its remaining "
+                    "peer connectivity is weak or error-prone, so adding a nearby intermediary router is more likely "
+                    "to help than treating this as a mesh-wide instability first."
+                ),
+                "eui64": candidate["eui64"],
+                "partition_id": candidate["partition_id"],
+            })
+
+    return facts

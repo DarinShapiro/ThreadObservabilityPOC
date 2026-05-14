@@ -1,6 +1,6 @@
 # Thread Observability Platform - Design Documentation
 
-> **Status (2026-05): the add-on is on version 0.10.0, schema v19, with 36 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
+> **Status (2026-05): the add-on is on version 0.11.29, schema v19, with 41 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
 >
 > For the current, runtime-accurate tool surface see [06-mcp-tools-reference.md](06-mcp-tools-reference.md). For per-release detail see [`addons/thread-observability/CHANGELOG.md`](../addons/thread-observability/CHANGELOG.md).
 
@@ -47,6 +47,10 @@
 7. **[Sprint Design: Agentic AI Integration](07-agentic-ai-sprint.md)**
 
 8. **[Live AI Evaluation](08-live-ai-eval.md)** *(release-time live acceptance harness for the dashboard chat assistant)*
+
+9. **[Backlog Roadmap](09-backlog-roadmap.md)** *(current dependency-ordered execution plan for the remaining GitHub backlog)*
+
+10. **[HA MCP Client Setup](10-ha-mcp-client-setup.md)** *(operator walkthrough for connecting Home Assistant Assist agents to Thread Observability MCP tools)*
 
 ---
 
@@ -95,7 +99,7 @@
 - [ ] Log adapter (deterministic parsing)
 - [ ] Topology analyzer (graph of nodes/links)
 - [ ] Anomaly detector (6 rule-based checks)
-- [x] 36 MCP tools across triage, mesh state, history, issues, counter time-series, discovery, storage, playbooks, and HA/Supervisor lifecycle (see [06-mcp-tools-reference.md](06-mcp-tools-reference.md))
+- [x] 41 MCP tools across triage, mesh state, history, issues, counter time-series, discovery, storage, playbooks, assessment diagnostics, and HA/Supervisor lifecycle (see [06-mcp-tools-reference.md](06-mcp-tools-reference.md))
 - [ ] Web UI dashboard (topology graph, issues list, node details)
 
 **Add-on Packaging**

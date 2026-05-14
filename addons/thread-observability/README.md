@@ -2,13 +2,13 @@
 
 Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes the result over MCP and a small HTTP surface for AI-assisted triage.
 
-**Current version**: 0.10.0 / schema v19 / 36 MCP tools.
+**Current version**: 0.11.29 / schema v19 / 41 MCP tools.
 
 ## What it does
 
 - Two-process service model in one container:
   - Core API on port 8099 (`/health`, `/v1/health/snapshot`, `/v1/issues/active`, `/v1/topology`)
-  - MCP server on port 8100 (`GET /mcp/tools`, `POST /mcp/call/{tool_name}`, `POST /mcp/rpc`)
+  - MCP server on port 8100 (`GET /mcp/tools`, `GET /mcp/resources`, `POST /mcp`, `GET /mcp/sse`, `POST /mcp/stream`)
 - Each pipeline tick:
   - Discovers Thread nodes via OTBR / Matter Server
   - Correlates EUI-64 with HA device registry
@@ -20,6 +20,15 @@ Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes t
 ## MCP surface
 
 All read tools return a `{data, meta}` envelope. See [../../documentation/06-mcp-tools-reference.md](../../documentation/06-mcp-tools-reference.md) for the full, auto-generated catalog.
+
+## Connecting an AI agent
+
+Use the Home Assistant MCP Client integration to expose the Thread Observability tool catalog to your chosen conversation agent.
+
+1. Follow [../../documentation/10-ha-mcp-client-setup.md](../../documentation/10-ha-mcp-client-setup.md).
+2. In Home Assistant, add the MCP Client integration and use `http://9e5048e8-thread-observability:8100/mcp/sse` as the server URL.
+3. Pick the conversation agent you want Assist and the dashboard chat panel to use.
+4. Try one of the starter prompts from the setup guide or the dashboard chat card.
 
 First call for any new triage session:
 

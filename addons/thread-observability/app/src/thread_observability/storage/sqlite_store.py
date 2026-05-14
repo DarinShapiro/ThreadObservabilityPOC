@@ -633,6 +633,12 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_chat_turn_stats_status
         ON chat_turn_stats(status, recorded_at DESC);
     """,
+    # v26 (0.11.28 local batch): persist SQLite file size on each pipeline
+    # tick so Diagnostics can estimate recent DB growth without inventing a
+    # separate history table.
+    """
+    ALTER TABLE pipeline_ticks ADD COLUMN db_size_bytes INTEGER;
+    """,
 ]
 
 
@@ -1343,12 +1349,17 @@ class SQLiteStore:
                 return v
             return _utc_now()
 
+        try:
+            db_size_bytes = int(self.db_path.stat().st_size)
+        except OSError:
+            db_size_bytes = 0
+
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO pipeline_ticks("
                 "started_at, completed_at, duration_s, ok_count, fail_count,"
-                " stages_json, error"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?)",
+                " stages_json, error, db_size_bytes"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     _iso(started_at),
                     _iso(finished_at),
@@ -1357,6 +1368,7 @@ class SQLiteStore:
                     fail_count,
                     json.dumps(stages, default=str),
                     tick.get("error"),
+                    db_size_bytes,
                 ),
             )
             return int(cur.lastrowid or 0)
@@ -1367,7 +1379,7 @@ class SQLiteStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, started_at, completed_at, duration_s,"
-                " ok_count, fail_count, stages_json, error"
+                " ok_count, fail_count, stages_json, error, db_size_bytes"
                 " FROM pipeline_ticks ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -2274,7 +2286,7 @@ class SQLiteStore:
     def prune_chat_session_memory(self, *, stale_before: str) -> int:
         with self._tx() as conn:
             cur = conn.execute(
-                "DELETE FROM chat_session_memory WHERE updated_at < ? OR (expires_at IS NOT NULL AND expires_at < ?)",
+                "DELETE FROM chat_session_memory WHERE (expires_at IS NULL AND updated_at < ?) OR (expires_at IS NOT NULL AND expires_at < ?)",
                 (stale_before, stale_before),
             )
             return int(cur.rowcount or 0)

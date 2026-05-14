@@ -104,6 +104,16 @@ class RouteIssue(_Base):
     detail: str | None = None
 
 
+class RouteSummary(_Base):
+    first_upstream_eui64: str | None = None
+    first_upstream_name: str | None = None
+    weakest_hop_eui64: str | None = None
+    weakest_hop_name: str | None = None
+    weakest_lqi: int | None = None
+    weakest_path_cost: int | None = None
+    has_marginal_hop: bool
+
+
 class RouteWalkResponse(_Base):
     source_eui64: str
     otbr_eui64: str | None = None
@@ -111,6 +121,7 @@ class RouteWalkResponse(_Base):
     hop_count: int
     hops: list[RouteHop]
     issues: list[RouteIssue]
+    summary: RouteSummary | None = None
 
 
 # -- /v1/neighbors/{eui64} --------------------------------------------------
@@ -235,6 +246,13 @@ class ChatAgentsResponse(_Base):
     count: int
     agents: list[ChatAgentRow]
     source: str | None = None
+    enabled: bool = True
+    default_backend: str | None = None
+    default_label: str | None = None
+    default_agent_id: str | None = None
+    send_page_context: bool = True
+    persist_transcripts: bool = False
+    chat_retention_days: int | None = None
 
 
 __all__ = [

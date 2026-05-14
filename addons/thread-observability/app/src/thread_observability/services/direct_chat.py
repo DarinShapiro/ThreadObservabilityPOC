@@ -8,10 +8,11 @@ Home Assistant's Assist agent layer.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -24,6 +25,7 @@ _DIRECT_AGENT_PREFIX = "direct:"
 _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
 _MAX_TOOL_DEFERRAL_RETRIES = 1
+_MAX_ANSWER_VALIDATION_RETRIES = 1
 _MAX_NODE_EVIDENCE_RETRIES = 1
 _MAX_HISTORY_COMPARISON_RETRIES = 1
 _MAX_COUNTER_GROUNDING_RETRIES = 1
@@ -88,6 +90,16 @@ class DirectChatTarget:
         return f"Direct {self.provider.title()} · {self.model}"
 
 
+@dataclass(slots=True)
+class AnswerReview:
+    verdict: str
+    critique: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return self.verdict == "fail"
+
+
 def _tool_deferral_retry_budget(target: DirectChatTarget) -> int:
     provider = str(target.provider or "").strip().lower()
     model = str(target.model or "").strip().lower()
@@ -107,6 +119,22 @@ def _tool_deferral_retry_message(attempt: int) -> str:
         "tools yourself now or answer explicitly that the currently available evidence is insufficient. Do not punt "
         "tool use back to the user."
     )
+
+
+def _default_evaluator_model(target: DirectChatTarget) -> str:
+    provider = _normalize_provider(target.provider)
+    override = str(os.getenv("THREAD_OBS_AI_EVALUATOR_MODEL", "")).strip()
+    if override:
+        return override
+    if provider == "openai":
+        return "gpt-4o-mini"
+    if provider == "cerebras":
+        return "llama3.1-8b"
+    return target.model
+
+
+def _answer_review_target(target: DirectChatTarget) -> DirectChatTarget:
+    return replace(target, model=_default_evaluator_model(target), temperature=0.0)
 
 
 def _normalize_provider(provider: str | None) -> str:
@@ -162,6 +190,8 @@ def direct_agent_row(target: DirectChatTarget) -> dict[str, Any]:
         "agent_id": target.agent_id,
         "name": target.display_name,
         "source": "direct",
+        "tool_names": [],
+        "has_thread_tools": True,
     }
 
 
@@ -827,6 +857,129 @@ def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[
     return None
 
 
+def _answer_review_policies(
+    *,
+    internal_tool_request: bool,
+    counter_question: bool,
+    history_comparison_question: bool,
+    node_question: bool,
+) -> list[str]:
+    policies = [
+        "Stay grounded in the gathered evidence from this turn; do not invent facts, fields, or timestamps.",
+        "If the evidence is insufficient, say so explicitly and name the missing evidence instead of guessing.",
+        "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
+    ]
+    if internal_tool_request:
+        policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")
+    if counter_question:
+        policies.append("Do not invent node IDs or RF/channel conclusions from empty counter series or missing node inventory evidence.")
+    if history_comparison_question:
+        policies.append("Do not claim a historical change unless the gathered evidence actually distinguishes the current and historical anchors.")
+    if node_question:
+        policies.append("For node troubleshooting, account for recent attach, recommission, parent-change, or partition-transition evidence before calling a node stable.")
+    return policies
+
+
+def _answer_review_evidence(tool_trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    reviewed: list[dict[str, Any]] = []
+    for row in tool_trace[-6:]:
+        reviewed.append(
+            {
+                "name": row.get("name"),
+                "arguments": row.get("arguments"),
+                "result": _tool_result_data(row.get("result")),
+            }
+        )
+    return reviewed
+
+
+def _parse_answer_review(payload: dict[str, Any]) -> AnswerReview:
+    text = _extract_message_text(payload).strip()
+    if not text:
+        return AnswerReview(verdict="pass")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return AnswerReview(verdict="pass")
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return AnswerReview(verdict="pass")
+    if not isinstance(parsed, dict):
+        return AnswerReview(verdict="pass")
+    verdict = str(parsed.get("verdict") or "pass").strip().lower()
+    critique = str(parsed.get("critique") or "").strip()
+    if verdict not in {"pass", "fail"}:
+        verdict = "pass"
+    return AnswerReview(verdict=verdict, critique=critique)
+
+
+def _answer_review_retry_message(review: AnswerReview) -> str:
+    critique = review.critique or "The prior answer was not sufficiently grounded in the gathered evidence."
+    return (
+        "Revise the prior answer once using the evaluator feedback below. Keep the answer grounded in the evidence already "
+        "gathered in this turn. Do not ask the user to call internal tools or services. If the evidence is insufficient, "
+        "say that directly instead of guessing.\n\n"
+        f"Evaluator critique: {critique}"
+    )
+
+
+async def _evaluate_answer_candidate(
+    target: DirectChatTarget,
+    *,
+    message: str,
+    candidate_text: str,
+    tool_trace: list[dict[str, Any]],
+    internal_tool_request: bool,
+    counter_question: bool,
+    history_comparison_question: bool,
+    node_question: bool,
+) -> AnswerReview:
+    review_target = _answer_review_target(target)
+    body = {
+        "model": review_target.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict reviewer for a Thread diagnostics assistant. Review the candidate answer against the "
+                    "user request, gathered evidence, and policy bundle. Return JSON only with this shape: "
+                    '{"verdict":"pass"|"fail","critique":"short guidance for one retry"}. '
+                    "Use verdict fail only when the answer is materially ungrounded, punts internal tool usage back to the "
+                    "user, or ignores clear insufficiency in the evidence."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "User query:\n"
+                    f"{message}\n\n"
+                    "Candidate answer:\n"
+                    f"{candidate_text}\n\n"
+                    "Policy bundle:\n"
+                    + "\n".join(f"- {policy}" for policy in _answer_review_policies(
+                        internal_tool_request=internal_tool_request,
+                        counter_question=counter_question,
+                        history_comparison_question=history_comparison_question,
+                        node_question=node_question,
+                    ))
+                    + "\n\nGathered evidence:\n"
+                    + _serialize_for_prompt(_answer_review_evidence(tool_trace), max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
+                ),
+            },
+        ],
+        "temperature": review_target.temperature,
+        "stream": False,
+    }
+    try:
+        payload = await _post_chat_completions(review_target, body)
+    except Exception:
+        return AnswerReview(verdict="pass")
+    return _parse_answer_review(payload)
+
+
 def _force_answer_retry_message() -> str:
     return (
         "Answer now from the evidence already gathered. Do not call more tools. If the available evidence is still "
@@ -1221,6 +1374,7 @@ async def direct_chat_turn(
     tool_trace: list[dict[str, Any]] = []
     tool_calls_used = 0
     tool_deferral_retries = 0
+    answer_validation_retries = 0
     node_evidence_retries = 0
     history_comparison_retries = 0
     counter_grounding_retries = 0
@@ -1322,6 +1476,25 @@ async def direct_chat_turn(
                     {
                         "role": "system",
                         "content": evidence_message,
+                    }
+                )
+                continue
+            review = await _evaluate_answer_candidate(
+                target,
+                message=message,
+                candidate_text=candidate_text,
+                tool_trace=tool_trace,
+                internal_tool_request=internal_tool_request,
+                counter_question=counter_question,
+                history_comparison_question=history_comparison_question,
+                node_question=node_question,
+            )
+            if review.failed and answer_validation_retries < _MAX_ANSWER_VALIDATION_RETRIES:
+                answer_validation_retries += 1
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": _answer_review_retry_message(review),
                     }
                 )
                 continue

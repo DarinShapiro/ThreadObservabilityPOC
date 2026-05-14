@@ -9,6 +9,7 @@ import contextlib
 import json
 import logging
 import re
+import shutil
 import time
 import uuid
 from datetime import UTC, datetime
@@ -20,8 +21,9 @@ from fastapi.responses import HTMLResponse
 
 from . import supervisor_client
 from .mcp_tools import _build_partition_state, _build_phantom_list
-from ..config import get_config
+from ..config import ThreadObsConfig, get_config
 from ..health import build_health_snapshot
+from ..pipeline import analyze_node as analyze_node_mod
 from ..pipeline import device_discovery
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
@@ -30,6 +32,7 @@ from ..pipeline import reasoner as reasoner_mod
 from ..pipeline import routing as routing_mod
 from ..pipeline import runner as pipeline_runner
 from ..pipeline import topology as topology_mod
+from ..pipeline import topology_snapshot as topology_snapshot_mod
 from ..services import chat_memory
 from ..services import direct_chat
 from ..storage import influx_store as ts_store
@@ -52,6 +55,207 @@ def _redact_config_secrets(value: object) -> object:
     if isinstance(value, list):
         return [_redact_config_secrets(item) for item in value]
     return value
+
+
+def _build_storage_capacity(storage: dict[str, object]) -> dict[str, object]:
+    size_bytes = int(storage.get("size_bytes") or 0)
+    db_path = Path(str(storage.get("db_path") or "")).expanduser()
+    free_bytes: int | None = None
+    total_bytes: int | None = None
+    warning_free_bytes = max(size_bytes * 10, 1024 * 1024 * 1024)
+    critical_free_bytes = max(size_bytes * 3, 256 * 1024 * 1024)
+    growth_rate_bytes_per_day: float | None = None
+    risk = "unknown"
+    note = "disk capacity could not be determined"
+    try:
+        recent_ticks = get_store().get_recent_pipeline_ticks(limit=48)
+    except Exception:
+        recent_ticks = []
+    sized_ticks = [
+        row for row in reversed(recent_ticks)
+        if row.get("db_size_bytes") is not None and row.get("completed_at")
+    ]
+    if len(sized_ticks) >= 2:
+        first = sized_ticks[0]
+        last = sized_ticks[-1]
+        try:
+            started = datetime.fromisoformat(str(first["completed_at"]))
+            ended = datetime.fromisoformat(str(last["completed_at"]))
+            seconds = max((ended - started).total_seconds(), 1.0)
+            growth_rate_bytes_per_day = ((float(last["db_size_bytes"]) - float(first["db_size_bytes"])) / seconds) * 86400.0
+        except Exception:
+            growth_rate_bytes_per_day = None
+    if db_path:
+        try:
+            usage = shutil.disk_usage(db_path.parent)
+            free_bytes = int(usage.free)
+            total_bytes = int(usage.total)
+        except OSError:
+            free_bytes = None
+            total_bytes = None
+    if free_bytes is not None and total_bytes:
+        db_fraction = (size_bytes / total_bytes) if total_bytes > 0 else 0.0
+        if free_bytes < critical_free_bytes:
+            risk = "high"
+            note = "free space is low relative to the current SQLite size"
+        elif free_bytes < warning_free_bytes:
+            risk = "medium"
+            note = "SQLite is healthy now, but capacity headroom is getting tighter"
+        else:
+            risk = "low"
+            note = "SQLite has comfortable free-space headroom"
+        return {
+            "size_bytes": size_bytes,
+            "free_bytes": free_bytes,
+            "total_bytes": total_bytes,
+            "db_fraction": round(db_fraction, 6),
+            "warning_free_bytes": warning_free_bytes,
+            "critical_free_bytes": critical_free_bytes,
+            "growth_rate_bytes_per_day": growth_rate_bytes_per_day,
+            "risk": risk,
+            "note": note,
+        }
+    return {
+        "size_bytes": size_bytes,
+        "free_bytes": free_bytes,
+        "total_bytes": total_bytes,
+        "db_fraction": None,
+        "warning_free_bytes": warning_free_bytes,
+        "critical_free_bytes": critical_free_bytes,
+        "growth_rate_bytes_per_day": growth_rate_bytes_per_day,
+        "risk": risk,
+        "note": note,
+    }
+
+
+def _get_runtime_chat_config() -> ThreadObsConfig:
+    cfg = get_config()
+    options_path = Path(str(getattr(cfg, "options_path", "") or "")).expanduser()
+    if getattr(cfg, "options_loaded", False) or options_path.exists():
+        try:
+            return ThreadObsConfig.load(options_path)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to reload chat config from %s; using cached config", options_path)
+    return cfg
+
+
+def _build_diagnostics_summary(
+    *,
+    supervisor: dict[str, object],
+    storage: dict[str, object],
+    timeseries: dict[str, object],
+    ingestion: dict[str, object],
+    pipeline: dict[str, object],
+    health: dict[str, object],
+    partitions: dict[str, object],
+    phantoms: dict[str, object],
+    stale_link_count: int,
+    config: dict[str, object],
+    graph_diagnostics: list[dict[str, object]],
+) -> dict[str, object]:
+    health_summary = health.get("summary") if isinstance(health, dict) else {}
+    issue_summary = health.get("active_issues") if isinstance(health, dict) else {}
+    stages_failed = list(pipeline.get("stages_failed") or []) if isinstance(pipeline, dict) else []
+    assessment_cfg = config.get("assessment") if isinstance(config, dict) else {}
+    storage_capacity = _build_storage_capacity(storage)
+    ingestion_error = str(ingestion.get("error") or "").strip() if isinstance(ingestion, dict) else ""
+    ingestion_slug = str(ingestion.get("slug") or "").strip() if isinstance(ingestion, dict) else ""
+    sources = {
+        "supervisor": {
+            "status": "error" if supervisor.get("error") else "ok",
+            "detail": str(supervisor.get("error") or "reachable via Supervisor API"),
+        },
+        "pipeline": {
+            "status": "error" if stages_failed else ("running" if pipeline.get("running") else "ok"),
+            "detail": (
+                f"failed stages: {', '.join(stages_failed)}"
+                if stages_failed else (
+                    f"tick #{pipeline.get('tick_count') or 0} in progress"
+                    if pipeline.get("running") else f"last tick #{pipeline.get('tick_count') or 0} completed"
+                )
+            ),
+            "failed_stages": stages_failed,
+            "last_finished_at": pipeline.get("finished_at"),
+        },
+        "otbr_ingestion": {
+            "status": "error" if ingestion_error else ("warn" if not ingestion_slug else "ok"),
+            "detail": ingestion_error or (
+                "no OTBR add-on selected for log ingestion" if not ingestion_slug else "OTBR ingest state available"
+            ),
+            "last_run_at": ingestion.get("last_run_at") if isinstance(ingestion, dict) else None,
+        },
+        "timeseries": {
+            "status": "ok" if timeseries.get("ok") else "warn",
+            "detail": str(timeseries.get("error") or timeseries.get("backend") or "unknown backend"),
+            "backend": timeseries.get("backend"),
+        },
+        "assessment": {
+            "status": "ok" if assessment_cfg.get("enabled") else "warn",
+            "detail": "Adaptive Monitoring enabled" if assessment_cfg.get("enabled") else "Adaptive Monitoring disabled",
+        },
+    }
+    data_quality = {
+        "status": health.get("status") if isinstance(health, dict) else "unknown",
+        "data_age_seconds": health.get("data_age_seconds") if isinstance(health, dict) else None,
+        "stale_nodes": int((health_summary or {}).get("stale_nodes") or 0),
+        "offline_nodes": int((health_summary or {}).get("offline_nodes") or 0),
+        "duplicate_physical_device_groups": int((health_summary or {}).get("duplicate_physical_device_groups") or 0),
+        "distinct_thread_networks": int((health_summary or {}).get("distinct_thread_networks") or 0),
+        "active_issue_count": int((issue_summary or {}).get("count") or 0),
+        "partition_count": int(partitions.get("partition_count") or 0) if isinstance(partitions, dict) else 0,
+        "phantom_count": int(phantoms.get("count") or 0) if isinstance(phantoms, dict) else 0,
+        "stale_link_count": int(stale_link_count or 0),
+    }
+    attention_items: list[dict[str, str]] = []
+    if stages_failed:
+        attention_items.append({
+            "severity": "bad",
+            "title": "Pipeline stages are failing",
+            "detail": f"Failed stages: {', '.join(stages_failed)}",
+        })
+    if data_quality["distinct_thread_networks"] > 1:
+        attention_items.append({
+            "severity": "warn",
+            "title": "Multiple Thread networks detected",
+            "detail": f"{data_quality['distinct_thread_networks']} distinct Thread networks are present in current node data.",
+        })
+    if data_quality["duplicate_physical_device_groups"] > 0:
+        attention_items.append({
+            "severity": "warn",
+            "title": "Duplicate hardware identities need cleanup",
+            "detail": f"{data_quality['duplicate_physical_device_groups']} duplicate device groups remain in the mesh inventory.",
+        })
+    if data_quality["offline_nodes"] > 0 or data_quality["stale_nodes"] > 0:
+        attention_items.append({
+            "severity": "warn",
+            "title": "Node freshness is degraded",
+            "detail": f"{data_quality['offline_nodes']} offline and {data_quality['stale_nodes']} stale nodes are currently reported.",
+        })
+    if storage_capacity["risk"] in {"medium", "high"}:
+        attention_items.append({
+            "severity": "warn" if storage_capacity["risk"] == "medium" else "bad",
+            "title": "SQLite capacity headroom is tightening",
+            "detail": str(storage_capacity["note"]),
+        })
+    for fact in graph_diagnostics[:2]:
+        attention_items.append({
+            "severity": str(fact.get("severity") or "warn"),
+            "title": str(fact.get("title") or "Graph-derived concern"),
+            "detail": str(fact.get("detail") or ""),
+        })
+    if not attention_items:
+        attention_items.append({
+            "severity": "good",
+            "title": "No urgent observability blockers detected",
+            "detail": "Current sources and retained mesh data look healthy enough for normal troubleshooting.",
+        })
+    return {
+        "sources": sources,
+        "data_quality": data_quality,
+        "storage_capacity": storage_capacity,
+        "attention_items": attention_items,
+        "graph_diagnostics": graph_diagnostics,
+    }
 
 
 def _render_chat_message(
@@ -77,6 +281,28 @@ def _render_chat_message(
     if not page_context:
         return text
     return text
+
+
+def _augment_chat_page_context(page_context: dict[str, object] | None) -> dict[str, object] | None:
+    if not page_context:
+        return page_context
+    enriched = dict(page_context)
+    try:
+        include_phantoms = bool(enriched.get("include_phantoms"))
+        topo = topology_mod.build_topology(include_phantoms=include_phantoms)
+        enriched["graph_diagnostics"] = topology_mod.derive_graph_diagnostics(topo)
+        enriched.setdefault(
+            "topology_summary",
+            {
+                "node_count": topo.get("node_count"),
+                "link_count": topo.get("link_count"),
+                "partition_count": len(topo.get("partitions") or []),
+                "split": bool(topo.get("split")),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("chat context: failed to derive graph diagnostics")
+    return enriched
 
 
 def _record_chat_turn_telemetry(
@@ -214,6 +440,10 @@ def _read_addon_version() -> str:
 
 ADDON_VERSION = _read_addon_version()
 LOG_PATH = Path("/data/thread-observability/addon.log")
+_CHAT_STARTER_PROMPTS_PATH = Path(__file__).parent / "chat_starter_prompts.json"
+_CHAT_KNOWN_THREAD_TOOLS = frozenset({"get_health_snapshot", "get_mesh_state", "list_active_issues", "start_triage"})
+_HA_MCP_CLIENT_URL = "http://9e5048e8-thread-observability:8100/mcp/sse"
+_HA_INTEGRATIONS_URL = "/config/integrations/dashboard"
 
 
 def _utc_now() -> str:
@@ -230,6 +460,28 @@ def _tail_log(n: int = 80) -> list[str]:
 
 
 DASHBOARD_HTML = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
+
+
+def _load_chat_starter_prompts() -> list[str]:
+    try:
+        payload = json.loads(_CHAT_STARTER_PROMPTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    prompts: list[str] = []
+    for item in payload:
+        if isinstance(item, str) and item.strip():
+            prompts.append(item.strip())
+    return prompts
+
+
+def _agent_has_thread_tools(row: dict[str, object]) -> bool:
+    tool_names = row.get("tool_names") if isinstance(row.get("tool_names"), list) else []
+    if not tool_names:
+        return bool(row.get("has_thread_tools"))
+    normalized = {str(name).strip() for name in tool_names if str(name).strip()}
+    return any(name in _CHAT_KNOWN_THREAD_TOOLS for name in normalized)
 
 
 def _window_deltas(samples: list[dict[str, object]]) -> dict[str, object]:
@@ -346,7 +598,25 @@ def create_core_app() -> FastAPI:
 
     @app.get("/v1/chat/agents")
     async def chat_agents() -> dict[str, object]:
-        cfg = get_config()
+        cfg = _get_runtime_chat_config()
+        starter_prompts = _load_chat_starter_prompts()
+        if not cfg.chat.enabled:
+            return {
+                "enabled": False,
+                "agents": [],
+                "count": 0,
+                "source": None,
+                "default_backend": direct_chat.default_chat_backend(cfg.ai, None),
+                "default_label": "Chat disabled",
+                "default_agent_id": str(cfg.chat.default_agent_id or "").strip() or None,
+                "send_page_context": bool(cfg.chat.send_page_context),
+                "persist_transcripts": bool(cfg.chat.persist_transcripts),
+                "chat_retention_days": int(cfg.retention.chat_days),
+                "thread_tools_connected": False,
+                "mcp_connect_url": _HA_MCP_CLIENT_URL,
+                "ha_integrations_url": _HA_INTEGRATIONS_URL,
+                "starter_prompts": starter_prompts,
+            }
         direct_target = direct_chat.resolve_direct_chat_target(cfg.ai)
         agents: list[dict[str, object]] = []
         source_parts: list[str] = []
@@ -365,17 +635,32 @@ def create_core_app() -> FastAPI:
         if direct_target is not None:
             agents.insert(0, direct_chat.direct_agent_row(direct_target))
             source_parts.append("direct")
+        thread_tools_connected = any(_agent_has_thread_tools(agent) for agent in agents)
         return {
+            "enabled": True,
             "agents": agents,
             "count": len(agents),
             "source": "+".join(source_parts) if source_parts else None,
             "default_backend": direct_chat.default_chat_backend(cfg.ai, direct_target),
             "default_label": direct_chat.default_chat_label(cfg.ai, direct_target),
+            "default_agent_id": str(cfg.chat.default_agent_id or "").strip() or None,
+            "send_page_context": bool(cfg.chat.send_page_context),
+            "persist_transcripts": bool(cfg.chat.persist_transcripts),
+            "chat_retention_days": int(cfg.retention.chat_days),
+            "thread_tools_connected": thread_tools_connected,
+            "mcp_connect_url": _HA_MCP_CLIENT_URL,
+            "ha_integrations_url": _HA_INTEGRATIONS_URL,
+            "starter_prompts": starter_prompts,
         }
 
     @app.post("/v1/chat/turn")
     async def chat_turn(payload: dict[str, object]) -> dict[str, object]:
-        cfg = get_config()
+        cfg = _get_runtime_chat_config()
+        if not cfg.chat.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Chat is disabled in add-on options.",
+            )
         message = str((payload or {}).get("message") or "").strip()
         if not message:
             raise HTTPException(
@@ -392,8 +677,14 @@ def create_core_app() -> FastAPI:
         conversation_id = str(conversation_id).strip() if conversation_id else None
         agent_id = (payload or {}).get("agent_id")
         agent_id = str(agent_id).strip() if agent_id else None
+        if not agent_id:
+            agent_id = str(cfg.chat.default_agent_id or "").strip() or None
         page_context = (payload or {}).get("page_context")
         page_context = page_context if isinstance(page_context, dict) else None
+        if cfg.chat.send_page_context:
+            page_context = _augment_chat_page_context(page_context)
+        else:
+            page_context = None
         direct_target = direct_chat.resolve_direct_chat_target(cfg.ai)
         if direct_chat.direct_chat_preferred(cfg.ai, agent_id, direct_target) and not conversation_id:
             conversation_id = f"direct-{uuid.uuid4()}"
@@ -416,6 +707,8 @@ def create_core_app() -> FastAPI:
                         page_context=page_context,
                         tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
                         response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
+                        persist=bool(cfg.chat.persist_transcripts),
+                        persist_days=int(cfg.retention.chat_days),
                     )
                 _record_chat_turn_telemetry(
                     conversation_id=str(result.get("conversation_id") or conversation_id or "").strip() or None,
@@ -520,6 +813,8 @@ def create_core_app() -> FastAPI:
                 page_context=page_context,
                 tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
                 response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
+                persist=bool(cfg.chat.persist_transcripts),
+                persist_days=int(cfg.retention.chat_days),
             )
         _record_chat_turn_telemetry(
             conversation_id=str(result.get("conversation_id") or conversation_id or "").strip() or None,
@@ -580,6 +875,25 @@ def create_core_app() -> FastAPI:
             return topology_mod.build_topology(include_phantoms=include_phantoms)
         except Exception as exc:  # noqa: BLE001
             return {"nodes": [], "links": [], "error": str(exc), "computed_at": _utc_now()}
+
+    @app.get("/v1/topology/history")
+    def topology_history(limit: int = 20) -> dict[str, object]:
+        try:
+            snaps = get_store().list_topology_snapshots(limit=max(1, min(int(limit), 100)))
+            return {"snapshots": snaps, "count": len(snaps)}
+        except Exception as exc:  # noqa: BLE001
+            return {"snapshots": [], "count": 0, "error": str(exc)}
+
+    @app.get("/v1/topology/history/diff")
+    def topology_history_diff(snapshot_id_a: int, snapshot_id_b: int) -> dict[str, object]:
+        try:
+            return topology_snapshot_mod.diff_topology(
+                get_store(),
+                snapshot_id_a=int(snapshot_id_a),
+                snapshot_id_b=int(snapshot_id_b),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     @app.get("/v1/partitions")
     def partitions_snapshot(include_phantoms: bool = False) -> dict[str, object]:
@@ -649,6 +963,13 @@ def create_core_app() -> FastAPI:
             return routing_mod.list_children_enriched(eui64.lower())
         except Exception as exc:  # noqa: BLE001
             return {"parent_eui64": eui64, "error": str(exc), "children": []}
+
+    @app.get("/v1/nodes/{eui64}/analysis")
+    def node_analysis_for(eui64: str) -> dict[str, object]:
+        try:
+            return analyze_node_mod.analyze_node(eui64.lower(), store=get_store())
+        except Exception as exc:  # noqa: BLE001
+            return {"node": None, "error": str(exc)}
 
     @app.get("/v1/network-data")
     def network_data_list() -> dict[str, object]:
@@ -789,6 +1110,7 @@ def create_core_app() -> FastAPI:
             ))
         except Exception as exc:  # noqa: BLE001
             all_nodes = []
+        health = health_snapshot()
         # Counts by status — saves every consumer recomputing them.
         node_counts: dict[str, int] = {"total": len(all_nodes)}
         for n in all_nodes:
@@ -827,13 +1149,28 @@ def create_core_app() -> FastAPI:
             otbr_eui64 = otbr.get("eui64") if otbr else None
         except Exception:  # noqa: BLE001
             otbr_eui64 = None
+        topo = topology_snapshot(include_phantoms=include_phantoms)
+        graph_diagnostics = topology_mod.derive_graph_diagnostics(topo)
+        diagnostics_summary = _build_diagnostics_summary(
+            supervisor=sup,
+            storage=storage,
+            timeseries=ts_health,
+            ingestion=ingestion,
+            pipeline=pipeline,
+            health=health,
+            partitions=partitions,
+            phantoms=phantoms,
+            stale_link_count=stale_link_count,
+            config=cfg,
+            graph_diagnostics=graph_diagnostics,
+        )
         return {
             "addon_version": ADDON_VERSION,
             "checked_at": _utc_now(),
             "supervisor": sup,
-            "health": health_snapshot(),
+            "health": health,
             "issues": list_active_issues(),
-            "topology": topology_snapshot(include_phantoms=include_phantoms),
+            "topology": topo,
             "partitions": partitions,
             "phantoms": phantoms,
             "recent_logs": _tail_log(80),
@@ -845,6 +1182,8 @@ def create_core_app() -> FastAPI:
             "otbr_eui64": otbr_eui64,
             "node_counts": node_counts,
             "stale_link_count": stale_link_count,
+            "diagnostics_summary": diagnostics_summary,
+            "graph_diagnostics": graph_diagnostics,
             "all_nodes": all_nodes,
         }
 

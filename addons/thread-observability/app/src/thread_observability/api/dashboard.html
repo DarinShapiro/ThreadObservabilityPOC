@@ -22,10 +22,6 @@
   header .meta { color: var(--muted); font-size: 12px; }
   header .spacer { flex:1; }
   header .last-refresh { color: var(--muted); font-size: 11px; }
-  .header-chip-btn {
-    background: transparent; border: 0; color: inherit; padding: 0; cursor: pointer;
-    font: inherit;
-  }
 
   nav.tabs { display:flex; gap:2px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--panel2); }
   nav.tabs button {
@@ -40,9 +36,6 @@
   .tab-panel.active { display:block; }
 
   .grid { display:grid; gap:14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-bottom: 14px; }
-  .network-layout { display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:16px; align-items:start; }
-  .network-main { min-width:0; }
-  .network-rail { position: sticky; top: 16px; display:flex; flex-direction:column; gap:14px; }
   .card { background: var(--panel); border:1px solid var(--border); border-radius: 10px; padding: 14px; }
   .card h2 { font-size: 13px; margin:0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
   .card .big { font-size: 28px; font-weight: 700; }
@@ -113,92 +106,6 @@
   }
   .warnings-row .warn-chip.bad  { background:#3b0a0a; color:#fca5a5; border-color:#7f1d1d; }
   .warnings-row .warn-chip.warn { background:#3b2706; color:#fde68a; border-color:#854d0e; }
-  .warnings-row .warn-chip.info { background:#0c2748; color:#93c5fd; border-color:#1d4ed8; }
-
-  .assessment-banner {
-    margin-top: 14px; padding: 14px; border-radius: 10px; border:1px solid #7f1d1d;
-    background: linear-gradient(135deg, rgba(127,29,29,0.28), rgba(17,26,46,0.92));
-  }
-  .assessment-banner.hidden { display:none; }
-  .assessment-banner-head { display:flex; align-items:flex-start; gap:10px; }
-  .assessment-banner-title { font-size: 15px; font-weight: 700; line-height: 1.4; }
-  .assessment-banner-meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
-  .assessment-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top: 12px; }
-  .action-btn {
-    background: var(--panel2); color: var(--fg); border:1px solid var(--border);
-    border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600; cursor:pointer;
-  }
-  .action-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .action-btn.primary { background:#082f49; border-color:#0ea5e9; color:#bae6fd; }
-  .action-btn.warn { background:#422006; border-color:#a16207; color:#fde68a; }
-  .action-btn.bad { background:#450a0a; border-color:#b91c1c; color:#fecaca; }
-
-  .rail-card-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
-  .rail-card-head h2 { margin:0; flex:1; }
-  .rail-sub { color: var(--muted); font-size: 12px; }
-  .stack { display:flex; flex-direction:column; gap:10px; }
-  .chat-messages {
-    min-height: 180px; max-height: 420px; overflow:auto; background: var(--panel2);
-    border:1px solid var(--border); border-radius: 10px; padding: 12px;
-    display:flex; flex-direction:column; gap:10px;
-  }
-  .chat-msg { border-radius: 10px; padding: 10px 12px; line-height:1.5; }
-  .chat-msg.user { background:#172554; color:#dbeafe; margin-left:18px; }
-  .chat-msg.agent { background:#102239; color:#e2e8f0; margin-right:18px; }
-  .chat-msg.background-check { background:#0f2d20; color:#dcfce7; border:1px solid #166534; }
-  .chat-msg-meta {
-    color: var(--muted); font-size: 11px; margin-bottom: 6px; display:flex;
-    gap:8px; flex-wrap:wrap; align-items:center; justify-content:space-between;
-  }
-  .chat-msg-meta-left, .chat-msg-meta-right { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .chat-copy-btn {
-    background:transparent; color:var(--muted); border:1px solid var(--border);
-    border-radius:6px; padding:3px 7px; font-size:11px; cursor:pointer;
-  }
-  .chat-copy-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .chat-composer textarea {
-    width:100%; min-height: 88px; resize: vertical; background: var(--panel2); color: var(--fg);
-    border:1px solid var(--border); border-radius:10px; padding:10px; font-size:13px;
-  }
-  .chat-controls { display:flex; gap:8px; flex-wrap:wrap; justify-content:space-between; align-items:center; margin-top:8px; }
-  .chat-controls-left, .chat-controls-right { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-  .chat-select {
-    background:var(--panel2); color:var(--fg); border:1px solid var(--border);
-    border-radius:8px; padding:6px 8px; font-size:12px; min-width: 150px;
-  }
-  .suggestion-list { display:flex; flex-wrap:wrap; gap:8px; }
-  .suggestion-chip {
-    background:#0b223e; color:#bfdbfe; border:1px solid #1d4ed8; border-radius:999px;
-    padding:6px 10px; font-size:12px; cursor:pointer;
-  }
-  .suggestion-chip:hover { background:#153962; }
-  .chat-panel { margin-top:16px; }
-  .history-list, .finding-list { display:flex; flex-direction:column; gap:8px; }
-  .history-item, .finding-item {
-    padding:10px 12px; border:1px solid var(--border); border-radius:10px; background: var(--panel2);
-  }
-  .finding-item.active { border-color:#ef4444; background:#22131f; }
-  .item-title { font-size:13px; font-weight:600; margin-bottom:4px; }
-  .item-meta { color: var(--muted); font-size:11px; }
-  .detail-box {
-    background: var(--panel2); border:1px solid var(--border); border-radius:10px; padding:12px;
-  }
-  .detail-box h3 { margin:0 0 8px; font-size:12px; text-transform: uppercase; letter-spacing:0.04em; color:var(--muted); }
-  .evidence-list { display:flex; flex-direction:column; gap:8px; }
-  .evidence-item { border:1px solid var(--border); border-radius:8px; padding:8px 10px; background:#0b1220; }
-  .load-more-row { margin-top: 10px; }
-
-  @media (max-width: 1080px) {
-    .network-layout { grid-template-columns: 1fr; }
-    .network-rail { position: static; }
-  }
-
-  @media (max-width: 720px) {
-    header { flex-wrap: wrap; }
-    .assessment-banner-head { flex-direction: column; }
-    .assessment-actions { flex-direction: column; }
-    .chat-msg.user, .chat-msg.agent { margin-left:0; margin-right:0; }
-  }
 
   /* Hot spots */
   #hotspots-body { display:flex; gap:10px; flex-wrap:wrap; }
@@ -292,9 +199,6 @@
   <h1>Thread Observability</h1>
   <span class="meta">v<span id="addon-version">…</span></span>
   <span class="spacer"></span>
-  <button id="assessment-chip" class="header-chip-btn" title="Adaptive Monitoring state">
-    <span class="pill muted">Adaptive Monitoring · loading…</span>
-  </button>
   <span id="pipeline-pill" class="pill muted" title="Pipeline status">pipeline: —</span>
   <span class="last-refresh">updated <span id="last-refresh">never</span></span>
 </header>
@@ -307,124 +211,103 @@
 
 <main>
   <section id="tab-network" class="tab-panel active">
-    <div class="network-layout">
-      <div class="network-main">
-        <div class="card full" id="headline-card">
-          <div id="headline-body" class="muted">computing…</div>
-          <div id="headline-warnings" class="warnings-row"></div>
-          <div id="assessment-banner" class="assessment-banner hidden">
-            <div class="assessment-banner-head">
-              <div style="font-size:18px; line-height:1;">💬</div>
-              <div style="flex:1; min-width:0;">
-                <div id="assessment-banner-title" class="assessment-banner-title">No active background finding.</div>
-                <div id="assessment-banner-meta" class="assessment-banner-meta"></div>
-              </div>
-              <span id="assessment-banner-count" class="pill warn" style="display:none;"></span>
-            </div>
-            <div id="assessment-actions" class="assessment-actions">
-              <button id="assessment-investigate-btn" class="action-btn primary">Investigate with me</button>
-              <button id="assessment-evidence-btn" class="action-btn">Show me what you saw</button>
-              <button id="assessment-hide-btn" class="action-btn warn">Not now</button>
-              <button id="assessment-dismiss-btn" class="action-btn bad">Dismiss for 24h</button>
-            </div>
-          </div>
-        </div>
-
-        <div class="card full" id="hotspots-card">
-          <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
-          <div id="hotspots-body"><div class="empty">no data</div></div>
-        </div>
-
-        <div class="card full" id="issues-card">
-          <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-            <h2 style="margin:0; flex:1;">Active Issues</h2>
-            <span id="issues-sev-pills"></span>
-          </div>
-          <div id="issues-body"><div class="empty">No issues.</div></div>
-        </div>
-
-        <div class="card full">
-          <h2>Partitions</h2>
-          <div id="partitions-body"><div class="empty">no data</div></div>
-        </div>
-
-        <div class="card full">
-          <div class="toolbar" style="flex-wrap:wrap;">
-            <h2 style="margin:0; flex:1;">Thread Nodes</h2>
-            <input type="search" id="nodes-search" placeholder="search name / EUI" style="background:var(--panel2); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;">
-            <select id="nodes-filter-status" class="filter-select"><option value="">all status</option><option value="online">online</option><option value="offline">offline</option><option value="phantom">phantom</option></select>
-            <select id="nodes-filter-role" class="filter-select"><option value="">all roles</option><option value="leader">leader</option><option value="router">router</option><option value="reed">REED</option><option value="fed">end (FED)</option><option value="sed">sleepy (SED)</option></select>
-            <select id="nodes-filter-area" class="filter-select"><option value="">all areas</option></select>
-            <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
-          </div>
-          <div style="overflow-x:auto;">
-            <table id="nodes-table">
-              <thead>
-                <tr>
-                  <th data-sort="name">Name</th>
-                  <th data-sort="area">Area</th>
-                  <th data-sort="role">Role</th>
-                  <th data-sort="rssi" title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
-                  <th data-sort="lqi" title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
-                  <th data-sort="tx_retry_1h" title="Δ tx_retry_count over the last 1 hour (Phase 4 counter time-series)">TX retry 1h</th>
-                  <th data-sort="parent_changes_24h" title="Δ parent_change_count over the last 24 hours">Parent Δ 24h</th>
-                  <th data-sort="status">Status</th>
-                  <th data-sort="last_seen">Last seen</th>
-                  <th data-sort="eui64">EUI64</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-          </div>
-          <div class="legend">
-            <span><b>RSSI</b> (received signal strength, dBm — higher = stronger):</span>
-            <span><span class="sw" style="background:var(--good)"></span>≥ −70 (solid)</span>
-            <span><span class="sw" style="background:var(--warn)"></span>−70 to −85 (marginal)</span>
-            <span><span class="sw" style="background:var(--bad)"></span>&lt; −85 (poor)</span>
-          </div>
-          <div class="legend" style="margin-top:4px;">
-            <span><b>LQI</b> (Matter LinkQuality, 0–3 quantized — the neighbor
-            router's estimate of how reliably it decodes packets from this node):
-            <span class="lqi-good">3</span> good ·
-            <span class="lqi-warn">2</span> fair ·
-            <span class="lqi-bad">1</span> poor ·
-            <span class="lqi-bad">0</span> no link. Matter quantizes OpenThread's
-            0–255 LQI down to this 4-bucket value.</span>
-          </div>
-          <div class="legend" style="margin-top:4px;">
-            <span><b>Role:</b> Leader = partition <i>control-plane</i> coordinator
-            (elects Router IDs, maintains Network Data) — <b>not</b> a forwarding hop;
-            packets do not have to traverse it. Router/REED = mesh peer (no parent,
-            forwards per its RouteTable). End device / Sleepy end = attached to one
-            parent router (shown as <code>via …</code>). <b>→ OTBR via X (cost N)</b>
-            shows each router's next forwarding hop on the path to the border router,
-            derived from its RouteTable.</span>
-          </div>
-        </div>
+    <div class="card full" id="headline-card">
+      <div id="headline-body" class="muted">computing…</div>
+      <div id="headline-warnings" class="warnings-row"></div>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h2>Thread Health</h2>
+        <div class="big" id="health-score">—</div>
+        <div class="sub" id="health-sub">computing…</div>
       </div>
+      <div class="card">
+        <h2>Partitions</h2>
+        <div class="big" id="partition-count">—</div>
+        <div class="sub" id="partition-sub">—</div>
+      </div>
+      <div class="card">
+        <h2>Active Nodes</h2>
+        <div class="big" id="node-count">—</div>
+        <div class="sub" id="node-sub">—</div>
+      </div>
+      <div class="card">
+        <h2>Phantom Nodes</h2>
+        <div class="big" id="phantom-count">—</div>
+        <div class="sub muted">not seen in any router's tables &gt; 24 h</div>
+      </div>
+    </div>
 
-      <aside class="network-rail">
-        <div class="card" id="assessment-rail-card">
-          <div class="rail-card-head">
-            <h2>Adaptive Monitoring</h2>
-            <button id="assessment-run-now-btn" class="action-btn">Force a check now</button>
-          </div>
-          <div id="assessment-state-body" class="stack muted">loading…</div>
-          <div class="load-more-row">
-            <button id="assessment-load-more-btn" class="action-btn">Load older</button>
-          </div>
-          <div id="assessment-history-body" class="history-list" style="margin-top:10px;"></div>
-        </div>
+    <div class="card full" id="hotspots-card">
+      <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
+      <div id="hotspots-body"><div class="empty">no data</div></div>
+    </div>
 
-        <div class="card" id="assessment-detail-card">
-          <div class="rail-card-head">
-            <h2>Evidence</h2>
-            <span id="assessment-detail-pill" class="pill muted">none selected</span>
-          </div>
-          <div id="assessment-detail-body" class="detail-box muted">Pick a background finding to inspect what the agent saw.</div>
-        </div>
+    <div class="card full" id="issues-card">
+      <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
+        <h2 style="margin:0; flex:1;">Active Issues</h2>
+        <span id="issues-sev-pills"></span>
+      </div>
+      <div id="issues-body"><div class="empty">No issues.</div></div>
+    </div>
 
-      </aside>
+    <div class="card full">
+      <h2>Partitions</h2>
+      <div id="partitions-body"><div class="empty">no data</div></div>
+    </div>
+
+    <div class="card full">
+      <div class="toolbar" style="flex-wrap:wrap;">
+        <h2 style="margin:0; flex:1;">Thread Nodes</h2>
+        <input type="search" id="nodes-search" placeholder="search name / EUI" style="background:var(--panel2); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;">
+        <select id="nodes-filter-status" class="filter-select"><option value="">all status</option><option value="online">online</option><option value="offline">offline</option><option value="phantom">phantom</option></select>
+        <select id="nodes-filter-role" class="filter-select"><option value="">all roles</option><option value="leader">leader</option><option value="router">router</option><option value="reed">REED</option><option value="fed">end (FED)</option><option value="sed">sleepy (SED)</option></select>
+        <select id="nodes-filter-area" class="filter-select"><option value="">all areas</option></select>
+        <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
+      </div>
+      <div style="overflow-x:auto;">
+        <table id="nodes-table">
+          <thead>
+            <tr>
+              <th data-sort="name">Name</th>
+              <th data-sort="area">Area</th>
+              <th data-sort="role">Role</th>
+              <th data-sort="rssi" title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
+              <th data-sort="lqi" title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
+              <th data-sort="tx_retry_1h" title="Δ tx_retry_count over the last 1 hour (Phase 4 counter time-series)">TX retry 1h</th>
+              <th data-sort="parent_changes_24h" title="Δ parent_change_count over the last 24 hours">Parent Δ 24h</th>
+              <th data-sort="status">Status</th>
+              <th data-sort="last_seen">Last seen</th>
+              <th data-sort="eui64">EUI64</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="legend">
+        <span><b>RSSI</b> (received signal strength, dBm — higher = stronger):</span>
+        <span><span class="sw" style="background:var(--good)"></span>≥ −70 (solid)</span>
+        <span><span class="sw" style="background:var(--warn)"></span>−70 to −85 (marginal)</span>
+        <span><span class="sw" style="background:var(--bad)"></span>&lt; −85 (poor)</span>
+      </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>LQI</b> (Matter LinkQuality, 0–3 quantized — the neighbor
+        router's estimate of how reliably it decodes packets from this node):
+        <span class="lqi-good">3</span> good ·
+        <span class="lqi-warn">2</span> fair ·
+        <span class="lqi-bad">1</span> poor ·
+        <span class="lqi-bad">0</span> no link. Matter quantizes OpenThread's
+        0–255 LQI down to this 4-bucket value.</span>
+      </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>Role:</b> Leader = partition <i>control-plane</i> coordinator
+        (elects Router IDs, maintains Network Data) — <b>not</b> a forwarding hop;
+        packets do not have to traverse it. Router/REED = mesh peer (no parent,
+        forwards per its RouteTable). End device / Sleepy end = attached to one
+        parent router (shown as <code>via …</code>). <b>→ OTBR via X (cost N)</b>
+        shows each router's next forwarding hop on the path to the border router,
+        derived from its RouteTable.</span>
+      </div>
     </div>
   </section>
 
@@ -478,70 +361,31 @@
         <h2>OTBR Ingestion</h2>
         <div id="ingest-body" class="muted">…</div>
       </div>
-      <div class="card">
-        <h2>Advanced Debug</h2>
-        <label style="display:flex; gap:8px; align-items:center; font-size:14px;">
-          <input type="checkbox" id="diag-advanced-toggle">
-          <span>Show raw config, endpoint list, and recent logs</span>
-        </label>
-        <div class="muted" style="margin-top:8px;">Sensitive debug surfaces stay hidden until you explicitly enable them.</div>
-      </div>
     </div>
 
-    <div id="diagnostics-advanced-panels" hidden>
-      <details>
-        <summary>Recent logs</summary>
-        <pre class="log" id="logs-body">…</pre>
-      </details>
+    <details>
+      <summary>Recent logs</summary>
+      <pre class="log" id="logs-body">…</pre>
+    </details>
 
-      <details>
-        <summary>Endpoints</summary>
-        <ul style="font-size:12px; line-height:1.7;">
-          <li><code>GET /v1/health/snapshot</code></li>
-          <li><code>GET /v1/issues/active</code></li>
-          <li><code>GET /v1/topology?include_phantoms=</code></li>
-          <li><code>GET /v1/partitions?include_phantoms=</code></li>
-          <li><code>GET /v1/phantoms</code></li>
-          <li><code>GET /v1/dev/status?include_phantoms=</code></li>
-          <li><code>GET /v1/counters/deltas</code></li>
-          <li><code>GET /v1/ingest/state</code></li>
-        </ul>
-      </details>
+    <details>
+      <summary>Endpoints</summary>
+      <ul style="font-size:12px; line-height:1.7;">
+        <li><code>GET /v1/health/snapshot</code></li>
+        <li><code>GET /v1/issues/active</code></li>
+        <li><code>GET /v1/topology?include_phantoms=</code></li>
+        <li><code>GET /v1/partitions?include_phantoms=</code></li>
+        <li><code>GET /v1/phantoms</code></li>
+        <li><code>GET /v1/dev/status?include_phantoms=</code></li>
+        <li><code>GET /v1/counters/deltas</code></li>
+        <li><code>GET /v1/ingest/state</code></li>
+      </ul>
+    </details>
 
-      <details>
-        <summary>Raw config (secrets redacted)</summary>
-        <pre class="log" id="config-body">…</pre>
-      </details>
-    </div>
-  </section>
-
-  <section id="chat-panel" class="chat-panel">
-    <div class="card full" id="chat-card">
-      <div class="rail-card-head">
-        <h2>Chat</h2>
-        <button id="chat-reset-btn" class="action-btn">New conversation</button>
-      </div>
-      <div class="rail-sub">Dashboard + active-tab context are sent on each turn. Tool calls stay visible.</div>
-      <div class="stack" style="margin-top:10px;">
-        <div>
-          <label class="rail-sub" for="chat-agent-select">Agent</label><br>
-          <select id="chat-agent-select" class="chat-select"><option value="">Home Assistant default</option></select>
-        </div>
-        <div id="chat-suggestions" class="suggestion-list"></div>
-        <div id="chat-messages" class="chat-messages"><div class="empty">No conversation yet. Ask about a node, partition split, or recent finding.</div></div>
-        <div class="chat-composer">
-          <textarea id="chat-input" placeholder="Ask about this mesh…"></textarea>
-          <div class="chat-controls">
-            <div class="chat-controls-left">
-              <button id="chat-node-btn" class="action-btn">Ask about selected node</button>
-            </div>
-            <div class="chat-controls-right">
-              <button id="chat-send-btn" class="action-btn primary">Send</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <details>
+      <summary>Raw config (token redacted)</summary>
+      <pre class="log" id="config-body">…</pre>
+    </details>
   </section>
 </main>
 
@@ -580,20 +424,6 @@ async function fetchJSON(path) {
   const r = await fetch(path, { headers: { 'Accept': 'application/json' }});
   if (!r.ok) throw new Error(r.status + ' ' + r.statusText);
   return r.json();
-}
-async function postJSON(path, body) {
-  const r = await fetch(path, {
-    method: 'POST',
-    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  let payload = null;
-  try { payload = await r.json(); } catch (_) { payload = null; }
-  if (!r.ok) {
-    const detail = payload && (payload.detail || payload.error) ? (payload.detail || payload.error) : (r.status + ' ' + r.statusText);
-    throw new Error(detail);
-  }
-  return payload;
 }
 function fmtAge(iso) {
   if (!iso) return '—';
@@ -668,35 +498,14 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    renderChatSuggestions();
     if (btn.dataset.tab === 'graph') renderGraph();
   });
 });
 
 let lastStatus = null;
 let lastDeltas = null;            // { now, windows, nodes: {eui: {1h:{...}, 24h:{...}}} }
-let lastAssessmentState = null;
-let lastAssessmentFindings = [];
-let lastAssessmentHistory = [];
-let assessmentHistoryOffset = 0;
-let assessmentHistoryHasMore = false;
-let assessmentBannerHiddenId = null;
-let activeAssessmentFindingId = null;
-let selectedNodeEui = null;
-let lastChatAgents = [];
-let chatDefaultLabel = 'Home Assistant default';
-let chatSending = false;
-const chatState = { conversationId: null, messages: [] };
 let nodesSort = { key: null, dir: 'asc' };  // null => server "worst first" default
 const SEV_RANK = { critical: 0, error: 0, warning: 1, warn: 1, info: 2, notice: 3 };
-const ASSESSMENT_STATE_CLASS = {
-  probation: 'good',
-  relaxing: 'good',
-  steady: 'good',
-  heightened: 'warn',
-  engaged: 'running',
-  disabled: 'muted',
-};
 
 function isOtbrNode(n) {
   return n && (n.role === 'border_router' || n.routing_role === 'border_router');
@@ -724,390 +533,6 @@ function deltaForNode(eui, window, counter) {
   const win = node[window];
   if (!win) return undefined;
   return win[counter];  // number, null (reset), or undefined (missing)
-}
-
-function shortTime(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function assessmentSeverityRank(v) {
-  const key = String(v || '').toLowerCase();
-  return ({ critical: 0, investigate: 1, warning: 2, watch: 2, info: 3 })[key] ?? 9;
-}
-
-function topAssessmentFinding() {
-  const rows = (lastAssessmentFindings || []).slice();
-  rows.sort((a, b) => {
-    const sa = assessmentSeverityRank(a.severity || a.verdict);
-    const sb = assessmentSeverityRank(b.severity || b.verdict);
-    if (sa !== sb) return sa - sb;
-    return Number(b.confidence || 0) - Number(a.confidence || 0);
-  });
-  return rows[0] || null;
-}
-
-function assessmentFindingById(findingId) {
-  return (lastAssessmentFindings || []).find(f => f.finding_id === findingId)
-    || (lastAssessmentHistory || []).find(f => f.finding_id === findingId)
-    || null;
-}
-
-function currentPageContext() {
-  const counts = (lastStatus && lastStatus.node_counts) || {};
-  const partitions = (lastStatus && lastStatus.partitions) || {};
-  const activeTab = document.querySelector('.tab-panel.active');
-  return {
-    page: 'dashboard',
-    active_tab: activeTab ? activeTab.id.replace('tab-', '') : null,
-    viewport: window.innerWidth < 720 ? 'narrow' : 'wide',
-    selected_node_eui64: selectedNodeEui,
-    filters: {
-      status: $('#nodes-filter-status').value || null,
-      role: $('#nodes-filter-role').value || null,
-      area: $('#nodes-filter-area').value || null,
-      search: $('#nodes-search').value || '',
-    },
-    time_window: '24h',
-    snapshot_summary: {
-      total_nodes: counts.total || 0,
-      stale_nodes: ((lastStatus && lastStatus.health && lastStatus.health.summary) || {}).stale_nodes || 0,
-      distinct_thread_networks: ((lastStatus && lastStatus.health && lastStatus.health.summary) || {}).distinct_thread_networks || 0,
-      active_issue_count: ((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0,
-      partition_count: partitions.partition_count || 0,
-    },
-  };
-}
-
-function renderAssessmentChip() {
-  const host = $('#assessment-chip');
-  if (!host) return;
-  const state = lastAssessmentState || {};
-  const stateName = state.state || 'unavailable';
-  const pillClass = ASSESSMENT_STATE_CLASS[stateName] || 'muted';
-  const next = state.next_check_at ? (' · next ' + fmtAge(state.next_check_at)) : '';
-  const label = 'Adaptive Monitoring · ' + stateName + next;
-  host.innerHTML = '<span class="pill ' + pillClass + '">' + escapeHtml(label) + '</span>';
-  host.title = 'Adaptive Monitoring · ' + stateName
-    + ' · last ' + fmtAge(state.last_check_at)
-    + ' · next ' + (state.next_check_at ? shortTime(state.next_check_at) : '—');
-}
-
-function renderAssessmentBanner() {
-  const banner = $('#assessment-banner');
-  const finding = topAssessmentFinding();
-  if (!banner) return;
-  if (!finding || finding.finding_id === assessmentBannerHiddenId) {
-    banner.classList.add('hidden');
-    return;
-  }
-  banner.classList.remove('hidden');
-  $('#assessment-banner-title').textContent = finding.headline || 'Background Diagnostics found something to investigate.';
-  $('#assessment-banner-meta').textContent = [
-    (finding.display_name || finding.node_eui64) ? ('node ' + (finding.display_name || finding.node_eui64)) : null,
-    finding.finding_type || null,
-    finding.confidence != null ? ('confidence ' + Math.round(Number(finding.confidence) * 100) + '%') : null,
-  ].filter(Boolean).join(' · ');
-  const more = Math.max(0, (lastAssessmentFindings || []).length - 1);
-  const count = $('#assessment-banner-count');
-  count.style.display = more > 0 ? 'inline-block' : 'none';
-  count.textContent = more > 0 ? ('+' + more + ' more') : '';
-}
-
-function renderAssessmentRail() {
-  const state = lastAssessmentState || {};
-  const finding = activeAssessmentFindingId ? assessmentFindingById(activeAssessmentFindingId) : topAssessmentFinding();
-  if (finding) activeAssessmentFindingId = finding.finding_id || activeAssessmentFindingId;
-  const stateBody = $('#assessment-state-body');
-  const historyBody = $('#assessment-history-body');
-  if (!stateBody || !historyBody) return;
-  const budgetBits = [];
-  if (state.calls_today != null && state.daily_budget != null) {
-    budgetBits.push('budget ' + state.calls_today + '/' + state.daily_budget);
-  }
-  stateBody.innerHTML = '';
-  stateBody.appendChild(el('div', {},
-    el('span', { class: 'pill ' + (ASSESSMENT_STATE_CLASS[state.state] || 'muted') }, state.state || 'unavailable'),
-    el('span', { class: 'rail-sub', style: 'margin-left:8px;' }, state.reason || 'scheduler state')
-  ));
-  stateBody.appendChild(el('div', { class: 'rail-sub' },
-    'Last check ' + fmtAge(state.last_check_at) + ' · next ' + fmtAge(state.next_check_at)
-  ));
-  stateBody.appendChild(el('div', { class: 'rail-sub' },
-    'Last verdict ' + (state.last_verdict || '—') + (budgetBits.length ? (' · ' + budgetBits.join(' · ')) : '')
-  ));
-  if (lastAssessmentFindings.length) {
-    const list = el('div', { class: 'finding-list' });
-    for (const row of lastAssessmentFindings.slice(0, 4)) {
-      const item = el('div', { class: 'finding-item' + (row.finding_id === activeAssessmentFindingId ? ' active' : '') });
-      item.appendChild(el('div', { class: 'item-title' }, row.headline || 'finding'));
-      item.appendChild(el('div', { class: 'item-meta' }, [row.finding_type, fmtAge(row.last_seen_at)].filter(Boolean).join(' · ')));
-      item.addEventListener('click', () => showAssessmentFinding(row));
-      list.appendChild(item);
-    }
-    stateBody.appendChild(list);
-  }
-
-  historyBody.innerHTML = '';
-  if (!lastAssessmentHistory.length) {
-    historyBody.appendChild(el('div', { class: 'empty' }, 'No assessment history yet.'));
-  } else {
-    for (const row of lastAssessmentHistory) {
-      const item = el('div', { class: 'history-item' });
-      item.appendChild(el('div', { class: 'item-title' }, row.headline || row.verdict || 'assessment'));
-      item.appendChild(el('div', { class: 'item-meta' }, [row.verdict, fmtAge(row.assessed_at), row.model_name || null].filter(Boolean).join(' · ')));
-      if (row.finding_id) item.addEventListener('click', () => showAssessmentFinding(row));
-      historyBody.appendChild(item);
-    }
-  }
-  $('#assessment-load-more-btn').style.display = assessmentHistoryHasMore ? 'inline-block' : 'none';
-  renderAssessmentDetail(finding);
-}
-
-function renderAssessmentDetail(finding) {
-  const body = $('#assessment-detail-body');
-  const pill = $('#assessment-detail-pill');
-  if (!body || !pill) return;
-  if (!finding) {
-    pill.className = 'pill muted';
-    pill.textContent = 'none selected';
-    body.className = 'detail-box muted';
-    body.innerHTML = 'Pick a background finding to inspect what the agent saw.';
-    return;
-  }
-  const cls = assessmentSeverityRank(finding.severity || finding.verdict) <= 1 ? 'bad' : 'warn';
-  pill.className = 'pill ' + cls;
-  pill.textContent = finding.severity || finding.verdict || 'finding';
-  const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
-  const evidenceHtml = evidence.length
-    ? '<div class="evidence-list">' + evidence.map(ev =>
-        '<div class="evidence-item"><div class="item-title">' + escapeHtml(ev.tool || 'tool') + '</div>' +
-        '<div class="rail-sub">' + escapeHtml(ev.key_finding || '') + '</div></div>'
-      ).join('') + '</div>'
-    : '<div class="empty">No structured evidence attached.</div>';
-  const actions = finding.finding_id
-    ? '<div class="assessment-actions">'
-      + '<button class="action-btn primary" data-feedback="resolved">Mark as resolved</button>'
-      + '<button class="action-btn bad" data-feedback="wrong">Mark as wrong</button>'
-      + '</div>'
-    : '';
-  body.className = 'detail-box';
-  body.innerHTML = '<h3>' + escapeHtml(finding.headline || 'Background Diagnostics finding') + '</h3>'
-    + '<div class="rail-sub" style="margin-bottom:10px;">'
-    + [finding.finding_type, finding.node_eui64, finding.confidence != null ? ('confidence ' + Math.round(Number(finding.confidence) * 100) + '%') : null].filter(Boolean).join(' · ')
-    + '</div>'
-    + evidenceHtml
-    + (finding.suggested_starter_prompt
-      ? '<div class="rail-sub" style="margin-top:10px;">Suggested opener: ' + escapeHtml(finding.suggested_starter_prompt) + '</div>'
-      : '')
-    + actions;
-  body.querySelectorAll('button[data-feedback]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      await markFindingOutcome(finding.finding_id, btn.getAttribute('data-feedback'));
-    });
-  });
-}
-
-function showAssessmentFinding(finding) {
-  if (!finding) return;
-  activeAssessmentFindingId = finding.finding_id || activeAssessmentFindingId;
-  renderAssessmentRail();
-  $('#assessment-detail-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
-}
-
-async function markFindingOutcome(findingId, outcome) {
-  if (!findingId || !outcome) return;
-  try {
-    await postJSON('v1/assessment/findings/' + encodeURIComponent(findingId) + '/feedback', { outcome });
-    await refreshAssessmentData({ preserveHistory: true });
-  } catch (e) {
-    alert('Unable to record feedback: ' + e.message);
-  }
-}
-
-async function dismissAssessmentFinding(findingId) {
-  if (!findingId) return;
-  try {
-    await postJSON('v1/assessment/findings/' + encodeURIComponent(findingId) + '/dismiss', { suppress_seconds: 86400 });
-    assessmentBannerHiddenId = null;
-    activeAssessmentFindingId = null;
-    await refreshAssessmentData({ preserveHistory: true });
-  } catch (e) {
-    alert('Unable to dismiss finding: ' + e.message);
-  }
-}
-
-async function refreshAssessmentData(opts = {}) {
-  const preserveHistory = !!opts.preserveHistory;
-  const limit = preserveHistory ? (assessmentHistoryOffset + 20) : 20;
-  try {
-    const [state, findings, history] = await Promise.all([
-      fetchJSON('v1/assessment/state').catch(e => ({ error: e.message })),
-      fetchJSON('v1/assessment/findings?state=open&limit=10').catch(e => ({ error: e.message, findings: [] })),
-      fetchJSON('v1/assessment/history?limit=' + limit + '&offset=0').catch(e => ({ error: e.message, runs: [], has_more: false })),
-    ]);
-    lastAssessmentState = state;
-    lastAssessmentFindings = Array.isArray(findings.findings) ? findings.findings : [];
-    lastAssessmentHistory = Array.isArray(history.runs) ? history.runs : [];
-    assessmentHistoryOffset = Math.max(0, lastAssessmentHistory.length - 20);
-    assessmentHistoryHasMore = !!history.has_more;
-    if (activeAssessmentFindingId && !assessmentFindingById(activeAssessmentFindingId)) {
-      activeAssessmentFindingId = null;
-    }
-    renderAssessmentChip();
-    renderAssessmentBanner();
-    renderAssessmentRail();
-    renderChatSuggestions();
-  } catch (_) {
-    renderAssessmentChip();
-  }
-}
-
-function renderChatSuggestions() {
-  const host = $('#chat-suggestions');
-  if (!host) return;
-  const prompts = [];
-  const activeTab = ((currentPageContext() || {}).active_tab) || 'network';
-  const top = topAssessmentFinding();
-  if (top && top.suggested_starter_prompt) prompts.push(top.suggested_starter_prompt);
-  const summary = (lastStatus && lastStatus.health && lastStatus.health.summary) || {};
-  const partitions = (lastStatus && lastStatus.partitions && lastStatus.partitions.partition_count) || 0;
-  if (activeTab === 'diagnostics') prompts.push('Summarize anything unusual in the add-on health, storage, and ingestion state.');
-  if (activeTab === 'graph') prompts.push('Explain the current forwarding paths and any weak links visible on the graph.');
-  if ((summary.distinct_thread_networks || 0) > 1 || partitions > 1) prompts.push('Why are there two partitions right now?');
-  if ((lastStatus && lastStatus.node_counts && lastStatus.node_counts.offline) > 0) prompts.push('Which offline nodes look most suspicious right now?');
-  if (selectedNodeEui) prompts.push('Tell me what is going on with node ' + selectedNodeEui + '.');
-  if (!prompts.length) prompts.push('Give me a quick health summary of this Thread mesh.');
-  const deduped = [...new Set(prompts)];
-  host.innerHTML = '';
-  deduped.slice(0, 4).forEach(prompt => {
-    const chip = el('button', { class: 'suggestion-chip', type: 'button' }, prompt);
-    chip.addEventListener('click', () => primeChatPrompt(prompt));
-    host.appendChild(chip);
-  });
-}
-
-function renderChatMessages() {
-  const host = $('#chat-messages');
-  if (!host) return;
-  host.innerHTML = '';
-  if (!chatState.messages.length) {
-    host.appendChild(el('div', { class: 'empty' }, 'No conversation yet. Ask about a node, partition split, or recent finding.'));
-    return;
-  }
-  for (const msg of chatState.messages) {
-    const box = el('div', { class: 'chat-msg ' + msg.role });
-    const metaBits = [msg.label || (msg.role === 'user' ? 'You' : 'Assistant')];
-    if (msg.model) metaBits.push(msg.model);
-    if (msg.durationMs != null) metaBits.push(msg.durationMs + 'ms');
-    const meta = el('div', { class: 'chat-msg-meta' });
-    meta.appendChild(el('div', { class: 'chat-msg-meta-left' }, metaBits.join(' · ')));
-    const copyBtn = el('button', { class: 'chat-copy-btn', type: 'button' }, 'Copy');
-    copyBtn.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(msg.text || '');
-        copyBtn.textContent = 'Copied';
-        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
-      } catch (_) {
-        copyBtn.textContent = 'Failed';
-        setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1200);
-      }
-    });
-    meta.appendChild(el('div', { class: 'chat-msg-meta-right' }, copyBtn));
-    box.appendChild(meta);
-    box.appendChild(el('div', { html: escapeHtml(msg.text || '').replace(/\n/g, '<br>') }));
-    if (Array.isArray(msg.toolCalls) && msg.toolCalls.length) {
-      const details = el('details');
-      details.appendChild(el('summary', {}, 'Tool calls (' + msg.toolCalls.length + ')'));
-      details.appendChild(el('pre', { class: 'log' }, JSON.stringify(msg.toolCalls, null, 2)));
-      box.appendChild(details);
-    }
-    host.appendChild(box);
-  }
-  host.scrollTop = host.scrollHeight;
-}
-
-function renderChatAgents() {
-  const select = $('#chat-agent-select');
-  if (!select) return;
-  const current = select.value;
-  select.innerHTML = '<option value="">' + escapeHtml(chatDefaultLabel || 'Home Assistant default') + '</option>';
-  for (const agent of lastChatAgents) {
-    const opt = document.createElement('option');
-    opt.value = agent.agent_id;
-    opt.textContent = agent.name || agent.agent_id;
-    select.appendChild(opt);
-  }
-  if (current && lastChatAgents.some(a => a.agent_id === current)) select.value = current;
-}
-
-async function refreshChatAgents() {
-  try {
-    const payload = await fetchJSON('v1/chat/agents');
-    lastChatAgents = Array.isArray(payload.agents) ? payload.agents : [];
-    chatDefaultLabel = payload.default_label || 'Home Assistant default';
-    renderChatAgents();
-  } catch (_) {
-    lastChatAgents = [];
-    chatDefaultLabel = 'Home Assistant default';
-    renderChatAgents();
-  }
-}
-
-function primeChatPrompt(text) {
-  $('#chat-input').value = text || '';
-  $('#chat-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  $('#chat-input').focus();
-}
-
-function noteBackgroundCheck(finding) {
-  if (!finding) return;
-  chatState.messages.push({
-    role: 'background-check',
-    label: 'Background check',
-    text: (finding.headline || 'Background Diagnostics found something worth a closer look.')
-      + ((finding.evidence || []).length ? ('\nEvidence cited: ' + (finding.evidence || []).length + ' item(s).') : ''),
-  });
-  renderChatMessages();
-}
-
-async function sendChatTurn(prefillText) {
-  if (chatSending) return;
-  const input = $('#chat-input');
-  const text = (prefillText != null ? prefillText : input.value).trim();
-  if (!text) return;
-  const agentId = $('#chat-agent-select').value || null;
-  chatSending = true;
-  $('#chat-send-btn').disabled = true;
-  chatState.messages.push({ role: 'user', label: 'You', text });
-  renderChatMessages();
-  input.value = '';
-  try {
-    const payload = await postJSON('v1/chat/turn', {
-      message: text,
-      conversation_id: chatState.conversationId,
-      agent_id: agentId,
-      page_context: currentPageContext(),
-      streaming: false,
-    });
-    chatState.conversationId = payload.conversation_id || chatState.conversationId;
-    chatState.messages.push({
-      role: 'agent',
-      label: payload.agent_id || 'Assistant',
-      text: (payload.response && payload.response.text) || '—',
-      toolCalls: payload.tool_calls || [],
-      model: payload.model || null,
-      durationMs: payload.duration_ms,
-    });
-  } catch (e) {
-    chatState.messages.push({ role: 'agent', label: 'Assistant', text: 'Request failed: ' + e.message });
-  } finally {
-    chatSending = false;
-    $('#chat-send-btn').disabled = false;
-    renderChatMessages();
-  }
 }
 
 function fmtDelta(v) {
@@ -1299,16 +724,6 @@ function renderIssues(s) {
   const pillsHost = $('#issues-sev-pills');
   issuesBody.innerHTML = '';
   pillsHost.innerHTML = '';
-  // Issue detection is paused pending redesign (#5). The API returns
-  // `status: "placeholder"` until new rules ship. Render the note
-  // verbatim so users (and any AI consumer scraping the dashboard)
-  // don't read an empty list as "all clear".
-  if (s.issues && s.issues.status === 'placeholder') {
-    const note = s.issues.note
-      || 'Issue detection is paused pending redesign.';
-    issuesBody.appendChild(el('div', {class: 'muted', style: 'padding: 6px 0;'}, note));
-    return;
-  }
   const issues = ((s.issues && s.issues.issues) || []).slice();
   if (!issues.length) {
     issuesBody.appendChild(el('div', {class:'empty'}, 'No active issues.'));
@@ -1387,11 +802,22 @@ function renderPartitionsCard(s) {
 }
 
 function renderNetwork(s) {
-  // The four top summary cards (Thread Health / Partitions / Active
-  // Nodes / Phantom Nodes) were removed in issue #3 — the data they
-  // showed is already visible elsewhere (headline row, partitions
-  // panel, nodes table, stale links).
+  const h = s.health || {};
+  $('#health-score').textContent = (h.score != null) ? h.score : '—';
+  $('#health-sub').textContent = (h.status || 'unknown') + ' · ' + ((h.active_issues && h.active_issues.count) || (h.issues_active || 0)) + ' issues';
+
+  const p = s.partitions || {};
+  $('#partition-count').textContent = p.partition_count != null ? p.partition_count : '—';
+  $('#partition-sub').textContent = p.summary || (p.partition_count > 1 ? 'split brain' : 'single partition');
+
   const nodes = s.all_nodes || [];
+  const counts = s.node_counts || {};
+  const alive = (counts.online || 0) + (counts.offline || 0);
+  $('#node-count').textContent = alive;
+  $('#node-sub').textContent = (counts.online || 0) + ' online · ' + (counts.offline || 0) + ' offline';
+
+  const phantoms = (s.phantoms && s.phantoms.phantoms) || [];
+  $('#phantom-count').textContent = phantoms.length;
 
   // Populate area filter once per render (preserve selection if still present).
   const areaSelect = $('#nodes-filter-area');
@@ -1399,12 +825,11 @@ function renderNetwork(s) {
   const prevArea = areaSelect.value;
   areaSelect.innerHTML = '<option value="">all areas</option>';
   for (const a of areas) {
-    const opt = document.createElement('option');
-    opt.value = a;
-    opt.textContent = a;
+    const opt = el('option', {value: a}, a);
+    if (a === prevArea) opt.setAttribute('selected', 'selected');
     areaSelect.appendChild(opt);
   }
-  if (prevArea && areas.includes(prevArea)) areaSelect.value = prevArea;
+  if (prevArea && !areas.includes(prevArea)) areaSelect.value = '';
 
   renderHeadline(s);
   renderHotSpots(s);
@@ -1414,6 +839,7 @@ function renderNetwork(s) {
 }
 
 function applyNodeFilters(nodes) {
+  const showPhantoms = $('#show-phantoms').checked;
   const statusF = $('#nodes-filter-status').value;
   const roleF = $('#nodes-filter-role').value;
   const areaF = $('#nodes-filter-area').value;
@@ -1611,66 +1037,30 @@ function renderNodesTable(nodes) {
 
 function renderDiagnostics(s) {
   const sup = s.supervisor || {};
-  const supSummary = sup.summary || {};
-  if (sup.error) {
-    $('#supervisor-body').innerHTML =
-      '<span class="pill bad">unavailable</span><br>' +
-      '<span class="muted">' + escapeHtml(String(sup.error)) + '</span>';
-  } else {
-    $('#supervisor-body').innerHTML =
-      'state: <code>' + (supSummary.state || '—') + '</code><br>' +
-      'version: <code>' + (supSummary.version || '—') + '</code><br>' +
-      'latest: <code>' + (supSummary.version_latest || '—') + '</code>';
-  }
+  $('#supervisor-body').innerHTML =
+    'state: <code>' + (sup.state || '—') + '</code><br>' +
+    'version: <code>' + (sup.version || '—') + '</code><br>' +
+    'latest: <code>' + (sup.version_latest || '—') + '</code>';
 
   const st = s.storage || {};
-  const stCounts = st.row_counts || {};
-  if (st.error) {
-    $('#storage-body').innerHTML =
-      '<span class="pill bad">unavailable</span><br>' +
-      '<span class="muted">' + escapeHtml(String(st.error)) + '</span>';
-  } else {
-    $('#storage-body').innerHTML =
-      (stCounts.nodes || 0) + ' nodes · ' + (stCounts.links || 0) + ' links<br>' +
-      (stCounts.events || 0) + ' events · ' + (stCounts.issues || 0) + ' issues<br>' +
-      '<span class="muted">schema v' + (st.schema_version != null ? st.schema_version : '—') +
-      ' · ' + escapeHtml(String(st.db_path || '')) + '</span>';
-  }
+  $('#storage-body').innerHTML =
+    (st.nodes || 0) + ' nodes · ' + (st.links || 0) + ' links<br>' +
+    (st.events || 0) + ' events · ' + (st.issues_active || 0) + ' active issues<br>' +
+    '<span class="muted">' + (st.db_path || '') + '</span>';
 
   const ts = s.timeseries || {};
   $('#ts-body').innerHTML =
     'backend: <code>' + (ts.backend || 'unknown') + '</code><br>' +
-    'ok: <span class="pill ' + (ts.ok ? 'good' : 'muted') + '">' + (ts.ok ? 'yes' : 'no') + '</span>' +
-    (ts.error ? '<br><span class="muted">' + escapeHtml(String(ts.error)) + '</span>' : '');
+    'ok: <span class="pill ' + (ts.ok ? 'good' : 'muted') + '">' + (ts.ok ? 'yes' : 'no') + '</span>';
 
   const ing = s.ingestion || {};
-  if (ing.error) {
-    $('#ingest-body').innerHTML =
-      '<span class="pill bad">unavailable</span><br>' +
-      '<span class="muted">' + escapeHtml(String(ing.error)) + '</span>';
-  } else {
-    $('#ingest-body').innerHTML =
-      'last run: ' + fmtAge(ing.last_run_at) + '<br>' +
-      'last status: <code>' + (ing.last_status || '—') + '</code><br>' +
-      'candidates: ' + (ing.candidate_count != null ? ing.candidate_count : '—');
-  }
+  $('#ingest-body').innerHTML =
+    'last run: ' + fmtAge(ing.last_run_at) + '<br>' +
+    'last status: <code>' + (ing.last_status || '—') + '</code><br>' +
+    'candidates: ' + (ing.candidate_count != null ? ing.candidate_count : '—');
 
   $('#logs-body').textContent = (s.recent_logs || []).join('\n') || '(no log file yet)';
   $('#config-body').textContent = JSON.stringify(s.config || {}, null, 2);
-}
-
-function setDiagnosticsAdvancedMode(enabled) {
-  const panel = $('#diagnostics-advanced-panels');
-  if (!panel) return;
-  panel.hidden = !enabled;
-}
-
-const diagnosticsAdvancedToggle = $('#diag-advanced-toggle');
-if (diagnosticsAdvancedToggle) {
-  diagnosticsAdvancedToggle.addEventListener('change', (event) => {
-    setDiagnosticsAdvancedMode(Boolean(event.target && event.target.checked));
-  });
-  setDiagnosticsAdvancedMode(Boolean(diagnosticsAdvancedToggle.checked));
 }
 
 let cy = null;
@@ -1991,8 +1381,6 @@ async function refresh() {
     renderPipelinePill(s.pipeline);
     renderNetwork(s);
     renderDiagnostics(s);
-    renderChatSuggestions();
-    await refreshAssessmentData({ preserveHistory: true });
     if (document.getElementById('tab-graph').classList.contains('active')) renderGraph();
   } catch (e) {
     $('#last-refresh').textContent = 'error: ' + e.message;
@@ -2203,8 +1591,6 @@ async function openNodeDetail(eui) {
   const bodyEl = $('#nd-body');
   const actionsEl = $('#nd-actions');
   const n = nodeFromCache(eui) || { eui64: eui };
-  selectedNodeEui = eui;
-  renderChatSuggestions();
 
   // Header.
   titleEl.textContent = n.display_name || n.friendly_name || shortEui(eui);
@@ -2228,17 +1614,6 @@ async function openNodeDetail(eui) {
       title: 'Open device page in Home Assistant',
     }, 'Open in HA ↗');
     actionsEl.appendChild(a);
-  }
-  if (n.eui64) {
-    const askBtn = el('button', {
-      class: 'nd-btn',
-      type: 'button',
-      title: 'Send this node into the chat panel context',
-    }, 'Ask about this node');
-    askBtn.addEventListener('click', () => {
-      primeChatPrompt('Tell me what is going on with node ' + n.eui64 + '.');
-    });
-    actionsEl.appendChild(askBtn);
   }
 
   bodyEl.innerHTML = '<div class="empty">loading…</div>';
@@ -2299,66 +1674,6 @@ function closeNodeDetail() {
   backdrop.dataset.eui = '';
 }
 
-$('#assessment-chip').addEventListener('click', () => {
-  $('#assessment-rail-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
-});
-$('#assessment-investigate-btn').addEventListener('click', () => {
-  const finding = topAssessmentFinding();
-  if (!finding) return;
-  showAssessmentFinding(finding);
-  noteBackgroundCheck(finding);
-  primeChatPrompt(finding.suggested_starter_prompt || ('Help me investigate: ' + (finding.headline || 'this finding')));
-});
-$('#assessment-evidence-btn').addEventListener('click', () => {
-  const finding = topAssessmentFinding();
-  if (!finding) return;
-  showAssessmentFinding(finding);
-});
-$('#assessment-hide-btn').addEventListener('click', () => {
-  const finding = topAssessmentFinding();
-  assessmentBannerHiddenId = finding && finding.finding_id ? finding.finding_id : null;
-  renderAssessmentBanner();
-});
-$('#assessment-dismiss-btn').addEventListener('click', async () => {
-  const finding = topAssessmentFinding();
-  if (!finding || !finding.finding_id) return;
-  await dismissAssessmentFinding(finding.finding_id);
-});
-$('#assessment-run-now-btn').addEventListener('click', async () => {
-  try {
-    const result = await postJSON('v1/assessment/run-now', {});
-    if (result && result.result && result.result.finding_id) {
-      activeAssessmentFindingId = result.result.finding_id;
-    }
-    await refreshAssessmentData({ preserveHistory: true });
-  } catch (e) {
-    alert('Unable to run assessment: ' + e.message);
-  }
-});
-$('#assessment-load-more-btn').addEventListener('click', async () => {
-  assessmentHistoryOffset = lastAssessmentHistory.length;
-  await refreshAssessmentData({ preserveHistory: true });
-});
-$('#chat-reset-btn').addEventListener('click', () => {
-  chatState.conversationId = null;
-  chatState.messages = [];
-  renderChatMessages();
-});
-$('#chat-send-btn').addEventListener('click', () => sendChatTurn());
-$('#chat-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault();
-    sendChatTurn();
-  }
-});
-$('#chat-node-btn').addEventListener('click', () => {
-  if (!selectedNodeEui) {
-    primeChatPrompt('Give me a quick health summary of this Thread mesh.');
-    return;
-  }
-  primeChatPrompt('Tell me what is going on with node ' + selectedNodeEui + '.');
-});
-
 $('#nd-close').addEventListener('click', closeNodeDetail);
 $('#node-detail-backdrop').addEventListener('click', (e) => {
   if (e.target === e.currentTarget) closeNodeDetail();
@@ -2367,14 +1682,9 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('#node-detail-backdrop').classList.contains('open')) closeNodeDetail();
 });
 
-refresh().then(async () => {
-  await refreshDeltas();
-  await refreshChatAgents();
-  renderChatMessages();
-});
+refresh().then(refreshDeltas);
 setInterval(refresh, 10000);
 setInterval(refreshDeltas, 60000);  // counter deltas: every minute
-setInterval(refreshChatAgents, 300000);
 </script>
 </body>
 </html>

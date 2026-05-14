@@ -1,0 +1,7 @@
+[
+  "Give me a quick health summary of this Thread mesh.",
+  "How many partitions do I have right now, and why?",
+  "Which nodes look stale or offline right now?",
+  "Explain the riskiest links or path bottlenecks in the current graph.",
+  "What changed most recently in the mesh history?"
+]

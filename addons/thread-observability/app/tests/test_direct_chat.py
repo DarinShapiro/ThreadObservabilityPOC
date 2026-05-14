@@ -57,8 +57,12 @@ def test_direct_chat_turn_executes_mcp_tool_and_returns_trace(monkeypatch) -> No
         assert arguments == {}
         return {"data": {"status": "healthy"}, "meta": {"tool": name}}
 
+    async def fake_review(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AnswerReview(verdict="pass")
+
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
     monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_review)
 
     result = asyncio.run(
         direct_chat.direct_chat_turn(
@@ -316,6 +320,112 @@ def test_direct_chat_turn_retries_once_when_model_defers_tool_use(monkeypatch) -
     assert result["response"]["text"] == "I checked the current health snapshot and found no active mesh-wide degradation."
     assert len(result["tool_calls"]) == 1
     assert result["tool_calls"][0]["name"] == "get_health_snapshot"
+
+
+def test_evaluate_answer_candidate_uses_isolated_evaluator_model(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="openai",
+        model="gpt-4.1",
+        base_url="https://api.openai.com/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    seen: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        seen.append((target.model, json.loads(json.dumps(body))))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": '{"verdict":"fail","critique":"The answer claims stability without evidence."}',
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+
+    review = asyncio.run(
+        direct_chat._evaluate_answer_candidate(
+            target,
+            message="What changed recently?",
+            candidate_text="Everything is stable.",
+            tool_trace=[{"name": "get_health_snapshot", "arguments": {}, "result": {"data": {"status": "stale"}}}],
+            internal_tool_request=False,
+            counter_question=False,
+            history_comparison_question=False,
+            node_question=False,
+        )
+    )
+
+    assert review.failed is True
+    assert "stability" in review.critique.lower()
+    assert seen[0][0] == "gpt-4o-mini"
+    assert "Policy bundle" in str(seen[0][1]["messages"][1]["content"])
+
+
+def test_direct_chat_turn_retries_once_when_evaluator_rejects_candidate(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+    reviews = [
+        direct_chat.AnswerReview(verdict="fail", critique="The answer overstates certainty; say the evidence is insufficient."),
+        direct_chat.AnswerReview(verdict="pass"),
+    ]
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The network is definitely stable.",
+                        }
+                    }
+                ]
+            }
+        critique = next(
+            msg for msg in body["messages"]
+            if msg.get("role") == "system" and "Evaluator critique:" in str(msg.get("content") or "")
+        )
+        assert "overstates certainty" in critique["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The current evidence is insufficient to confirm that the network is stable.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_review(*args, **kwargs):  # noqa: ANN002, ANN003
+        return reviews.pop(0)
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_review)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Is the mesh stable right now?",
+            rendered_message="User message: Is the mesh stable right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "The current evidence is insufficient to confirm that the network is stable."
+    assert len(calls) == 2
 
 
 def test_direct_chat_turn_retries_when_model_tells_user_to_call_internal_service(monkeypatch) -> None:
@@ -1073,8 +1183,12 @@ def test_direct_chat_turn_does_not_map_topology_diff_to_channel_change(monkeypat
             }
         raise AssertionError(f"unexpected tool {name}")
 
+    async def fake_review(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AnswerReview(verdict="pass")
+
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
     monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_review)
 
     result = asyncio.run(
         direct_chat.direct_chat_turn(
@@ -1173,8 +1287,12 @@ def test_direct_chat_turn_rejects_placeholder_counter_node_and_unsupported_follo
             }
         raise AssertionError(f"unexpected tool {name}")
 
+    async def fake_review(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AnswerReview(verdict="pass")
+
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
     monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_review)
 
     result = asyncio.run(
         direct_chat.direct_chat_turn(

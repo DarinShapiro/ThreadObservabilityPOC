@@ -19,6 +19,8 @@ def test_walk_route_to_otbr_direct(store) -> None:
     assert [h["eui64"] for h in result["hops"]] == [rb, otbr]
     assert result["hops"][1]["is_otbr"] is True
     assert result["hops"][1]["path_cost"] == 1
+    assert result["summary"]["first_upstream_eui64"] == otbr
+    assert result["summary"]["weakest_hop_eui64"] == otbr
 
 
 def test_walk_route_to_otbr_multihop(store) -> None:
@@ -31,6 +33,8 @@ def test_walk_route_to_otbr_multihop(store) -> None:
     # (the route_table row from rc → otbr reports total cost 2).
     assert result["hops"][1]["eui64"] == rb
     assert result["hops"][2]["is_otbr"] is True
+    assert result["summary"]["first_upstream_eui64"] == rb
+    assert result["summary"]["weakest_hop_eui64"] == rb
 
 
 def test_walk_route_no_otbr(store) -> None:

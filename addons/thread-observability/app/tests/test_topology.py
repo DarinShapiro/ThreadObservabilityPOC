@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from thread_observability.pipeline.topology import build_topology
+from thread_observability.pipeline.topology import build_topology, derive_graph_diagnostics
 from thread_observability.storage.sqlite_store import SQLiteStore
 
 
@@ -193,3 +193,150 @@ def test_topology_hides_phantoms_by_default(store: SQLiteStore) -> None:
     assert B in euis2
     b_row = next(n for n in snap2["nodes"] if n["eui64"] == B)
     assert b_row["status"] == "phantom"
+
+
+def test_derive_graph_diagnostics_flags_split_weak_links_and_parent_dependency(store: SQLiteStore) -> None:
+    store.upsert_node_metadata(eui64=A, friendly_name="Leader-A")
+    store.upsert_node_metadata(eui64=B, friendly_name="Router-B")
+    store.upsert_node_metadata(eui64=C, friendly_name="Leader-C")
+    store.upsert_node_metadata(eui64=D, friendly_name="Child-D")
+    store.set_node_diagnostics(A, partition_id=1111, routing_role="leader")
+    store.set_node_diagnostics(B, partition_id=1111, routing_role="router")
+    store.set_node_diagnostics(C, partition_id=2222, routing_role="leader")
+    store.upsert_node_metadata(eui64="ee" * 8, friendly_name="Child-E")
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -90, "rssi_last": -92,
+         "lqi_in": 40, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 12, "message_error_rate": 0,
+         "path_cost": None},
+        {"neighbor_eui64": D, "rssi_avg": -65, "rssi_last": -66,
+         "lqi_in": 180, "lqi_out": None, "is_child": 1,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+        {"neighbor_eui64": "ee" * 8, "rssi_avg": -68, "rssi_last": -68,
+         "lqi_in": 170, "lqi_out": None, "is_child": 1,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    store.replace_links_for_reporter(B, "neighbor_table", [
+        {"neighbor_eui64": A, "rssi_avg": -50, "rssi_last": -50,
+         "lqi_in": 240, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    snap = build_topology(store=store)
+    facts = derive_graph_diagnostics(snap)
+    kinds = {row["kind"] for row in facts}
+
+    assert "split_mesh" in kinds
+    assert "weak_links" in kinds
+    assert "subtree_dependency" in kinds
+
+
+def test_derive_graph_diagnostics_flags_low_path_diversity(store: SQLiteStore) -> None:
+    f = "ff" * 8
+    store.upsert_node_metadata(eui64=A, friendly_name="Leader-A")
+    store.upsert_node_metadata(eui64=B, friendly_name="Router-B")
+    store.upsert_node_metadata(eui64=f, friendly_name="Router-F")
+    store.set_node_diagnostics(A, partition_id=1111, routing_role="leader")
+    store.set_node_diagnostics(B, partition_id=1111, routing_role="router")
+    store.set_node_diagnostics(f, partition_id=1111, routing_role="router")
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    store.replace_links_for_reporter(B, "neighbor_table", [
+        {"neighbor_eui64": A, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+
+    snap = build_topology(store=store)
+    facts = derive_graph_diagnostics(snap)
+    low_diversity = next(row for row in facts if row["kind"] == "low_path_diversity")
+
+    assert low_diversity["partition_id"] == 1111
+    assert low_diversity["healthy_peer_count"] <= 1
+
+
+def test_derive_graph_diagnostics_flags_intermediary_router_opportunity(store: SQLiteStore) -> None:
+    f = "ff" * 8
+    store.upsert_node_metadata(eui64=A, friendly_name="Leader-A")
+    store.upsert_node_metadata(eui64=B, friendly_name="Router-B")
+    store.upsert_node_metadata(eui64=f, friendly_name="Router-F")
+    store.set_node_diagnostics(A, partition_id=1111, routing_role="leader")
+    store.set_node_diagnostics(B, partition_id=1111, routing_role="router")
+    store.set_node_diagnostics(f, partition_id=1111, routing_role="router")
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -90, "rssi_last": -92,
+         "lqi_in": 40, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 12, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    store.replace_links_for_reporter(B, "neighbor_table", [
+        {"neighbor_eui64": A, "rssi_avg": -50, "rssi_last": -50,
+         "lqi_in": 240, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+
+    snap = build_topology(store=store)
+    facts = derive_graph_diagnostics(snap)
+    kinds = {row["kind"] for row in facts}
+
+    assert "low_path_diversity" in kinds
+    assert "intermediary_router_opportunity" in kinds
+
+
+def test_derive_graph_diagnostics_flags_choke_point(store: SQLiteStore) -> None:
+    f = "ff" * 8
+    store.upsert_node_metadata(eui64=A, friendly_name="Leader-A")
+    store.upsert_node_metadata(eui64=B, friendly_name="Router-B")
+    store.upsert_node_metadata(eui64=C, friendly_name="Router-C")
+    store.upsert_node_metadata(eui64=f, friendly_name="Router-F")
+    store.set_node_diagnostics(A, partition_id=1111, routing_role="leader")
+    store.set_node_diagnostics(B, partition_id=1111, routing_role="router")
+    store.set_node_diagnostics(C, partition_id=1111, routing_role="router")
+    store.set_node_diagnostics(f, partition_id=1111, routing_role="router")
+    store.replace_links_for_reporter(A, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    store.replace_links_for_reporter(B, "neighbor_table", [
+        {"neighbor_eui64": A, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+        {"neighbor_eui64": C, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    store.replace_links_for_reporter(C, "neighbor_table", [
+        {"neighbor_eui64": B, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+        {"neighbor_eui64": f, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+    store.replace_links_for_reporter(f, "neighbor_table", [
+        {"neighbor_eui64": C, "rssi_avg": -60, "rssi_last": -60,
+         "lqi_in": 220, "lqi_out": None, "is_child": 0,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
+    ])
+
+    snap = build_topology(store=store)
+    facts = derive_graph_diagnostics(snap)
+    choke = next(row for row in facts if row["kind"] == "choke_point")
+
+    assert choke["partition_id"] == 1111
+    assert choke["eui64"] in {B, C}

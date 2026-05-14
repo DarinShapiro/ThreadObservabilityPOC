@@ -24,6 +24,33 @@ DEFAULT_BASELINE_DAYS = 7
 DEFAULT_RECENT_ISSUE_LIMIT = 5
 
 
+def _count_events_in_window(
+    store: SQLiteStore,
+    *,
+    eui64: str,
+    event_type: str,
+    since: str,
+) -> int:
+    return len(
+        store.query_events(
+            eui64=eui64,
+            event_type=event_type,
+            since=since,
+            limit=1000,
+        )
+    )
+
+
+def _median(values: list[int]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
 def _evidence_implicates_eui(evidence: Any, eui64: str) -> bool:
     """Return True if a global issue's evidence references ``eui64``.
 
@@ -181,6 +208,53 @@ def analyze_node(
         "status_change_count_recent": status_change_recent,
     }
 
+    # --- same-partition peer comparison (v0.11.28 local batch) -------
+    peer_comparison: dict[str, Any] | None = None
+    partition_id = node.get("partition_id") if isinstance(node, dict) else None
+    if partition_id is not None:
+        peers = [
+            other for other in s.list_nodes()
+            if other.get("eui64") != eui64 and other.get("partition_id") == partition_id
+        ]
+        if peers:
+            peer_parent_changes = [
+                {
+                    "eui64": str(other.get("eui64") or ""),
+                    "friendly_name": other.get("friendly_name"),
+                    "parent_change_count_recent": _count_events_in_window(
+                        s,
+                        eui64=str(other.get("eui64") or ""),
+                        event_type="parent_change",
+                        since=baseline_since,
+                    ),
+                    "status_change_count_recent": _count_events_in_window(
+                        s,
+                        eui64=str(other.get("eui64") or ""),
+                        event_type="status_change",
+                        since=baseline_since,
+                    ),
+                }
+                for other in peers
+                if other.get("eui64")
+            ]
+            peer_parent_values = [row["parent_change_count_recent"] for row in peer_parent_changes]
+            peer_status_values = [row["status_change_count_recent"] for row in peer_parent_changes]
+            more_unstable = parent_change_recent > max(peer_parent_values, default=0)
+            peer_comparison = {
+                "partition_id": partition_id,
+                "peer_count": len(peer_parent_changes),
+                "subject_parent_change_count_recent": parent_change_recent,
+                "peer_parent_change_count_median_recent": _median(peer_parent_values),
+                "subject_status_change_count_recent": status_change_recent,
+                "peer_status_change_count_median_recent": _median(peer_status_values),
+                "more_unstable_than_partition_peers": more_unstable,
+                "top_partition_peers_by_parent_change": sorted(
+                    peer_parent_changes,
+                    key=lambda row: row["parent_change_count_recent"],
+                    reverse=True,
+                )[:5],
+            }
+
     # --- physical_identity (v0.9.46) ---------------------------------
     # Detect duplicate hardware: the same vendor_id/product_id/serial_number
     # tuple observed under multiple EUI64s. This happens when a device is
@@ -232,6 +306,7 @@ def analyze_node(
         "recent_issues": recent_issues,
         "timeline": tl,
         "baselines": baselines,
+        "peer_comparison": peer_comparison,
         "playbooks": matched_playbooks,
         "matched_issue_kinds": sorted(k for k in kinds if k),
         "physical_identity": physical_identity,

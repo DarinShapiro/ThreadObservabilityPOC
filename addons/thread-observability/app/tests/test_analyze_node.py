@@ -191,3 +191,32 @@ def test_analyze_physical_identity_none_when_no_basic_info(
     res = an_mod.analyze_node(eui, store=store)
     assert res["physical_identity"] is None
 
+
+def test_analyze_includes_same_partition_peer_comparison(store: SQLiteStore) -> None:
+    pb_mod.reset_cache_for_tests()
+    subject = "11" * 8
+    peer_a = "22" * 8
+    peer_b = "33" * 8
+    now = datetime(2026, 5, 12, 12, 0, 0, tzinfo=UTC)
+
+    store.upsert_node_metadata(eui64=subject, friendly_name="Subject", role="router")
+    store.upsert_node_metadata(eui64=peer_a, friendly_name="Peer A", role="router")
+    store.upsert_node_metadata(eui64=peer_b, friendly_name="Peer B", role="router")
+    store.set_node_diagnostics(subject, partition_id=42, routing_role="router")
+    store.set_node_diagnostics(peer_a, partition_id=42, routing_role="router")
+    store.set_node_diagnostics(peer_b, partition_id=42, routing_role="router")
+
+    for offset_days in (1, 2, 3):
+        store.insert_event(eui64=subject, type="parent_change", ts=_iso(now - timedelta(days=offset_days)))
+    store.insert_event(eui64=peer_a, type="parent_change", ts=_iso(now - timedelta(days=1)))
+
+    res = an_mod.analyze_node(subject, store=store, baseline_days=7, now=now)
+    peer = res["peer_comparison"]
+
+    assert peer is not None
+    assert peer["partition_id"] == 42
+    assert peer["peer_count"] == 2
+    assert peer["subject_parent_change_count_recent"] == 3
+    assert peer["more_unstable_than_partition_peers"] is True
+    assert peer["top_partition_peers_by_parent_change"][0]["eui64"] == peer_a
+

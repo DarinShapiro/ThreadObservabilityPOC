@@ -85,3 +85,23 @@ def test_dev_status_redacts_config_secrets(client, monkeypatch) -> None:
     assert body["config"]["ha_admin_token"] == "***"
     assert body["config"]["ai"]["api_key"] == "***"
     assert body["config"]["influx"]["token"] == "***"
+
+
+def test_dev_status_exposes_diagnostics_summary(client) -> None:
+    r = client.get("/v1/dev/status")
+
+    assert r.status_code == 200
+    body = r.json()
+    summary = body["diagnostics_summary"]
+    assert set(summary) >= {"sources", "data_quality", "storage_capacity"}
+    assert set(summary["sources"]) >= {"supervisor", "pipeline", "otbr_ingestion", "timeseries", "assessment"}
+    assert "risk" in summary["storage_capacity"]
+    assert "size_bytes" in summary["storage_capacity"]
+    assert "warning_free_bytes" in summary["storage_capacity"]
+    assert "critical_free_bytes" in summary["storage_capacity"]
+    assert "growth_rate_bytes_per_day" in summary["storage_capacity"]
+    assert "partition_count" in summary["data_quality"]
+    assert "stale_link_count" in summary["data_quality"]
+    assert isinstance(summary.get("attention_items"), list)
+    assert isinstance(summary.get("graph_diagnostics"), list)
+    assert isinstance(body.get("graph_diagnostics"), list)
