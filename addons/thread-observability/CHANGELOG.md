@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.11.28 — Fix Diagnostics payload mismatches and blank placeholders
+
+- **Diagnostics payload alignment.** The Diagnostics tab now reads `supervisor.summary` and `storage.row_counts`, matching the actual `/v1/dev/status` contract instead of rendering zeros and missing add-on fields from non-existent flat keys.
+- **Error surfacing.** Add-on, Storage, Timeseries, and OTBR Ingestion cards now show backend error text explicitly when a source is unavailable instead of silently falling back to `—` placeholders.
+
 ## 0.11.27 — Hide diagnostics debug surfaces behind advanced mode
 
 - **`/v1/dev/status` secret redaction.** Config payload redaction is now applied centrally and recursively for secret fields, so `ha_admin_token` is masked alongside `ai.api_key` and `influx.token` before the Diagnostics UI ever sees the payload.

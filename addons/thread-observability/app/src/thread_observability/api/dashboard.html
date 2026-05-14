@@ -1611,27 +1611,49 @@ function renderNodesTable(nodes) {
 
 function renderDiagnostics(s) {
   const sup = s.supervisor || {};
-  $('#supervisor-body').innerHTML =
-    'state: <code>' + (sup.state || '—') + '</code><br>' +
-    'version: <code>' + (sup.version || '—') + '</code><br>' +
-    'latest: <code>' + (sup.version_latest || '—') + '</code>';
+  const supSummary = sup.summary || {};
+  if (sup.error) {
+    $('#supervisor-body').innerHTML =
+      '<span class="pill bad">unavailable</span><br>' +
+      '<span class="muted">' + escapeHtml(String(sup.error)) + '</span>';
+  } else {
+    $('#supervisor-body').innerHTML =
+      'state: <code>' + (supSummary.state || '—') + '</code><br>' +
+      'version: <code>' + (supSummary.version || '—') + '</code><br>' +
+      'latest: <code>' + (supSummary.version_latest || '—') + '</code>';
+  }
 
   const st = s.storage || {};
-  $('#storage-body').innerHTML =
-    (st.nodes || 0) + ' nodes · ' + (st.links || 0) + ' links<br>' +
-    (st.events || 0) + ' events · ' + (st.issues_active || 0) + ' active issues<br>' +
-    '<span class="muted">' + (st.db_path || '') + '</span>';
+  const stCounts = st.row_counts || {};
+  if (st.error) {
+    $('#storage-body').innerHTML =
+      '<span class="pill bad">unavailable</span><br>' +
+      '<span class="muted">' + escapeHtml(String(st.error)) + '</span>';
+  } else {
+    $('#storage-body').innerHTML =
+      (stCounts.nodes || 0) + ' nodes · ' + (stCounts.links || 0) + ' links<br>' +
+      (stCounts.events || 0) + ' events · ' + (stCounts.issues || 0) + ' issues<br>' +
+      '<span class="muted">schema v' + (st.schema_version != null ? st.schema_version : '—') +
+      ' · ' + escapeHtml(String(st.db_path || '')) + '</span>';
+  }
 
   const ts = s.timeseries || {};
   $('#ts-body').innerHTML =
     'backend: <code>' + (ts.backend || 'unknown') + '</code><br>' +
-    'ok: <span class="pill ' + (ts.ok ? 'good' : 'muted') + '">' + (ts.ok ? 'yes' : 'no') + '</span>';
+    'ok: <span class="pill ' + (ts.ok ? 'good' : 'muted') + '">' + (ts.ok ? 'yes' : 'no') + '</span>' +
+    (ts.error ? '<br><span class="muted">' + escapeHtml(String(ts.error)) + '</span>' : '');
 
   const ing = s.ingestion || {};
-  $('#ingest-body').innerHTML =
-    'last run: ' + fmtAge(ing.last_run_at) + '<br>' +
-    'last status: <code>' + (ing.last_status || '—') + '</code><br>' +
-    'candidates: ' + (ing.candidate_count != null ? ing.candidate_count : '—');
+  if (ing.error) {
+    $('#ingest-body').innerHTML =
+      '<span class="pill bad">unavailable</span><br>' +
+      '<span class="muted">' + escapeHtml(String(ing.error)) + '</span>';
+  } else {
+    $('#ingest-body').innerHTML =
+      'last run: ' + fmtAge(ing.last_run_at) + '<br>' +
+      'last status: <code>' + (ing.last_status || '—') + '</code><br>' +
+      'candidates: ' + (ing.candidate_count != null ? ing.candidate_count : '—');
+  }
 
   $('#logs-body').textContent = (s.recent_logs || []).join('\n') || '(no log file yet)';
   $('#config-body').textContent = JSON.stringify(s.config || {}, null, 2);
