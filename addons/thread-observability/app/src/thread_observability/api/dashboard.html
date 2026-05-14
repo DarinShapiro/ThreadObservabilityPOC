@@ -133,6 +133,7 @@
     border-radius: 8px; padding: 8px 12px; font-size: 12px; font-weight: 600; cursor:pointer;
   }
   .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .action-btn:disabled { opacity: 0.55; cursor: not-allowed; border-color: var(--border); color: var(--muted); }
   .action-btn.primary { background:#082f49; border-color:#0ea5e9; color:#bae6fd; }
   .action-btn.warn { background:#422006; border-color:#a16207; color:#fde68a; }
   .action-btn.bad { background:#450a0a; border-color:#b91c1c; color:#fecaca; }
@@ -1036,6 +1037,7 @@ function renderAssessmentRail() {
   if (finding) activeAssessmentFindingId = finding.finding_id || activeAssessmentFindingId;
   const stateBody = $('#assessment-state-body');
   const historyBody = $('#assessment-history-body');
+  const runNowBtn = $('#assessment-run-now-btn');
   if (!stateBody || !historyBody) return;
   const budgetBits = [];
   if (state.calls_today != null && state.daily_budget != null) {
@@ -1052,6 +1054,14 @@ function renderAssessmentRail() {
   stateBody.appendChild(el('div', { class: 'rail-sub' },
     'Last verdict ' + (state.last_verdict || '—') + (budgetBits.length ? (' · ' + budgetBits.join(' · ')) : '')
   ));
+  if (runNowBtn) {
+    const disabled = state.state === 'disabled' || state.enabled === false;
+    runNowBtn.disabled = disabled;
+    runNowBtn.textContent = disabled ? 'Adaptive Monitoring disabled' : 'Force a check now';
+    runNowBtn.title = disabled
+      ? 'Enable Adaptive Monitoring before running a manual assessment from the dashboard.'
+      : 'Run a one-off assessment now.';
+  }
   if (lastAssessmentFindings.length) {
     const list = el('div', { class: 'finding-list' });
     for (const row of lastAssessmentFindings.slice(0, 4)) {
@@ -1156,6 +1166,9 @@ async function dismissAssessmentFinding(findingId) {
 async function runAssessmentNow() {
   const result = await postJSON('v1/assessment/run-now', {});
   if (!result || result.ok === false) {
+    if (result && result.decision && result.decision.reason === 'disabled') {
+      throw new Error('Adaptive Monitoring is disabled. Enable it before running a manual assessment.');
+    }
     if (result && result.decision && result.decision.budget_exhausted) {
       throw new Error('Adaptive Monitoring budget exhausted. Try again after the next budget reset.');
     }

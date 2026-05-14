@@ -74,6 +74,15 @@ _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bset\s+otbr\s+slug\b", re.IGNORECASE),
     re.compile(r"\brestart\s+pipeline\b", re.IGNORECASE),
 )
+_PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:1|one)\s+partition\b", re.IGNORECASE),
+    re.compile(r"\bonly\s+one\s+partition\b", re.IGNORECASE),
+    re.compile(r"\bdoes\s+not\s+show\s+two\s+partitions\b", re.IGNORECASE),
+)
+_PAGE_CONTEXT_UNIFIED_NETWORK_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsingle\s+unified\s+thread\s+network\b", re.IGNORECASE),
+    re.compile(r"\bsingle\s+thread\s+network\b", re.IGNORECASE),
+)
 
 
 class DirectChatConfigError(ValueError):
@@ -847,6 +856,8 @@ def _apply_deterministic_fallbacks(
         return _build_history_insufficient_response(tool_trace)
     if _answer_mentions_unsupported_dashboard_action(candidate_text):
         return _build_unsupported_dashboard_action_response(candidate_text)
+    if _answer_contradicts_page_context(message, candidate_text):
+        return _build_page_context_contradiction_response(message)
     if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
         return _build_internal_tool_refusal_response(message, tool_trace)
     if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
@@ -876,6 +887,67 @@ def _build_unsupported_dashboard_action_response(candidate_text: str) -> str:
     )
 
 
+def _extract_page_context_from_message(message: str) -> dict[str, Any] | None:
+    match = re.search(r"(?:^|\n)Page context:\s*(\{.*\})", str(message or ""))
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _answer_contradicts_page_context(message: str, candidate_text: str) -> bool:
+    page_context = _extract_page_context_from_message(message)
+    if not page_context:
+        return False
+    summary = page_context.get("snapshot_summary")
+    if not isinstance(summary, dict):
+        return False
+    normalized = str(candidate_text or "").strip()
+    if not normalized:
+        return False
+    try:
+        partition_count = int(summary.get("partition_count") or 0)
+    except (TypeError, ValueError):
+        partition_count = 0
+    try:
+        distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
+    except (TypeError, ValueError):
+        distinct_thread_networks = 0
+    if partition_count > 1 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS):
+        return True
+    if distinct_thread_networks > 1 and any(pattern.search(normalized) for pattern in _PAGE_CONTEXT_UNIFIED_NETWORK_PATTERNS):
+        return True
+    return False
+
+
+def _build_page_context_contradiction_response(message: str) -> str:
+    page_context = _extract_page_context_from_message(message) or {}
+    summary = page_context.get("snapshot_summary") if isinstance(page_context, dict) else {}
+    summary = summary if isinstance(summary, dict) else {}
+    try:
+        partition_count = int(summary.get("partition_count") or 0)
+    except (TypeError, ValueError):
+        partition_count = 0
+    try:
+        distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
+    except (TypeError, ValueError):
+        distinct_thread_networks = 0
+    details = []
+    if partition_count > 0:
+        details.append(f"{partition_count} partition{'s' if partition_count != 1 else ''}")
+    if distinct_thread_networks > 0:
+        details.append(f"{distinct_thread_networks} distinct Thread network{'s' if distinct_thread_networks != 1 else ''}")
+    details_text = ", ".join(details) if details else "a conflicting dashboard state"
+    return (
+        "I can't flatten this into a single unified mesh because the current dashboard page context already shows "
+        f"{details_text}. The safer conclusion is that the visible UI and the gathered evidence disagree, so this should be "
+        "treated as an active discrepancy to investigate rather than claiming there is only one partition."
+    )
+
+
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
     if name in {"get_counter_series", "analyze_node"}:
         eui64 = arguments.get("eui64")
@@ -900,6 +972,7 @@ def _answer_review_policies(
         "If the evidence is insufficient, say so explicitly and name the missing evidence instead of guessing.",
         "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
         "Do not suggest dashboard controls or clicks that do not exist in the current UI. Avoid nonexistent actions such as setting an OTBR slug or restarting the pipeline from the dashboard.",
+        "When the prompt includes Page context, do not contradict its visible counts or status summaries unless you explicitly explain the source disagreement.",
     ]
     if internal_tool_request:
         policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")

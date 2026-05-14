@@ -1863,6 +1863,7 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
 
     assert any("OTBR slug" in policy for policy in policies)
     assert any("restarting the pipeline" in policy for policy in policies)
+    assert any("Page context" in policy for policy in policies)
 
 
 def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() -> None:
@@ -1878,3 +1879,23 @@ def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() 
     assert "does not expose a control" in text
     assert "set the OTBR slug" in text
     assert "restart the pipeline" in text
+
+
+def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradiction() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message=(
+            'Page context: {"snapshot_summary":{"partition_count":2,"distinct_thread_networks":2}}\n\n'
+            'User message: Why are there two partitions right now?'
+        ),
+        candidate_text=(
+            'The dashboard shows 1 partition, not two, and the current network is a single unified Thread network.'
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "can't flatten this into a single unified mesh" in text
+    assert "2 partitions" in text
+    assert "2 distinct Thread networks" in text

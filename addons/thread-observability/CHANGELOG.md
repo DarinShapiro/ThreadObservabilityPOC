@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.36 — Live validation follow-up fixes
+
+This release addresses the remaining defects found during the live 0.11.35
+validation pass.
+
+**Fixes:**
+- prevents direct chat from confidently contradicting the visible dashboard page
+  context when the UI already shows multiple partitions or distinct Thread
+  networks
+- keeps the Adaptive Monitoring rail honest when assessments are disabled by
+  disabling the manual run button and surfacing a clear message instead of a
+  generic "assessment did not run" failure
+
 ## 0.11.35 — Proactive surfacing checkpoint
 
 This checkpoint release tightens how Adaptive Monitoring findings are surfaced
