@@ -2,9 +2,11 @@
 
 ThreadPOC is a Home Assistant-focused Thread observability platform.
 
+The active product lives in the Home Assistant add-on at [addons/thread-observability](addons/thread-observability). It currently ships a live ingress dashboard, MCP/API surface, direct chat integration, background assessment plumbing, and the supporting storage/pipeline code used by the add-on.
+
 ## Deployment Strategy
 
-This repository is scaffolded primarily as a Home Assistant Add-on repository.
+This repository is primarily a Home Assistant add-on repository.
 
 ### Recommended (v1): Home Assistant Add-on Repository
 
@@ -28,10 +30,14 @@ Recommended split:
 
 - addons/thread-observability: Home Assistant add-on package
 - documentation: architecture and product documentation
+- samples: captured fixtures and example payloads for development/debugging
+- scripts: local assessment helpers and repo automation
 
 ## Current Status
 
-Scaffolded repository structure only. Runtime implementation can be added next.
+- Active add-on implementation with a shipping Home Assistant ingress UI.
+- Current runtime/version details live in [addons/thread-observability/README.md](addons/thread-observability/README.md) and [documentation/README.md](documentation/README.md).
+- The remaining backlog is grouped in [documentation/08-work-buckets.md](documentation/08-work-buckets.md).
 
 ## Releases and Updates
 

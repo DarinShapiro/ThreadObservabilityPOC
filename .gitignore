@@ -24,3 +24,8 @@ build/
 # Local Home Assistant/runtime data
 addons/thread-observability/data/
 addons/thread-observability/.cache/
+
+# Local analysis / issue export artifacts
+issues.json
+open_issues.json
+raw_issues.json
