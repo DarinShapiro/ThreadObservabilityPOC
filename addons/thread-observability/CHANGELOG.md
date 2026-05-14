@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.31 — Dashboard/chat recovery
+
+This patch restores the dashboard shell expected by the current HTTP tests
+after the schema hotfix release.
+
+**Fixes:**
+- restores the assessment/chat dashboard shell on the Home Assistant UI
+- restores the expected Graph tab shell markers used by dashboard contract tests
+- preserves the `0.11.30` schema hotfix while packaging the UI recovery as a new add-on version
+
 ## 0.11.30 — Add-on schema hotfix
 
 This patch fixes Home Assistant add-on option validation for direct-chat
