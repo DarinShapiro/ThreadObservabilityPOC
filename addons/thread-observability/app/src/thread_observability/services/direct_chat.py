@@ -25,6 +25,8 @@ _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
 _MAX_TOOL_DEFERRAL_RETRIES = 1
 _MAX_NODE_EVIDENCE_RETRIES = 1
+_MAX_HISTORY_COMPARISON_RETRIES = 1
+_MAX_COUNTER_GROUNDING_RETRIES = 1
 _MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
 _MAX_EVIDENCE_MESSAGE_CHARS = 5000
 _DEFAULT_SYSTEM_PROMPT = (
@@ -60,6 +62,7 @@ _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
 )
 _WEB_SEARCH_TOOL_NAME = "web_search"
 _NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
+_POTENTIAL_NODE_ID_RE = re.compile(r"\b([0-9a-f]{12,16})\b", re.IGNORECASE)
 _NODE_HISTORY_WINDOW = timedelta(hours=2)
 
 
@@ -359,6 +362,46 @@ def _looks_like_node_question(text: str) -> bool:
     )
 
 
+def _looks_like_history_comparison_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    comparison_markers = (
+        "24h ago",
+        "24 hours ago",
+        "yesterday",
+        "compare",
+        "comparison",
+        "now and",
+        "versus",
+        " vs ",
+    )
+    subject_markers = ("channel", "topology", "partition", "mesh")
+    return any(marker in normalized for marker in comparison_markers) and any(
+        marker in normalized for marker in subject_markers
+    )
+
+
+def _looks_like_counter_or_rf_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "channel",
+            "rf",
+            "counter",
+            "counters",
+            "retry",
+            "retries",
+            "cca",
+            "parent change",
+            "attach attempt",
+        )
+    )
+
+
 def _has_sufficient_node_evidence(tool_trace: list[dict[str, Any]]) -> bool:
     names = {str(row.get("name") or "") for row in tool_trace}
     if "analyze_node" not in names:
@@ -381,6 +424,259 @@ def _tool_result_data(result: Any) -> Any:
     if isinstance(result, dict) and isinstance(result.get("data"), dict):
         return result["data"]
     return result
+
+
+def _parse_iso8601(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+def _extract_snapshot_summaries(result: Any) -> list[dict[str, Any]]:
+    data = _tool_result_data(result)
+    if isinstance(data, dict):
+        snapshots = data.get("snapshots")
+        if isinstance(snapshots, list):
+            return [row for row in snapshots if isinstance(row, dict)]
+        if data.get("id") is not None or data.get("snapshot_id") is not None:
+            return [data]
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    return []
+
+
+def _history_snapshot_refs(tool_trace: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for row in tool_trace:
+        if str(row.get("name") or "") != "get_topology_history_entry":
+            continue
+        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
+        for snapshot in _extract_snapshot_summaries(row.get("result")):
+            refs.append(
+                {
+                    "id": snapshot.get("id") or snapshot.get("snapshot_id"),
+                    "captured_at": snapshot.get("captured_at") or snapshot.get("ts"),
+                    "arguments": arguments,
+                }
+            )
+    return refs
+
+
+def _history_comparison_is_unreliable(message: str, tool_trace: list[dict[str, Any]]) -> bool:
+    if not _looks_like_history_comparison_question(message):
+        return False
+    if not any(str(row.get("name") or "") == "list_topology_history" for row in tool_trace):
+        return True
+    refs = _history_snapshot_refs(tool_trace)
+    if len(refs) < 2:
+        return True
+    ids = {int(ref["id"]) for ref in refs if isinstance(ref.get("id"), int)}
+    if len(ids) >= 2:
+        return False
+    captured = {str(ref.get("captured_at") or "") for ref in refs if ref.get("captured_at")}
+    return len(captured) < 2
+
+
+def _compact_topology_diff(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "snapshot_id_a": result.get("snapshot_id_a"),
+        "snapshot_id_b": result.get("snapshot_id_b"),
+        "added_nodes": (result.get("added_nodes") or [])[:12],
+        "removed_nodes": (result.get("removed_nodes") or [])[:12],
+        "changed_nodes": (result.get("changed_nodes") or [])[:12],
+        "added_links": (result.get("added_links") or [])[:12],
+        "removed_links": (result.get("removed_links") or [])[:12],
+    }
+
+
+def _compact_node_inventory(result: dict[str, Any]) -> dict[str, Any]:
+    data = _tool_result_data(result)
+    nodes = data.get("nodes") if isinstance(data, dict) and isinstance(data.get("nodes"), list) else []
+    return {
+        "count": data.get("count") if isinstance(data, dict) else None,
+        "nodes": [
+            {
+                "eui64": row.get("eui64"),
+                "friendly_name": row.get("friendly_name") or row.get("display_name"),
+                "status": row.get("status"),
+                "partition_id": row.get("partition_id"),
+            }
+            for row in nodes[:20]
+            if isinstance(row, dict)
+        ],
+    }
+
+
+def _extract_known_node_ids(tool_trace: list[dict[str, Any]]) -> set[str]:
+    known: set[str] = set()
+    for row in tool_trace:
+        name = str(row.get("name") or "")
+        arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
+        if name in {"analyze_node", "get_counter_series"}:
+            eui64 = str(arguments.get("eui64") or "").strip().lower()
+            if eui64:
+                known.add(eui64)
+        if name == "compare_node_counters":
+            for key in ("eui64_a", "eui64_b"):
+                eui64 = str(arguments.get(key) or "").strip().lower()
+                if eui64:
+                    known.add(eui64)
+        data = _tool_result_data(row.get("result"))
+        if isinstance(data, dict):
+            eui64 = str(data.get("eui64") or "").strip().lower()
+            if eui64:
+                known.add(eui64)
+            nodes = data.get("nodes")
+            if isinstance(nodes, list):
+                for node in nodes:
+                    if isinstance(node, dict):
+                        eui64 = str(node.get("eui64") or "").strip().lower()
+                        if eui64:
+                            known.add(eui64)
+            for key in ("a", "b"):
+                side = data.get(key)
+                if isinstance(side, dict):
+                    eui64 = str(side.get("eui64") or "").strip().lower()
+                    if eui64:
+                        known.add(eui64)
+    return known
+
+
+def _response_references_unknown_node(text: str, tool_trace: list[dict[str, Any]]) -> bool:
+    refs = {match.group(1).lower() for match in _POTENTIAL_NODE_ID_RE.finditer(str(text or ""))}
+    if not refs:
+        return False
+    known = _extract_known_node_ids(tool_trace)
+    if not known:
+        return False
+    return any(ref not in known for ref in refs)
+
+
+def _counter_evidence_is_empty(tool_trace: list[dict[str, Any]]) -> bool:
+    saw_counter_tool = False
+    for row in tool_trace:
+        name = str(row.get("name") or "")
+        data = _tool_result_data(row.get("result"))
+        if name == "get_counter_series" and isinstance(data, dict):
+            saw_counter_tool = True
+            if not isinstance(data.get("series"), list) or len(data.get("series") or []) == 0:
+                return True
+        if name == "compare_node_counters" and isinstance(data, dict):
+            saw_counter_tool = True
+            a_series = data.get("a") if isinstance(data.get("a"), dict) else {}
+            b_series = data.get("b") if isinstance(data.get("b"), dict) else {}
+            if not (a_series.get("series") or b_series.get("series")):
+                return True
+    return saw_counter_tool and False
+
+
+def _force_answer_retry_message() -> str:
+    return (
+        "Answer now from the evidence already gathered. Do not call more tools. If the available evidence is still "
+        "insufficient, say that explicitly and name the missing evidence instead of guessing."
+    )
+
+
+async def _force_answer_from_existing_evidence(
+    target: DirectChatTarget,
+    messages: list[dict[str, Any]],
+) -> str:
+    body = {
+        "model": target.model,
+        "messages": [*messages, {"role": "system", "content": _force_answer_retry_message()}],
+        "temperature": target.temperature,
+        "stream": False,
+    }
+    payload = await _post_chat_completions(target, body)
+    return _extract_message_text(payload)
+
+
+async def _gather_backend_history_comparison_evidence(
+    tool_trace: list[dict[str, Any]],
+) -> dict[str, Any]:
+    now = datetime.now(tz=UTC)
+    anchor_at = now - timedelta(hours=24)
+    list_arguments = {
+        "since": (now - timedelta(hours=48)).isoformat(),
+        "until": now.isoformat(),
+        "limit": 200,
+    }
+    list_result = await _dispatch_chat_tool("list_topology_history", list_arguments)
+    tool_trace.append(
+        {
+            "id": f"backend-{uuid.uuid4()}",
+            "type": "function",
+            "name": "list_topology_history",
+            "arguments": list_arguments,
+            "result": list_result,
+        }
+    )
+    snapshots = _extract_snapshot_summaries(list_result)
+    newest = snapshots[0] if snapshots else None
+    older = None
+    for row in snapshots[1:]:
+        captured_at = _parse_iso8601(row.get("captured_at") or row.get("ts"))
+        if captured_at is not None and captured_at <= anchor_at:
+            older = row
+            break
+    if not newest or not older:
+        return {
+            "status": "insufficient_history",
+            "reason": "No distinct retained snapshot was available for the comparison anchor.",
+            "available_snapshots": snapshots[:10],
+        }
+    if newest.get("id") == older.get("id"):
+        return {
+            "status": "insufficient_history",
+            "reason": "The current and historical anchors resolved to the same snapshot.",
+            "available_snapshots": snapshots[:10],
+        }
+    diff_arguments = {
+        "snapshot_id_a": older.get("id"),
+        "snapshot_id_b": newest.get("id"),
+    }
+    diff_result = await _dispatch_chat_tool("diff_topology_history", diff_arguments)
+    tool_trace.append(
+        {
+            "id": f"backend-{uuid.uuid4()}",
+            "type": "function",
+            "name": "diff_topology_history",
+            "arguments": diff_arguments,
+            "result": diff_result,
+        }
+    )
+    return {
+        "status": "ok",
+        "current_snapshot": newest,
+        "historical_snapshot": older,
+        "diff": _compact_topology_diff(_tool_result_data(diff_result) if isinstance(_tool_result_data(diff_result), dict) else {}),
+    }
+
+
+async def _gather_backend_counter_grounding_evidence(
+    tool_trace: list[dict[str, Any]],
+) -> dict[str, Any]:
+    list_arguments = {"limit": 40}
+    list_result = await _dispatch_chat_tool("list_all_nodes", list_arguments)
+    tool_trace.append(
+        {
+            "id": f"backend-{uuid.uuid4()}",
+            "type": "function",
+            "name": "list_all_nodes",
+            "arguments": list_arguments,
+            "result": list_result,
+        }
+    )
+    return _compact_node_inventory(list_result)
 
 
 def _wants_exact_count_response(message: str) -> bool:
@@ -678,9 +974,13 @@ async def direct_chat_turn(
     tool_calls_used = 0
     tool_deferral_retries = 0
     node_evidence_retries = 0
+    history_comparison_retries = 0
+    counter_grounding_retries = 0
     topology_history_empty_hints = 0
     final_text = ""
     node_question = _looks_like_node_question(message)
+    history_comparison_question = _looks_like_history_comparison_question(message)
+    counter_question = _looks_like_counter_or_rf_question(message)
 
     for _ in range(_MAX_TOOL_ROUNDS + 1):
         body = {
@@ -710,6 +1010,45 @@ async def direct_chat_turn(
                     {
                         "role": "user",
                         "content": _tool_deferral_retry_message(tool_deferral_retries),
+                    }
+                )
+                continue
+            if (
+                history_comparison_question
+                and history_comparison_retries < _MAX_HISTORY_COMPARISON_RETRIES
+                and _history_comparison_is_unreliable(message, tool_trace)
+            ):
+                history_comparison_retries += 1
+                evidence = await _gather_backend_history_comparison_evidence(tool_trace)
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "This question compares current state with an older retained topology snapshot. Use the "
+                            "authoritative backend evidence below before answering. Do not invent snapshot timestamps, "
+                            "and do not treat the same snapshot as both the current and historical anchor. If there is "
+                            "no distinct older snapshot, say the retained history is insufficient for that comparison.\n\n"
+                            + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
+                        ),
+                    }
+                )
+                continue
+            if (
+                counter_question
+                and counter_grounding_retries < _MAX_COUNTER_GROUNDING_RETRIES
+                and (_counter_evidence_is_empty(tool_trace) or _response_references_unknown_node(candidate_text, tool_trace))
+            ):
+                counter_grounding_retries += 1
+                evidence = await _gather_backend_counter_grounding_evidence(tool_trace)
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            "Counter-based answers must stay grounded in real nodes from the current mesh inventory. Do not "
+                            "invent node IDs, and do not infer RF or channel-root-cause conclusions from empty counter series. "
+                            "Use only the current mesh inventory below, or answer that the evidence is insufficient.\n\n"
+                            + _serialize_for_prompt(evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
+                        ),
                     }
                 )
                 continue
@@ -780,12 +1119,15 @@ async def direct_chat_turn(
         if exact_count_response is not None:
             final_text = exact_count_response
             break
-        if tool_calls_used >= _MAX_TOOL_CALLS:
-            final_text = "I hit the current tool-call limit while gathering evidence. Please narrow the question."
+        if tool_calls_used > _MAX_TOOL_CALLS:
+            final_text = await _force_answer_from_existing_evidence(target, messages)
             break
 
     if not final_text:
-        final_text = "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request."
+        if tool_trace:
+            final_text = await _force_answer_from_existing_evidence(target, messages)
+        if not final_text:
+            final_text = "I couldn't complete the tool-assisted reasoning loop. Please retry with a narrower request."
     duration_ms = max(0, int((time.perf_counter() - started) * 1000))
     return {
         "conversation_id": conversation_id or f"direct-{uuid.uuid4()}",

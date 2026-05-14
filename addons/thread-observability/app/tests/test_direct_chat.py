@@ -705,3 +705,290 @@ def test_direct_chat_turn_returns_exact_counts_from_tool_results(monkeypatch) ->
     )
     assert [row["name"] for row in result["tool_calls"]] == ["list_topology_history", "get_storage_stats"]
     assert len(calls) == 1
+
+
+def test_direct_chat_turn_retries_when_history_comparison_uses_same_snapshot(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-now",
+                                    "type": "function",
+                                    "function": {"name": "get_topology_history_entry", "arguments": '{"at":"2026-05-13T17:00:00Z"}'},
+                                },
+                                {
+                                    "id": "call-24h",
+                                    "type": "function",
+                                    "function": {"name": "get_topology_history_entry", "arguments": '{"at":"2026-05-12T17:00:00Z"}'},
+                                },
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The channel did not change over the last 24 hours.",
+                        }
+                    }
+                ]
+            }
+        history_note = next(
+            msg for msg in calls[2]["messages"]
+            if msg.get("role") == "system" and "same snapshot as both the current and historical anchor" in str(msg.get("content") or "")
+        )
+        assert "retained history is insufficient" in history_note["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I found only one distinct retained snapshot for that comparison window, so I can't determine whether the channel changed in the last 24 hours.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "get_topology_history_entry":
+            return {
+                "data": {"id": 71, "captured_at": "2026-05-13T17:00:00Z", "partition_id": 1846206278},
+                "meta": {"tool": name},
+            }
+        if name == "list_topology_history":
+            return {
+                "data": {
+                    "snapshots": [
+                        {"id": 71, "captured_at": "2026-05-13T17:00:00Z", "partition_id": 1846206278, "node_count": 18, "link_count": 122},
+                    ],
+                    "count": 1,
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did the channel change between now and 24h ago?",
+            rendered_message="User message: Did the channel change between now and 24h ago?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I found only one distinct retained snapshot for that comparison window, so I can't determine whether the channel changed in the last 24 hours."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == [
+        "get_topology_history_entry",
+        "get_topology_history_entry",
+        "list_topology_history",
+    ]
+
+
+def test_direct_chat_turn_retries_when_counter_series_is_empty_and_answer_invents_node(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters",
+                                    "type": "function",
+                                    "function": {"name": "get_counter_series", "arguments": '{"eui64":"0004a30b86a4"}'},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Node 0004a30b86a4 shows RF retries that likely drove the channel change.",
+                        }
+                    }
+                ]
+            }
+        note = next(
+            msg for msg in calls[2]["messages"]
+            if msg.get("role") == "system" and "Do not invent node IDs" in str(msg.get("content") or "")
+        )
+        assert "empty counter series" in note["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I can't attribute the channel change to RF on a specific node because the counter series was empty and that node does not appear in the current mesh inventory.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "get_counter_series":
+            return {
+                "data": {"eui64": arguments["eui64"], "series": [], "deltas": {}},
+                "meta": {"tool": name},
+            }
+        if name == "list_all_nodes":
+            return {
+                "data": {
+                    "count": 1,
+                    "nodes": [
+                        {
+                            "eui64": "e6684b9903e8970f",
+                            "friendly_name": "Family Room Track Lights",
+                            "status": "online",
+                            "partition_id": 1846206278,
+                        }
+                    ],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did RF conditions cause the channel change?",
+            rendered_message="User message: Did RF conditions cause the channel change?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I can't attribute the channel change to RF on a specific node because the counter series was empty and that node does not appear in the current mesh inventory."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["get_counter_series", "list_all_nodes"]
+
+
+def test_direct_chat_turn_forces_final_answer_after_tool_limit(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-mesh",
+                                    "type": "function",
+                                    "function": {"name": "get_mesh_state", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(calls) == 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-issues",
+                                    "type": "function",
+                                    "function": {"name": "list_active_issues", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        assert "tools" not in calls[2]
+        note = calls[2]["messages"][-1]
+        assert note["role"] == "system"
+        assert "Do not call more tools" in note["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Based on the evidence gathered so far, the likely choke point is the single upstream partition path; I don't need more tools to say that confidently.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "get_mesh_state"
+        return {"data": {"nodes": [], "links": []}, "meta": {"tool": name}}
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_MAX_TOOL_CALLS", 1)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What is the likely choke point in this mesh, and would placement changes help?",
+            rendered_message="User message: What is the likely choke point in this mesh, and would placement changes help?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "Based on the evidence gathered so far, the likely choke point is the single upstream partition path; I don't need more tools to say that confidently."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["get_mesh_state", "list_active_issues"]
+    assert result["tool_calls"][1]["result"] == {"error": "tool call limit exceeded (1)"}

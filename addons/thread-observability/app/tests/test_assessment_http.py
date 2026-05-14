@@ -56,3 +56,27 @@ def test_assessment_run_now_endpoint_executes_when_enabled(store, monkeypatch) -
     history = store.list_assessment_runs(limit=5)
     assert len(history) == 1
     assert history[0]["model_name"] == "claude-sonnet-4-5"
+
+
+def test_chat_stats_endpoint_returns_aggregate_telemetry(store) -> None:
+    store.record_chat_turn_stat(
+        conversation_id="direct-1",
+        recorded_at="2026-05-13T18:00:00Z",
+        backend="direct",
+        agent_id="direct:cerebras",
+        model_name="llama3.1-8b",
+        status="ok",
+        error_kind=None,
+        duration_ms=150,
+        tool_call_count=1,
+        had_page_context=True,
+        selected_node_eui64=None,
+        active_tab="network",
+    )
+
+    client = TestClient(create_core_app())
+    payload = client.get("/v1/chat/stats").json()
+
+    assert payload["total_turns"] == 1
+    assert payload["by_backend"] == {"direct": 1}
+    assert payload["recent_turns"][0]["active_tab"] == "network"

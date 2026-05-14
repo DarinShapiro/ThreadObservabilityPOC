@@ -63,6 +63,37 @@ def _render_chat_message(
     return text
 
 
+def _record_chat_turn_telemetry(
+    *,
+    conversation_id: str | None,
+    backend: str,
+    agent_id: str | None,
+    model_name: str | None,
+    status: str,
+    error_kind: str | None,
+    duration_ms: int,
+    tool_call_count: int,
+    page_context: dict[str, object] | None,
+) -> None:
+    try:
+        get_store().record_chat_turn_stat(
+            conversation_id=conversation_id,
+            recorded_at=_utc_now(),
+            backend=backend,
+            agent_id=agent_id,
+            model_name=model_name,
+            status=status,
+            error_kind=error_kind,
+            duration_ms=duration_ms,
+            tool_call_count=tool_call_count,
+            had_page_context=bool(page_context),
+            selected_node_eui64=str((page_context or {}).get("selected_node_eui64") or "").strip() or None,
+            active_tab=str((page_context or {}).get("active_tab") or "").strip() or None,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("chat telemetry: failed to record turn stat")
+
+
 def _looks_like_builtin_chat_fallback(text: str) -> bool:
     normalized = " ".join(text.strip().lower().split())
     if not normalized:
@@ -370,19 +401,63 @@ def create_core_app() -> FastAPI:
                         tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
                         response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
                     )
+                _record_chat_turn_telemetry(
+                    conversation_id=str(result.get("conversation_id") or conversation_id or "").strip() or None,
+                    backend="direct",
+                    agent_id=str(result.get("agent_id") or agent_id or "").strip() or None,
+                    model_name=str(result.get("model") or target.model or "").strip() or None,
+                    status="ok",
+                    error_kind=None,
+                    duration_ms=int(result.get("duration_ms") or 0),
+                    tool_call_count=len(result.get("tool_calls") or []) if isinstance(result.get("tool_calls"), list) else 0,
+                    page_context=page_context,
+                )
                 return result
             except direct_chat.DirectChatConfigError as exc:
+                _record_chat_turn_telemetry(
+                    conversation_id=conversation_id,
+                    backend="direct",
+                    agent_id=agent_id,
+                    model_name=direct_target.model if direct_target is not None else None,
+                    status="error",
+                    error_kind="config",
+                    duration_ms=0,
+                    tool_call_count=0,
+                    page_context=page_context,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_412_PRECONDITION_FAILED,
                     detail=str(exc),
                 ) from exc
             except httpx.HTTPStatusError as exc:
+                _record_chat_turn_telemetry(
+                    conversation_id=conversation_id,
+                    backend="direct",
+                    agent_id=agent_id,
+                    model_name=direct_target.model if direct_target is not None else None,
+                    status="error",
+                    error_kind="upstream_http",
+                    duration_ms=0,
+                    tool_call_count=0,
+                    page_context=page_context,
+                )
                 detail = exc.response.text if exc.response is not None else str(exc)
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Direct model chat failed: {detail}",
                 ) from exc
             except Exception as exc:  # noqa: BLE001
+                _record_chat_turn_telemetry(
+                    conversation_id=conversation_id,
+                    backend="direct",
+                    agent_id=agent_id,
+                    model_name=direct_target.model if direct_target is not None else None,
+                    status="error",
+                    error_kind="internal",
+                    duration_ms=0,
+                    tool_call_count=0,
+                    page_context=page_context,
+                )
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Direct model chat failed: {exc}",
@@ -430,7 +505,25 @@ def create_core_app() -> FastAPI:
                 tool_calls=result.get("tool_calls") if isinstance(result.get("tool_calls"), list) else None,
                 response_text=((result.get("response") or {}).get("text") if isinstance(result.get("response"), dict) else None),
             )
+        _record_chat_turn_telemetry(
+            conversation_id=str(result.get("conversation_id") or conversation_id or "").strip() or None,
+            backend="ha",
+            agent_id=str(result.get("agent_id") or agent_id or "").strip() or None,
+            model_name=None,
+            status="ok",
+            error_kind=None,
+            duration_ms=duration_ms,
+            tool_call_count=len(result.get("tool_calls") or []) if isinstance(result.get("tool_calls"), list) else 0,
+            page_context=page_context,
+        )
         return result
+
+    @app.get("/v1/chat/stats")
+    def chat_stats(since: str | None = None) -> dict[str, object]:
+        try:
+            return get_store().get_chat_turn_stats(since=since)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
 
     @app.get("/health")
     def health() -> dict[str, str]:

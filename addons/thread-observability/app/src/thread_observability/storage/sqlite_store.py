@@ -608,6 +608,31 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_chat_session_memory_expires_at
         ON chat_session_memory(expires_at);
     """,
+    # v25 (0.11.20): aggregate-safe chat telemetry. Stores one row per turn
+    # with latency / tool-use / outcome metadata only; never raw message text.
+    """
+    CREATE TABLE IF NOT EXISTS chat_turn_stats (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id     TEXT,
+        recorded_at         TEXT NOT NULL,
+        backend             TEXT NOT NULL,
+        agent_id            TEXT,
+        model_name          TEXT,
+        status              TEXT NOT NULL,
+        error_kind          TEXT,
+        duration_ms         INTEGER NOT NULL DEFAULT 0,
+        tool_call_count     INTEGER NOT NULL DEFAULT 0,
+        had_page_context    INTEGER NOT NULL DEFAULT 0,
+        selected_node_eui64 TEXT,
+        active_tab          TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_turn_stats_recorded_at
+        ON chat_turn_stats(recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_turn_stats_backend
+        ON chat_turn_stats(backend, recorded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_turn_stats_status
+        ON chat_turn_stats(status, recorded_at DESC);
+    """,
 ]
 
 
@@ -2138,6 +2163,7 @@ class SQLiteStore:
                     "network_data",
                     "topology_snapshots",
                     "chat_session_memory",
+                    "chat_turn_stats",
                 )
             }
             oldest = self._conn.execute("SELECT MIN(ts) FROM events").fetchone()[0]
@@ -2252,6 +2278,103 @@ class SQLiteStore:
                 (stale_before, stale_before),
             )
             return int(cur.rowcount or 0)
+
+    def record_chat_turn_stat(
+        self,
+        *,
+        conversation_id: str | None,
+        recorded_at: str,
+        backend: str,
+        agent_id: str | None,
+        model_name: str | None,
+        status: str,
+        error_kind: str | None,
+        duration_ms: int,
+        tool_call_count: int,
+        had_page_context: bool,
+        selected_node_eui64: str | None,
+        active_tab: str | None,
+    ) -> dict[str, Any]:
+        with self._tx() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO chat_turn_stats (
+                    conversation_id, recorded_at, backend, agent_id, model_name,
+                    status, error_kind, duration_ms, tool_call_count,
+                    had_page_context, selected_node_eui64, active_tab
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    conversation_id,
+                    recorded_at,
+                    backend,
+                    agent_id,
+                    model_name,
+                    status,
+                    error_kind,
+                    max(0, int(duration_ms)),
+                    max(0, int(tool_call_count)),
+                    1 if had_page_context else 0,
+                    selected_node_eui64,
+                    active_tab,
+                ),
+            )
+            row_id = int(cur.lastrowid or 0)
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM chat_turn_stats WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+        return dict(row) if row is not None else {}
+
+    def get_chat_turn_stats(self, *, since: str | None = None) -> dict[str, Any]:
+        where = ""
+        params: list[Any] = []
+        if since:
+            where = " WHERE recorded_at >= ?"
+            params.append(since)
+        with self._lock:
+            total_turns = int(self._conn.execute(
+                f"SELECT COUNT(*) FROM chat_turn_stats{where}",
+                params,
+            ).fetchone()[0])
+            status_rows = self._conn.execute(
+                f"SELECT status, COUNT(*) AS count FROM chat_turn_stats{where} GROUP BY status",
+                params,
+            ).fetchall()
+            backend_rows = self._conn.execute(
+                f"SELECT backend, COUNT(*) AS count FROM chat_turn_stats{where} GROUP BY backend",
+                params,
+            ).fetchall()
+            error_rows = self._conn.execute(
+                f"SELECT error_kind, COUNT(*) AS count FROM chat_turn_stats{where} WHERE error_kind IS NOT NULL GROUP BY error_kind",
+                params,
+            ).fetchall()
+            agg = self._conn.execute(
+                f"SELECT AVG(duration_ms), AVG(tool_call_count), MAX(recorded_at), MIN(recorded_at), SUM(had_page_context) FROM chat_turn_stats{where}",
+                params,
+            ).fetchone()
+            recent_rows = self._conn.execute(
+                f"SELECT recorded_at, backend, agent_id, model_name, status, error_kind, duration_ms, tool_call_count, had_page_context, selected_node_eui64, active_tab FROM chat_turn_stats{where} ORDER BY recorded_at DESC LIMIT 10",
+                params,
+            ).fetchall()
+        avg_duration_ms = float(agg[0]) if agg and agg[0] is not None else 0.0
+        avg_tool_calls = float(agg[1]) if agg and agg[1] is not None else 0.0
+        return {
+            "since": since,
+            "total_turns": total_turns,
+            "avg_duration_ms": avg_duration_ms,
+            "avg_tool_calls": avg_tool_calls,
+            "page_context_turns": int(agg[4] or 0) if agg else 0,
+            "window": {
+                "oldest": agg[3] if agg else None,
+                "newest": agg[2] if agg else None,
+            },
+            "by_status": {str(row[0]): int(row[1]) for row in status_rows if row[0] is not None},
+            "by_backend": {str(row[0]): int(row[1]) for row in backend_rows if row[0] is not None},
+            "by_error_kind": {str(row[0]): int(row[1]) for row in error_rows if row[0] is not None},
+            "recent_turns": [dict(row) for row in recent_rows],
+        }
 
     def close(self) -> None:
         with self._lock:

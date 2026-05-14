@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.20 — Grounded history comparisons and chat telemetry
+
+- **History comparison guardrails.** Direct chat now validates retained-snapshot comparisons server-side, refuses to compare a snapshot to itself across time anchors, and reports insufficient retained history instead of inventing timestamps or overclaiming no change.
+- **Counter-grounding guardrails.** Direct chat now rejects RF/counter reasoning from empty counter series, refreshes its node grounding from the current mesh inventory, and explicitly avoids invented node IDs.
+- **Forced evidence-bound finish.** When the tool-call budget is exhausted, direct chat now forces a final answer from the evidence already gathered instead of dead-ending the turn.
+- **Chat telemetry.** Added persisted per-turn chat telemetry plus `get_chat_stats` / `/v1/chat/stats` aggregate surfaces so grounding behavior, latency, tool use, and error mix can be reviewed without storing raw message content.
+- **Regression coverage.** Added focused tests for retained-history comparison safety, counter-grounding retries, forced final answers, chat telemetry storage, and chat stats exposure.
+
 ## 0.11.19 — Model-aware retry strengthening for direct chat
 
 - **Model-aware retry budget.** Direct chat can now escalate tool-deferral retries based on the active provider/model profile instead of using a single fixed retry count for every model.

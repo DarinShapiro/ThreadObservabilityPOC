@@ -743,8 +743,10 @@ function assessmentFindingById(findingId) {
 function currentPageContext() {
   const counts = (lastStatus && lastStatus.node_counts) || {};
   const partitions = (lastStatus && lastStatus.partitions) || {};
+  const activeTab = document.querySelector('.tab-panel.active');
   return {
     page: 'dashboard',
+    active_tab: activeTab ? activeTab.id.replace('tab-', '') : null,
     viewport: window.innerWidth < 720 ? 'narrow' : 'wide',
     selected_node_eui64: selectedNodeEui,
     filters: {

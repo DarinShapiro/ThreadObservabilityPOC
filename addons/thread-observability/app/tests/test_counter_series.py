@@ -199,5 +199,5 @@ def test_prune_counter_samples_drops_old_and_downsamples_mid(store):
 
 def test_phase4_tools_registered():
     names = {t["name"] for t in mcp_tools.TOOL_DEFS}
-    assert {"get_counter_series", "compare_node_counters"}.issubset(names)
-    assert {"get_counter_series", "compare_node_counters"}.issubset(mcp_tools._READ_TOOLS)
+    assert {"get_counter_series", "compare_node_counters", "get_chat_stats"}.issubset(names)
+    assert {"get_counter_series", "compare_node_counters", "get_chat_stats"}.issubset(mcp_tools._READ_TOOLS)

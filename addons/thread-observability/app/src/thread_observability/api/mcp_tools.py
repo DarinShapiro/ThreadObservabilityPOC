@@ -281,6 +281,20 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_chat_stats",
+        "description": (
+            "Use when: reviewing dashboard chat usage and grounding behavior without inspecting raw messages. "
+            "Returns aggregate turn counts, latency, tool-call counts, error breakdown, and a small recent-turn summary. Read-only."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "since": {"type": "string", "description": "ISO-8601 lower bound; default all retained chat telemetry."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "query_history",
         "description": (
             "Tier 4 unified timeline. Return a single newest-first stream that "
@@ -807,6 +821,7 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "ha_check_for_update",
     "list_thread_datasets",
     "get_storage_stats",
+    "get_chat_stats",
     "query_history",
     "get_topology_history_entry",
     "list_topology_history",
@@ -1017,6 +1032,11 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
             except Exception as exc:  # noqa: BLE001
                 ts_health = {"backend": "unknown", "error": str(exc)}
             return {"sqlite": stats, "timeseries": ts_health}
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_chat_stats":
+        try:
+            return get_store().get_chat_turn_stats(since=arguments.get("since"))
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "query_history":

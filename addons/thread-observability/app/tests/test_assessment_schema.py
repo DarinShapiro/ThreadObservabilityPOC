@@ -138,3 +138,28 @@ def test_assessment_runs_history_round_trip(store: SQLiteStore) -> None:
     assert rows[0]["id"] == run["id"]
     assert rows[0]["model_name"] == "claude-sonnet-4-5"
     assert rows[0]["headline"] == "check this link"
+
+
+def test_chat_turn_stats_round_trip(store: SQLiteStore) -> None:
+    row = store.record_chat_turn_stat(
+        conversation_id="direct-123",
+        recorded_at="2026-05-13T18:00:00Z",
+        backend="direct",
+        agent_id="direct:cerebras",
+        model_name="llama3.1-8b",
+        status="ok",
+        error_kind=None,
+        duration_ms=420,
+        tool_call_count=2,
+        had_page_context=True,
+        selected_node_eui64="e6684b9903e8970f",
+        active_tab="network",
+    )
+
+    assert row["backend"] == "direct"
+    summary = store.get_chat_turn_stats()
+    assert summary["total_turns"] == 1
+    assert summary["by_backend"] == {"direct": 1}
+    assert summary["by_status"] == {"ok": 1}
+    assert summary["page_context_turns"] == 1
+    assert summary["recent_turns"][0]["selected_node_eui64"] == "e6684b9903e8970f"
