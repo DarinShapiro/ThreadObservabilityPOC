@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ..storage.sqlite_store import get_store
+from ..utils.datetime import parse_iso_datetime
 
 DEFAULT_LOOKBACK_HOURS = 6
 MAX_LOOKBACK_HOURS = 24 * 14  # capped by sampled_archive_days default of 14
@@ -21,21 +22,12 @@ MAX_LOOKBACK_HOURS = 24 * 14  # capped by sampled_archive_days default of 14
 def _resolve_window(since: str | None, until: str | None) -> tuple[str, str]:
     """Return an ISO window, defaulting to the last DEFAULT_LOOKBACK_HOURS."""
     now = datetime.now(tz=UTC)
-    until_dt = _parse_iso(until) or now
+    until_dt = parse_iso_datetime(until) or now
     if since:
-        since_dt = _parse_iso(since) or (until_dt - timedelta(hours=DEFAULT_LOOKBACK_HOURS))
+        since_dt = parse_iso_datetime(since) or (until_dt - timedelta(hours=DEFAULT_LOOKBACK_HOURS))
     else:
         since_dt = until_dt - timedelta(hours=DEFAULT_LOOKBACK_HOURS)
     return since_dt.isoformat(), until_dt.isoformat()
-
-
-def _parse_iso(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
 
 
 def _filter_counters(sample: dict[str, Any], counter_names: list[str] | None) -> dict[str, Any]:
@@ -54,9 +46,8 @@ def _bucket_5min(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
     bucket_order: list[str] = []
     for row in samples:
         ts = row.get("observed_at")
-        try:
-            dt = datetime.fromisoformat(ts)
-        except (TypeError, ValueError):
+        dt = parse_iso_datetime(str(ts) if ts is not None else None)
+        if dt is None:
             continue
         bm = (dt.minute // 5) * 5
         b_dt = dt.replace(minute=bm, second=0, microsecond=0)
