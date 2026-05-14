@@ -963,6 +963,15 @@ function assessmentFindingById(findingId) {
 function currentPageContext() {
   const counts = (lastStatus && lastStatus.node_counts) || {};
   const partitions = (lastStatus && lastStatus.partitions) || {};
+  const visibleOfflineNodes = (((lastStatus && lastStatus.all_nodes) || []).filter((node) => node && node.status === 'offline'))
+    .slice(0, 5)
+    .map((node) => ({
+      eui64: node.eui64 || null,
+      friendly_name: nodeDisplayName(node),
+      status: node.status || null,
+      last_seen: node.last_seen || null,
+      partition_id: node.partition_id || null,
+    }));
   const activeTab = document.querySelector('.tab-panel.active');
   return {
     page: 'dashboard',
@@ -985,6 +994,7 @@ function currentPageContext() {
       active_issue_count: ((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0,
       partition_count: partitions.partition_count || 0,
     },
+    visible_offline_nodes: visibleOfflineNodes,
   };
 }
 

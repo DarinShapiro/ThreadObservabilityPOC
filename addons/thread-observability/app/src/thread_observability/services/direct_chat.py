@@ -453,6 +453,29 @@ def _looks_like_node_question(text: str) -> bool:
     )
 
 
+def _looks_like_offline_nodes_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return "offline node" in normalized or "offline nodes" in normalized
+
+
+def _looks_like_overall_health_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "overall health of my network",
+            "overall health of the network",
+            "health of my network right now",
+            "how healthy is my network",
+            "is my network healthy",
+        )
+    )
+
+
 def _looks_like_history_comparison_question(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -1017,6 +1040,8 @@ def _build_page_context_contradiction_response(message: str) -> str:
     page_context = _extract_page_context_from_message(message) or {}
     summary = page_context.get("snapshot_summary") if isinstance(page_context, dict) else {}
     summary = summary if isinstance(summary, dict) else {}
+    visible_offline_nodes = page_context.get("visible_offline_nodes") if isinstance(page_context, dict) else []
+    visible_offline_nodes = visible_offline_nodes if isinstance(visible_offline_nodes, list) else []
     try:
         partition_count = int(summary.get("partition_count") or 0)
     except (TypeError, ValueError):
@@ -1041,6 +1066,53 @@ def _build_page_context_contradiction_response(message: str) -> str:
         stale_nodes = int(summary.get("stale_nodes") or 0)
     except (TypeError, ValueError):
         stale_nodes = 0
+    try:
+        active_issue_count = int(summary.get("active_issue_count") or 0)
+    except (TypeError, ValueError):
+        active_issue_count = 0
+
+    if _looks_like_offline_nodes_question(message):
+        if visible_offline_nodes:
+            names = []
+            for row in visible_offline_nodes[:3]:
+                if not isinstance(row, dict):
+                    continue
+                name = str(row.get("friendly_name") or row.get("name") or row.get("eui64") or "").strip()
+                if name:
+                    names.append(name)
+            listed = ", ".join(names) if names else "the visible offline node"
+            return (
+                f"The dashboard currently shows {offline_nodes} offline node{'s' if offline_nodes != 1 else ''} out of "
+                f"{total_nodes or (online_nodes + offline_nodes)} total. The offline node to investigate first is {listed}. "
+                "I am not trusting the contradictory backend summary that claimed there were no offline nodes, because it "
+                "does not match the live UI context for this turn."
+            )
+        return (
+            f"The dashboard currently shows {offline_nodes} offline node{'s' if offline_nodes != 1 else ''} out of "
+            f"{total_nodes or (online_nodes + offline_nodes)} total, so I should not claim there are none. The live UI and "
+            "the gathered backend evidence disagree, and the visible offline node count should win for this turn."
+        )
+
+    if _looks_like_overall_health_question(message):
+        health_label = "mixed" if (offline_nodes > 0 or distinct_thread_networks > 1 or active_issue_count > 0) else "good"
+        concerns: list[str] = []
+        if offline_nodes > 0:
+            concerns.append(f"{offline_nodes} offline node{'s' if offline_nodes != 1 else ''}")
+        if distinct_thread_networks > 1:
+            concerns.append(f"{distinct_thread_networks} distinct Thread networks")
+        if stale_nodes > 0:
+            concerns.append(f"{stale_nodes} stale node{'s' if stale_nodes != 1 else ''}")
+        if active_issue_count > 0:
+            concerns.append(f"{active_issue_count} active issue{'s' if active_issue_count != 1 else ''}")
+        concern_text = ", ".join(concerns) if concerns else "no immediate health alarms"
+        return (
+            f"Overall health looks {health_label}, not fully clean. The live dashboard currently shows {online_nodes} online / "
+            f"{offline_nodes} offline of {total_nodes or (online_nodes + offline_nodes)}, {partition_count} partition"
+            f"{'s' if partition_count != 1 else ''}, and {distinct_thread_networks} distinct Thread network"
+            f"{'s' if distinct_thread_networks != 1 else ''}. The main concerns right now are {concern_text}. I am using "
+            "the live page context here because the gathered backend summary contradicted those visible counts."
+        )
+
     details = []
     if total_nodes > 0:
         details.append(f"{total_nodes} total node{'s' if total_nodes != 1 else ''}")

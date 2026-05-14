@@ -1918,68 +1918,86 @@ def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradic
     assert "2 partitions" in text
 
 
-    def test_apply_deterministic_fallbacks_rewrites_page_context_node_count_contradiction() -> None:
-        text = direct_chat._apply_deterministic_fallbacks(
-            message=(
+def test_apply_deterministic_fallbacks_rewrites_page_context_node_count_contradiction() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message=(
+            'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
+            'User message: What is the overall health of my network right now?'
+        ),
+        candidate_text=(
+            "The mesh is fully operational with 23 healthy nodes, 0 stale nodes, 0 offline nodes, and 23 total nodes."
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "Overall health looks mixed" in text
+    assert "15 online / 1 offline of 16" in text
+    assert "live page context" in text
+
+
+def test_direct_chat_turn_uses_rendered_page_context_for_contradiction_checks(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The mesh is fully operational with 23 healthy nodes, 0 offline nodes, and 23 total nodes.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_evaluate_answer_candidate(*args, **kwargs):  # noqa: ANN001, ARG001
+        return direct_chat.AnswerReview(verdict="pass")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_evaluate_answer_candidate)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What is the overall health of my network right now?",
+            rendered_message=(
                 'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
                 'User message: What is the overall health of my network right now?'
             ),
-            candidate_text=(
-                "The mesh is fully operational with 23 healthy nodes, 0 stale nodes, 0 offline nodes, and 23 total nodes."
-            ),
-            tool_trace=[],
-            history_comparison_question=False,
-            counter_question=False,
-            internal_tool_request=False,
+            conversation_id=None,
         )
+    )
 
-        assert "active discrepancy" in text
-        assert "16 total nodes" in text
-        assert "15 online / 1 offline" in text
+    assert "Overall health looks mixed" in result["response"]["text"]
+    assert "15 online / 1 offline" in result["response"]["text"]
 
 
-    def test_direct_chat_turn_uses_rendered_page_context_for_contradiction_checks(monkeypatch) -> None:
-        target = direct_chat.DirectChatTarget(
-            provider="cerebras",
-            model="llama-4-scout",
-            base_url="https://api.cerebras.ai/v1",
-            api_key="secret",
-            temperature=0.2,
-        )
+def test_apply_deterministic_fallbacks_uses_visible_offline_nodes_from_page_context() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message=(
+            'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1},'
+            '"visible_offline_nodes":[{"friendly_name":"Family Room Shade 4","eui64":"51f346"}]}\n\n'
+            'User message: Which offline nodes look most suspicious right now?'
+        ),
+        candidate_text="There are no offline nodes right now.",
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
 
-        async def fake_post_chat_completions(target, body):  # noqa: ANN001
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": "The mesh is fully operational with 23 healthy nodes, 0 offline nodes, and 23 total nodes.",
-                        }
-                    }
-                ]
-            }
-
-        async def fake_evaluate_answer_candidate(*args, **kwargs):  # noqa: ANN001, ARG001
-            return direct_chat.AnswerReview(verdict="pass")
-
-        monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
-        monkeypatch.setattr(direct_chat, "_evaluate_answer_candidate", fake_evaluate_answer_candidate)
-
-        result = asyncio.run(
-            direct_chat.direct_chat_turn(
-                target=target,
-                message="What is the overall health of my network right now?",
-                rendered_message=(
-                    'Page context: {"snapshot_summary":{"total_nodes":16,"online_nodes":15,"offline_nodes":1,"stale_nodes":0}}\n\n'
-                    'User message: What is the overall health of my network right now?'
-                ),
-                conversation_id=None,
-            )
-        )
-
-        assert "active discrepancy" in result["response"]["text"]
-        assert "15 online / 1 offline" in result["response"]["text"]
-    assert "2 distinct Thread networks" in text
+    assert "Family Room Shade 4" in text
+    assert "1 offline node" in text
+    assert "contradictory backend summary" in text
 
 
 def test_apply_deterministic_fallbacks_rewrites_internal_tool_name_leak() -> None:

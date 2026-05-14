@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.39 — Chat contradiction fallback follow-up
+
+This patch fixes the remaining live-chat defect found immediately after the
+0.11.38 rollout.
+
+**Fixes:**
+- enriches dashboard page context with the visible offline-node rows so direct
+  chat can name the currently offline device when backend summaries disagree
+- rewrites page-context contradiction fallbacks for overall-health and
+  offline-node questions into grounded operator-facing answers instead of a
+  generic discrepancy warning
+- adds regression coverage for rendered page-context health answers and visible
+  offline-node fallback behavior
+
 ## 0.11.38 — Chat page-context grounding follow-up
 
 This patch packages the direct-chat fix needed after 0.11.37 live validation.
