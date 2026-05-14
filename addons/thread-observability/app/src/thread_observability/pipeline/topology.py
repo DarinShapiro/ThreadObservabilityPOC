@@ -56,6 +56,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from .nodes import collapse_duplicate_hardware_rows
 from ..storage.sqlite_store import SQLiteStore, get_store
 
 FRESHNESS_DEFAULT_MINUTES = 60
@@ -158,11 +159,13 @@ def build_topology(
             (cutoff,),
         ).fetchall()
 
+    rows = collapse_duplicate_hardware_rows([dict(r) for r in rows])
+
     all_links_raw = s.list_links()
     # When filtering phantoms, drop links touching them so the graph stays
     # coherent (no edges into nonexistent nodes).
     if not include_phantoms:
-        visible_euis = {dict(r)["eui64"] for r in rows}
+        visible_euis = {r["eui64"] for r in rows}
         all_links_raw = [
             ln for ln in all_links_raw
             if ln.get("reporter_eui64") in visible_euis
@@ -187,7 +190,7 @@ def build_topology(
     partitions: dict[int, list[str]] = {}
     leaders_by_partition: dict[int, str] = {}
     for row in rows:
-        d = dict(row)
+        d = row
         last_seen = d.get("last_seen")
         stale = bool(last_seen and last_seen < cutoff)
         eui = d["eui64"]

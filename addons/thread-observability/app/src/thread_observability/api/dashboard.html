@@ -217,6 +217,77 @@
     background:var(--panel2); color:var(--fg); border:1px solid var(--border);
     border-radius:6px; padding:4px 8px; font-size:12px;
   }
+  .filter-summary {
+    margin: 8px 0 10px;
+    display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+  }
+  .partition-list {
+    display:grid; gap:10px;
+  }
+  .partition-chip {
+    width:100%; text-align:left; background:var(--panel2); color:var(--fg);
+    border:1px solid var(--border); border-radius:10px; padding:10px 12px; cursor:pointer;
+  }
+  .partition-chip:hover { border-color: var(--accent); }
+  .partition-chip.active {
+    border-color:#38bdf8; box-shadow: inset 0 0 0 1px rgba(56,189,248,0.35);
+    background: linear-gradient(135deg, rgba(14,165,233,0.18), rgba(15,23,42,0.92));
+  }
+  .partition-chip-head {
+    display:flex; gap:8px; align-items:center; justify-content:space-between; margin-bottom:6px;
+    flex-wrap:wrap;
+  }
+  .partition-chip-title { font-size:13px; font-weight:700; }
+  .partition-chip-meta, .partition-members-preview {
+    color:var(--muted); font-size:12px; line-height:1.45;
+  }
+  .name-cell-main {
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  }
+  .name-cell-title { font-weight:600; }
+  .identity-wrap {
+    position:relative; display:inline-flex; align-items:center; gap:6px;
+  }
+  .identity-trigger {
+    border:1px solid var(--border); border-radius:999px; padding:2px 8px;
+    background:var(--panel2); color:var(--muted); font-size:11px; cursor:default;
+  }
+  .serial-chip {
+    border:1px solid #3f3f46; border-radius:999px; padding:2px 8px;
+    background:#111827; color:#d1d5db; font-size:11px; font-weight:600;
+  }
+  .identity-card {
+    display:none; position:absolute; z-index:20; left:0; top:calc(100% + 8px); min-width:280px;
+    background:#081120; border:1px solid var(--border); border-radius:12px; padding:12px;
+    box-shadow:0 16px 40px rgba(2,6,23,0.6);
+  }
+  .identity-wrap:hover .identity-card,
+  .identity-wrap:focus-within .identity-card {
+    display:block;
+  }
+  .identity-card h3 {
+    margin:0 0 8px; font-size:12px; color:var(--fg);
+  }
+  .identity-grid {
+    display:grid; grid-template-columns: max-content 1fr; gap:6px 10px; font-size:12px;
+  }
+  .identity-grid dt { color:var(--muted); }
+  .identity-grid dd { margin:0; color:var(--fg); }
+  .graph-toolbar {
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;
+  }
+  .graph-controls {
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+  }
+  .graph-controls label {
+    display:inline-flex; gap:6px; align-items:center; padding:5px 8px;
+    border:1px solid var(--border); border-radius:999px; background:var(--panel2);
+    font-size:12px; color:var(--fg);
+  }
+  .graph-status-row {
+    display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;
+  }
+  .graph-status-copy { color:var(--muted); font-size:12px; }
 
   /* Sortable headers */
   table th[data-sort] { cursor:pointer; user-select:none; }
@@ -357,6 +428,7 @@
             <select id="nodes-filter-area" class="filter-select"><option value="">all areas</option></select>
             <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
           </div>
+          <div id="nodes-filter-summary" class="filter-summary" hidden></div>
           <div style="overflow-x:auto;">
             <table id="nodes-table">
               <thead>
@@ -430,7 +502,7 @@
 
   <section id="tab-graph" class="tab-panel">
     <div class="card full">
-      <div class="toolbar">
+      <div class="graph-toolbar">
         <h2 style="margin:0; flex:1;">Network Graph</h2>
         <label for="graph-link-density" class="rail-sub">Link density</label>
         <select id="graph-link-density" class="filter-select">
@@ -441,12 +513,20 @@
         <select id="graph-area-filter" class="filter-select">
           <option value="">all areas</option>
         </select>
-        <label><input type="checkbox" id="graph-group-duplicates"> group duplicates</label>
-        <label><input type="checkbox" id="graph-overlay-recent-changes"> recent changes</label>
-        <label><input type="checkbox" id="graph-overlay-weak-links"> weak links</label>
-        <label><input type="checkbox" id="graph-overlay-unstable"> unstable</label>
-        <label><input type="checkbox" id="graph-show-phantoms"> show phantoms</label>
-        <button id="graph-relayout">Re-layout</button>
+        <div class="graph-controls">
+          <label><input type="checkbox" id="graph-group-areas" checked> group by area</label>
+          <label><input type="checkbox" id="graph-group-duplicates"> highlight duplicates</label>
+          <label><input type="checkbox" id="graph-overlay-recent-changes"> recent changes</label>
+          <label><input type="checkbox" id="graph-overlay-weak-links"> weak links</label>
+          <label><input type="checkbox" id="graph-overlay-unstable"> unstable paths</label>
+          <label><input type="checkbox" id="graph-show-phantoms"> show phantoms</label>
+        </div>
+        <button id="graph-refresh" class="action-btn">Refresh graph</button>
+        <button id="graph-relayout" class="action-btn">Re-layout</button>
+      </div>
+      <div class="graph-status-row">
+        <span id="graph-live-pill" class="pill muted">graph snapshot idle</span>
+        <span id="graph-status-copy" class="graph-status-copy">Open the graph to load a stable snapshot you can inspect without live rerenders.</span>
       </div>
       <div id="graph-risk-strip" class="warnings-row" style="margin-bottom:10px;">
         <span class="warn-chip info">Graph diagnostics are computed server-side when available.</span>
@@ -691,6 +771,74 @@ function rssiEdgeColor(rssi) {
   if (rssi >= -85) return '#ca8a04';
   return '#dc2626';
 }
+function compactSerial(serial) {
+  if (!serial) return '';
+  const text = String(serial).trim();
+  if (text.length <= 10) return text;
+  return text.slice(0, 4) + '…' + text.slice(-4);
+}
+function partitionShortId(partitionId) {
+  if (partitionId == null) return '—';
+  return String(partitionId).slice(-4).toUpperCase();
+}
+function nodeDisplayName(node) {
+  return node.display_name || node.friendly_name || shortEui(node.eui64);
+}
+function graphAreaName(node) {
+  const area = node && node.area_name ? String(node.area_name).trim() : '';
+  return area || 'Unassigned';
+}
+function deviceIdentityRows(node) {
+  return [
+    ['Manufacturer', node.manufacturer],
+    ['Model', node.model],
+    ['Serial', node.serial_number],
+    ['Software', node.sw_version],
+    ['Hardware', node.hw_version],
+    ['EUI64', node.eui64],
+  ].filter((row) => row[1]);
+}
+function duplicateHardwareKey(node) {
+  if (!node) return '';
+  const vendor = node.vendor_id || '';
+  const product = node.product_id || '';
+  const serial = node.serial_number || '';
+  if (!vendor || !product || !serial) return '';
+  return [vendor, product, serial].join('|');
+}
+function renderGraphAreaFilterOptions(nodes) {
+  const host = $('#graph-area-filter');
+  if (!host) return;
+  const prev = host.value;
+  const areas = Array.from(new Set((nodes || []).map(graphAreaName))).sort((a, b) => a.localeCompare(b));
+  host.innerHTML = '<option value="">all areas</option>';
+  for (const area of areas) {
+    const opt = document.createElement('option');
+    opt.value = area;
+    opt.textContent = area;
+    host.appendChild(opt);
+  }
+  if (prev && areas.includes(prev)) host.value = prev;
+}
+function renderNodesFilterSummary() {
+  const host = $('#nodes-filter-summary');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!networkPartitionFilter) {
+    host.hidden = true;
+    return;
+  }
+  host.hidden = false;
+  const pill = el('span', { class: 'pill running' }, 'partition ' + partitionShortId(networkPartitionFilter));
+  const copy = el('span', { class: 'graph-status-copy' }, 'Filtering the node table to the selected partition.');
+  const clear = el('button', { class: 'action-btn', type: 'button' }, 'Clear partition filter');
+  clear.addEventListener('click', () => {
+    networkPartitionFilter = '';
+    renderNodesFilterSummary();
+    rerenderNodes();
+  });
+  host.append(pill, copy, clear);
+}
 
 document.querySelectorAll('nav.tabs button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -699,7 +847,7 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
     btn.classList.add('active');
     document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
     renderChatSuggestions();
-    if (btn.dataset.tab === 'graph') renderGraph();
+    if (btn.dataset.tab === 'graph') renderGraph({ force: graphNeedsRefresh || !graphSnapshot });
   });
 });
 
@@ -716,6 +864,14 @@ let selectedNodeEui = null;
 let lastChatAgents = [];
 let chatDefaultLabel = 'Home Assistant default';
 let chatSending = false;
+let networkPartitionFilter = '';
+let graphSnapshot = null;
+let graphSnapshotIncludesPhantoms = false;
+let graphHistoryDiff = null;
+let graphNeedsRefresh = true;
+let graphLastFetchedAt = null;
+let graphSelection = null;
+let graphRefreshInFlight = false;
 const chatState = { conversationId: null, messages: [] };
 let nodesSort = { key: null, dir: 'asc' };  // null => server "worst first" default
 const SEV_RANK = { critical: 0, error: 0, warning: 1, warn: 1, info: 2, notice: 3 };
@@ -1397,7 +1553,8 @@ function renderPartitionsCard(s) {
     return;
   }
   const splitBrain = parts.length > 1;
-  const ul = el('ul', {style:'margin:0; padding-left:18px; line-height:1.7;'});
+  const list = el('div', { class: 'partition-list' });
+  const names = new Map((s.all_nodes || []).map((node) => [String(node.eui64 || '').toLowerCase(), nodeDisplayName(node)]));
   for (const pp of parts) {
     const leadName = pp.leader_name
       ? escapeHtml(pp.leader_name)
@@ -1409,11 +1566,32 @@ function renderPartitionsCard(s) {
     const netName = pp.network_name ? (' · <code>' + escapeHtml(pp.network_name) + '</code>') : '';
     const partTag = '<code>' + String(pp.partition_id).slice(-4).toUpperCase() + '</code>';
     const brain = splitBrain ? ' <span class="pill bad" title="More than one partition observed">split</span>' : '';
-    ul.appendChild(el('li', {html:
-      partTag + brain + ' · leader ' + leadName + ' · ' + count + ' node' + (count === 1 ? '' : 's') + channel + netName
-    }));
+    const members = (pp.members || []).map((eui) => names.get(String(eui || '').toLowerCase()) || shortEui(String(eui || ''))).slice(0, 4);
+    const preview = members.length
+      ? members.join(', ') + ((count > members.length) ? (' +' + (count - members.length) + ' more') : '')
+      : 'No member list captured yet.';
+    const btn = el('button', {
+      class: 'partition-chip' + (String(networkPartitionFilter || '') === String(pp.partition_id || '') ? ' active' : ''),
+      type: 'button',
+    });
+    btn.innerHTML =
+      '<div class="partition-chip-head">'
+      + '<div class="partition-chip-title">' + partTag + brain + ' · ' + count + ' node' + (count === 1 ? '' : 's') + '</div>'
+      + '<span class="pill muted">show members</span>'
+      + '</div>'
+      + '<div class="partition-chip-meta">leader ' + leadName + channel + netName + '</div>'
+      + '<div class="partition-members-preview">Members: ' + escapeHtml(preview) + '</div>';
+    btn.addEventListener('click', () => {
+      const next = String(networkPartitionFilter || '') === String(pp.partition_id || '') ? '' : String(pp.partition_id || '');
+      networkPartitionFilter = next;
+      renderPartitionsCard(s);
+      renderNodesFilterSummary();
+      rerenderNodes();
+      document.getElementById('nodes-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    list.appendChild(btn);
   }
-  pBody.appendChild(ul);
+  pBody.appendChild(list);
 }
 
 function renderNetwork(s) {
@@ -1435,21 +1613,28 @@ function renderNetwork(s) {
     areaSelect.appendChild(opt);
   }
   if (prevArea && areas.includes(prevArea)) areaSelect.value = prevArea;
+  renderGraphAreaFilterOptions(nodes);
+  if (networkPartitionFilter && !nodes.some((node) => String(node.partition_id || '') === String(networkPartitionFilter))) {
+    networkPartitionFilter = '';
+  }
 
   renderHeadline(s);
   renderHotSpots(s);
   renderIssues(s);
   renderPartitionsCard(s);
+  renderNodesFilterSummary();
   renderNodesTable(nodes);
 }
 
 function applyNodeFilters(nodes) {
+  const showPhantoms = !!$('#show-phantoms').checked;
   const statusF = $('#nodes-filter-status').value;
   const roleF = $('#nodes-filter-role').value;
   const areaF = $('#nodes-filter-area').value;
   const q = ($('#nodes-search').value || '').trim().toLowerCase();
   return nodes.filter(n => {
     if (n.status === 'phantom' && !showPhantoms && statusF !== 'phantom') return false;
+    if (networkPartitionFilter && String(n.partition_id || '') !== String(networkPartitionFilter)) return false;
     if (statusF && n.status !== statusF) return false;
     if (roleF) {
       const isLeader = n.routing_role === 'leader';
@@ -1522,17 +1707,31 @@ function renderNodesTable(nodes) {
     const rssi = sig.rssi;
     const lqi  = sig.lqi;
     const tr = el('tr', {'data-eui': n.eui64 || ''});
-    const nameMain =
-      (n.display_name || '<span class="muted">unnamed</span>') +
-      (n.status === 'phantom' ? ' <span class="pill warn">phantom</span>' : '');
-    const metaBits = [];
-    if (n.manufacturer) metaBits.push(escapeHtml(n.manufacturer));
-    if (n.model) metaBits.push(escapeHtml(n.model));
-    if (n.sw_version) metaBits.push('sw ' + escapeHtml(n.sw_version));
-    const nameSub = metaBits.length
-      ? '<div class="parent-hint">' + metaBits.join(' · ') + '</div>'
+    const deviceName = n.display_name ? escapeHtml(n.display_name) : '<span class="muted">unnamed</span>';
+    const phantomBadge = n.status === 'phantom' ? ' <span class="pill warn">phantom</span>' : '';
+    const serialBadge = n.serial_number
+      ? '<span class="serial-chip" title="Full serial in identity card">SN ' + escapeHtml(compactSerial(n.serial_number)) + '</span>'
       : '';
-    const nameCell = el('td', {html: nameMain + nameSub});
+    const identityRows = deviceIdentityRows(n);
+    const identityCard = identityRows.length
+      ? '<span class="identity-wrap">'
+          + '<span class="identity-trigger" tabindex="0">identity</span>'
+          + '<span class="identity-card">'
+            + '<h3>' + deviceName + '</h3>'
+            + '<dl class="identity-grid">'
+            + identityRows.map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd>').join('')
+            + '</dl>'
+          + '</span>'
+        + '</span>'
+      : '';
+    const nameCell = el('td', {html:
+      '<div class="name-cell-main">'
+      + '<span class="name-cell-title">' + deviceName + '</span>'
+      + phantomBadge
+      + serialBadge
+      + identityCard
+      + '</div>'
+    });
     const areaCell = el('td', {html:
       n.area_name
         ? escapeHtml(n.area_name)
@@ -1705,25 +1904,85 @@ if (diagnosticsAdvancedToggle) {
 
 let cy = null;
 let graphInitErr = false;
+const GRAPH_REFRESH_INTERVAL_MS = 10000;
 
-// When loaded via plain <script> tags, cytoscape-fcose auto-registers itself
-// as the 'fcose' layout on the global cytoscape. We attempt to use it for
-// dramatically better node separation, and fall back to tuned built-in cose
-// when the CDN is unreachable.
+function renderGraphStatus() {
+  const pill = $('#graph-live-pill');
+  const copy = $('#graph-status-copy');
+  if (!pill || !copy) return;
+  if (graphRefreshInFlight) {
+    pill.className = 'pill running';
+    pill.textContent = 'loading graph';
+    copy.textContent = 'Fetching a fresh topology snapshot and retained history diff.';
+    return;
+  }
+  if (!graphSnapshot) {
+    pill.className = 'pill muted';
+    pill.textContent = 'graph snapshot idle';
+    copy.textContent = 'Open the graph to load a stable snapshot you can inspect without live rerenders.';
+    return;
+  }
+  if (graphNeedsRefresh) {
+    pill.className = 'pill warn';
+    pill.textContent = 'new live data available';
+    copy.textContent = 'The dashboard refreshed in the background. Your current graph stays stable until you click Refresh graph.';
+    return;
+  }
+  pill.className = 'pill good';
+  pill.textContent = 'snapshot ' + fmtAge(graphLastFetchedAt ? new Date(graphLastFetchedAt).toISOString() : null);
+  copy.textContent = 'Graph interactions are preserved until you choose to refresh or relayout.';
+}
+
+function graphNodeIndex() {
+  const out = new Map();
+  for (const node of ((lastStatus && lastStatus.all_nodes) || [])) {
+    if (node && node.eui64) out.set(String(node.eui64).toLowerCase(), node);
+  }
+  return out;
+}
+
+async function fetchGraphHistoryDiff() {
+  try {
+    const history = await fetchJSON('v1/topology/history?limit=2');
+    const snapshots = (history && history.snapshots) || [];
+    if (!Array.isArray(snapshots) || snapshots.length < 2) return null;
+    return await fetchJSON(
+      'v1/topology/history/diff?snapshot_id_a=' + encodeURIComponent(snapshots[1].snapshot_id)
+      + '&snapshot_id_b=' + encodeURIComponent(snapshots[0].snapshot_id)
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+async function ensureGraphSnapshot(force = false) {
+  const includePhantoms = !!$('#graph-show-phantoms').checked;
+  if (!force && graphSnapshot && graphSnapshotIncludesPhantoms === includePhantoms) {
+    return graphSnapshot;
+  }
+  graphRefreshInFlight = true;
+  renderGraphStatus();
+  try {
+    graphSnapshot = await fetchJSON('v1/topology?include_phantoms=' + (includePhantoms ? '1' : '0'));
+    graphSnapshotIncludesPhantoms = includePhantoms;
+    graphHistoryDiff = await fetchGraphHistoryDiff();
+    graphNeedsRefresh = false;
+    graphLastFetchedAt = Date.now();
+    return graphSnapshot;
+  } finally {
+    graphRefreshInFlight = false;
+    renderGraphStatus();
+  }
+}
+
 function fcoseAvailable() {
   try {
-    // cytoscape-fcose extends cytoscape with a private symbol; the safest
-    // probe is to check if running a no-op layout with name 'fcose' throws.
-    // We do that lazily inside renderGraph via try/catch, but also gate on
-    // a module-presence sniff so we don't spam errors on every render.
     return !!(window.cytoscapeFcose || window['cytoscape-fcose']
       || (typeof cytoscape !== 'undefined' && cytoscape.layouts && cytoscape.layouts.fcose));
   } catch (_) { return false; }
 }
 
 function graphLayoutOptions(nodeCount, { randomize = true } = {}) {
-  // Edge length grows with node count so dense networks spread out and
-  // sparse ones don't fly apart.
   const ideal = Math.max(120, Math.min(240, 90 + nodeCount * 6));
   const common = {
     animate: false,
@@ -1756,8 +2015,6 @@ function graphLayoutOptions(nodeCount, { randomize = true } = {}) {
   });
 }
 
-// Iteratively push apart any node pairs whose centers are within their
-// combined radius + margin. Bounded to ~60 passes so this never freezes.
 function separateOverlappingNodes(cy, margin = 18, maxPasses = 60) {
   const nodes = cy.nodes();
   for (let pass = 0; pass < maxPasses; pass++) {
@@ -1789,14 +2046,10 @@ function separateOverlappingNodes(cy, margin = 18, maxPasses = 60) {
   cy.fit(undefined, 40);
 }
 
-// Run the layout, catching the case where fcose was detected but the layout
-// engine still rejects it (e.g. extension partially loaded). Always finishes
-// with the overlap-separation pass.
 function runGraphLayout(cy, opts) {
   try {
     cy.layout(opts).run();
   } catch (_) {
-    // Force the cose fallback.
     const fallback = Object.assign({}, opts, {
       name: 'cose', componentSpacing: 140, nodeOverlap: 40,
     });
@@ -1812,11 +2065,263 @@ function runGraphLayout(cy, opts) {
   separateOverlappingNodes(cy);
 }
 
-async function renderGraph() {
-  const showP = $('#graph-show-phantoms').checked;
+function graphDuplicateGroups() {
+  const groups = new Map();
+  for (const node of ((lastStatus && lastStatus.all_nodes) || [])) {
+    const key = duplicateHardwareKey(node);
+    if (!key) continue;
+    const list = groups.get(key) || [];
+    list.push(node.eui64);
+    groups.set(key, list);
+  }
+  return groups;
+}
+
+function graphRecentNodeIds() {
+  const ids = new Set();
+  const diff = graphHistoryDiff || {};
+  for (const node of (diff.added_nodes || [])) if (node && node.eui64) ids.add(node.eui64);
+  for (const node of (diff.changed_nodes || [])) if (node && node.eui64) ids.add(node.eui64);
+  return ids;
+}
+
+function graphNodeMeta(eui) {
+  const fromStatus = graphNodeIndex().get(String(eui || '').toLowerCase());
+  if (fromStatus) return fromStatus;
+  return ((graphSnapshot && graphSnapshot.nodes) || []).find((node) => String(node.eui64 || '').toLowerCase() === String(eui || '').toLowerCase()) || null;
+}
+
+function graphAreaId(areaName) {
+  return 'area:' + String(areaName || 'Unassigned').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+function buildGraphElements(snapshot) {
+  const statusIndex = graphNodeIndex();
+  const showAreaGroups = !!$('#graph-group-areas').checked;
+  const areaFilter = $('#graph-area-filter').value || '';
+  const densityFilter = $('#graph-link-density').value || 'all';
+  const duplicateGroups = graphDuplicateGroups();
+  const elements = [];
+  const visibleNodeIds = new Set();
+  const areaIds = new Set();
+
+  for (const raw of (snapshot.nodes || [])) {
+    const merged = Object.assign({}, raw, statusIndex.get(String(raw.eui64 || '').toLowerCase()) || {});
+    const areaName = graphAreaName(merged);
+    if (areaFilter && areaName !== areaFilter) continue;
+    const dupKey = duplicateHardwareKey(merged);
+    const dupCount = dupKey ? ((duplicateGroups.get(dupKey) || []).length) : 0;
+    const isRouter = ['leader', 'router', 'reed'].includes(merged.routing_role);
+    if (showAreaGroups) {
+      const areaId = graphAreaId(areaName);
+      if (!areaIds.has(areaId)) {
+        areaIds.add(areaId);
+        elements.push({ data: { id: areaId, label: areaName, is_area_group: '1' } });
+      }
+    }
+    elements.push({ data: {
+      id: merged.eui64,
+      parent: showAreaGroups ? graphAreaId(areaName) : undefined,
+      label: nodeDisplayName(merged),
+      color: roleColorForGraph({
+        routing_role: merged.routing_role,
+        device_kind: merged.device_kind || (isRouter ? 'router' : (merged.routing_role === 'sleepy_end_device' ? 'sed' : 'fed')),
+        status: merged.status,
+      }),
+      kind: merged.routing_role === 'leader' ? 'leader' : (merged.routing_role || merged.device_kind || 'unknown'),
+      size: isRouter ? 38 : 20,
+      area_name: areaName,
+      partition_id: merged.partition_id,
+      status: merged.status,
+      duplicate_count: dupCount,
+    }});
+    visibleNodeIds.add(merged.eui64);
+  }
+
+  for (const link of (snapshot.links || [])) {
+    const from = link.from || link.source;
+    const to = link.to || link.target;
+    if (!from || !to) continue;
+    if (!visibleNodeIds.has(from) || !visibleNodeIds.has(to)) continue;
+    const tags = new Set(link.tags || []);
+    const weak = tags.has('weak_link') || tags.has('high_error');
+    const unstable = tags.has('high_error') || tags.has('asymmetric');
+    if (densityFilter === 'strongest' && (link.edge_class === 'route' || weak)) continue;
+    const edgeClass = link.edge_class || 'other';
+    const key = edgeClass + ':' + from + '->' + to + ':' + (link.source || '');
+    elements.push({ data: {
+      id: key,
+      source: from,
+      target: to,
+      from,
+      to,
+      color: rssiEdgeColor(link.rssi_avg != null ? link.rssi_avg : link.rssi),
+      edge_class: edgeClass,
+      label: (link.rssi_avg != null ? (link.rssi_avg + ' dBm') : ''),
+      tags: Array.from(tags).join(', '),
+      weak_link: weak ? '1' : '0',
+      unstable: unstable ? '1' : '0',
+    }});
+  }
+  return elements;
+}
+
+function renderGraphAreaRecommendations() {
+  const host = $('#graph-area-recommendations');
+  if (!host) return;
+  const selectedArea = graphSelection && graphSelection.type === 'node'
+    ? graphAreaName(graphNodeMeta(graphSelection.id) || {})
+    : ($('#graph-area-filter').value || '');
+  const nodes = ((lastStatus && lastStatus.all_nodes) || []).filter((node) => !selectedArea || graphAreaName(node) === selectedArea);
+  if (!nodes.length) {
+    host.innerHTML = '<h2>Area Recommendations</h2><div class="muted">Select an area or node to compare local graph conditions.</div>';
+    return;
+  }
+  const partitions = Array.from(new Set(nodes.map((node) => node.partition_id).filter((value) => value != null)));
+  const duplicates = nodes.filter((node) => duplicateHardwareKey(node)).length;
+  host.innerHTML = '<h2>Area Recommendations</h2>'
+    + '<div class="item-title">' + escapeHtml(selectedArea || 'Visible graph scope') + '</div>'
+    + '<div class="item-meta">' + nodes.length + ' nodes · ' + partitions.length + ' partition(s)</div>'
+    + '<div class="rail-sub" style="margin-top:8px;">'
+    + 'Use the area filter and <b>group by area</b> to compare room-sized submeshes. '
+    + (duplicates ? (duplicates + ' device(s) in this scope share duplicate-hardware identity signals. ') : '')
+    + 'Turn on weak-link overlays to see where this area loses path quality first.'
+    + '</div>';
+}
+
+function renderGraphHistorySummary() {
+  const host = $('#graph-history-summary');
+  if (!host) return;
+  const diff = graphHistoryDiff || null;
+  if (!diff || !diff.summary) {
+    host.innerHTML = '<h2>History Summary</h2><div class="muted">No retained topology diff is available yet for recent-change overlays.</div>';
+    return;
+  }
+  const summary = diff.summary || {};
+  let detail = 'Latest retained diff: '
+    + (summary.added_node_count || 0) + ' added, '
+    + (summary.removed_node_count || 0) + ' removed, '
+    + (summary.changed_node_count || 0) + ' changed node(s).';
+  if (graphSelection && graphSelection.type === 'node') {
+    const selected = String(graphSelection.id || '').toLowerCase();
+    const added = (diff.added_nodes || []).find((row) => String(row.eui64 || '').toLowerCase() === selected);
+    const changed = (diff.changed_nodes || []).find((row) => String(row.eui64 || '').toLowerCase() === selected);
+    if (added) detail += ' This node is newly present in the latest retained snapshot.';
+    else if (changed) detail += ' This node changed between the latest retained snapshots.';
+  }
+  host.innerHTML = '<h2>History Summary</h2><div class="rail-sub">' + escapeHtml(detail) + '</div>';
+}
+
+function renderGraphInspector() {
+  const host = $('#graph-inspector');
+  if (!host) return;
+  if (!graphSelection) {
+    host.innerHTML = '<h2>Inspector</h2><div class="muted">Select a node or edge to inspect graph evidence.</div>';
+    return;
+  }
+  if (graphSelection.type === 'node') {
+    const node = graphNodeMeta(graphSelection.id) || {};
+    const rows = [
+      ['Area', graphAreaName(node)],
+      ['Partition', node.partition_id != null ? partitionShortId(node.partition_id) : null],
+      ['Role', node.routing_role || node.device_kind],
+      ['Status', node.status],
+      ['Parent', node.parent_name || node.parent_eui64],
+      ['Next hop', (node.next_hop_to_otbr && (node.next_hop_to_otbr.name || node.next_hop_to_otbr.eui64)) || null],
+      ['Serial', node.serial_number],
+    ].filter((row) => row[1]);
+    host.innerHTML = '<h2>Inspector</h2>'
+      + '<div class="item-title">' + escapeHtml(nodeDisplayName(node)) + '</div>'
+      + '<dl class="identity-grid" style="margin-top:10px;">'
+      + rows.map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd>').join('')
+      + '</dl>';
+    return;
+  }
+  if (!cy) return;
+  const edge = cy.getElementById(graphSelection.id);
+  if (!edge || edge.empty()) {
+    host.innerHTML = '<h2>Inspector</h2><div class="muted">Select a node or edge to inspect graph evidence.</div>';
+    return;
+  }
+  const source = graphNodeMeta(edge.data('source')) || { eui64: edge.data('source') };
+  const target = graphNodeMeta(edge.data('target')) || { eui64: edge.data('target') };
+  host.innerHTML = '<h2>Inspector</h2>'
+    + '<div class="item-title">' + escapeHtml(nodeDisplayName(source)) + ' → ' + escapeHtml(nodeDisplayName(target)) + '</div>'
+    + '<dl class="identity-grid" style="margin-top:10px;">'
+    + '<dt>Type</dt><dd>' + escapeHtml(edge.data('edge_class') || 'other') + '</dd>'
+    + '<dt>Signal</dt><dd>' + escapeHtml(edge.data('label') || '—') + '</dd>'
+    + '<dt>Tags</dt><dd>' + escapeHtml(edge.data('tags') || 'none') + '</dd>'
+    + '</dl>';
+}
+
+function applyGraphPresentation() {
+  if (!cy) return;
+  cy.elements().removeClass('focus-muted recent-change weak-focus unstable-focus duplicate-focus selected-focus');
+  const highlight = new Set();
+  const recentIds = graphRecentNodeIds();
+  if ($('#graph-overlay-recent-changes').checked) {
+    cy.nodes().forEach((node) => {
+      if (recentIds.has(node.id())) {
+        node.addClass('recent-change');
+        highlight.add(node.id());
+      }
+    });
+  }
+  if ($('#graph-overlay-weak-links').checked) {
+    cy.edges().forEach((edge) => {
+      if (edge.data('weak_link') === '1') {
+        edge.addClass('weak-focus');
+        highlight.add(edge.id());
+        highlight.add(edge.source().id());
+        highlight.add(edge.target().id());
+      }
+    });
+  }
+  if ($('#graph-overlay-unstable').checked) {
+    cy.edges().forEach((edge) => {
+      if (edge.data('unstable') === '1') {
+        edge.addClass('unstable-focus');
+        highlight.add(edge.id());
+        highlight.add(edge.source().id());
+        highlight.add(edge.target().id());
+      }
+    });
+  }
+  if ($('#graph-group-duplicates').checked) {
+    cy.nodes().forEach((node) => {
+      if (Number(node.data('duplicate_count') || 0) > 1) {
+        node.addClass('duplicate-focus');
+        highlight.add(node.id());
+      }
+    });
+  }
+  if (graphSelection) {
+    const element = cy.getElementById(graphSelection.id);
+    if (element && !element.empty()) {
+      element.addClass('selected-focus');
+      highlight.add(element.id());
+      if (element.isEdge && element.isEdge()) {
+        highlight.add(element.source().id());
+        highlight.add(element.target().id());
+      }
+    }
+  }
+  if (highlight.size) {
+    cy.elements().addClass('focus-muted');
+    highlight.forEach((id) => {
+      const element = cy.getElementById(id);
+      if (element && !element.empty()) element.removeClass('focus-muted');
+    });
+  }
+  renderGraphInspector();
+  renderGraphAreaRecommendations();
+  renderGraphHistorySummary();
+}
+
+async function renderGraph(options = {}) {
   let topo;
   try {
-    topo = await fetchJSON('v1/topology?include_phantoms=' + (showP ? '1' : '0'));
+    topo = await ensureGraphSnapshot(!!options.force);
   } catch (e) {
     document.getElementById('cy').textContent = 'Failed to load topology: ' + e.message;
     return;
@@ -1829,39 +2334,8 @@ async function renderGraph() {
     return;
   }
 
-  const elements = [];
-  const nodeKind = {};
-  for (const n of (topo.nodes || [])) {
-    const k = (n.routing_role === 'leader') ? 'leader'
-            : (['router','reed','end_device','sleepy_end_device'].includes(n.routing_role) ? n.routing_role
-            : 'unknown');
-    nodeKind[n.eui64] = k;
-    const isRouter = (n.routing_role === 'leader' || n.routing_role === 'router' || n.routing_role === 'reed');
-    elements.push({ data: {
-      id: n.eui64,
-      label: (n.friendly_name || (n.eui64 || '').slice(-4).toUpperCase()),
-      color: roleColorForGraph({ routing_role: n.routing_role, device_kind: (isRouter ? 'router' : (n.routing_role === 'sleepy_end_device' ? 'sed' : 'fed')), is_phantom: (n.status === 'phantom') }),
-      kind: k,
-      size: isRouter ? 36 : 18,
-    }});
-  }
-  // Edges arrive from /v1/topology already deduped and classified server-side
-  // (`edge_class` is 'peer'|'child'|'route'|'other'). We just render.
-  for (const l of (topo.links || [])) {
-    if (!l.from || !l.to) continue;
-    const cls = l.edge_class || 'other';
-    const key = (cls === 'peer')
-      ? 'peer:' + [l.from, l.to].sort().join('|')
-      : 'edge:' + l.from + '->' + l.to + '#' + (l.source || '') + (l.is_child ? ':child' : '');
-    elements.push({ data: {
-      id: key,
-      source: l.from,
-      target: l.to,
-      color: rssiEdgeColor(l.rssi_avg != null ? l.rssi_avg : l.rssi),
-      edge_class: cls,
-      label: (l.rssi_avg != null ? (l.rssi_avg + ' dBm') : ''),
-    }});
-  }
+  const viewport = cy ? { zoom: cy.zoom(), pan: cy.pan() } : null;
+  const elements = buildGraphElements(topo);
 
   if (cy) { cy.destroy(); cy = null; }
   cy = cytoscape({
@@ -1876,38 +2350,52 @@ async function renderGraph() {
         'width': 'data(size)', 'height': 'data(size)',
         'border-width': 1, 'border-color': '#0b1220',
       }},
+      { selector: ':parent', style: {
+        'background-color': '#0b2236',
+        'background-opacity': 0.14,
+        'border-color': '#1d4ed8',
+        'border-width': 1,
+        'label': 'data(label)',
+        'color': '#93c5fd',
+        'font-size': 11,
+        'text-valign': 'top',
+        'text-halign': 'center',
+        'text-margin-y': -10,
+        'padding': 18,
+      }},
       { selector: 'node[kind = "leader"]', style: {
         'border-width': 3, 'border-color': '#fca5a5',
         'font-weight': 'bold',
       }},
-      // Router-router peer edges: solid, thick, no arrows (symmetric peer link)
       { selector: 'edge[edge_class = "peer"]', style: {
         'line-color': 'data(color)', 'width': 4,
         'curve-style': 'bezier', 'opacity': 0.95,
         'target-arrow-shape': 'none',
       }},
-      // Router-child edges: thin, dashed, arrow toward child
       { selector: 'edge[edge_class = "child"]', style: {
         'line-color': 'data(color)', 'width': 1.5,
         'curve-style': 'bezier', 'opacity': 0.7,
         'line-style': 'dashed',
         'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(color)',
       }},
-      // Multi-hop route-table entries: dotted
       { selector: 'edge[edge_class = "route"]', style: {
         'line-color': 'data(color)', 'width': 1,
         'curve-style': 'bezier', 'opacity': 0.4,
         'line-style': 'dotted',
         'target-arrow-shape': 'vee', 'target-arrow-color': 'data(color)',
       }},
-      // Fallback
       { selector: 'edge[edge_class = "other"]', style: {
         'line-color': 'data(color)', 'width': 1.5,
         'curve-style': 'bezier', 'opacity': 0.6,
         'target-arrow-shape': 'triangle', 'target-arrow-color': 'data(color)',
       }},
-      // Path-highlight classes (toggled by click-to-trace).
       { selector: '.path-faded', style: { 'opacity': 0.12 } },
+      { selector: '.focus-muted', style: { 'opacity': 0.14 } },
+      { selector: 'node.recent-change', style: { 'border-color': '#f59e0b', 'border-width': 4 } },
+      { selector: 'edge.weak-focus', style: { 'line-color': '#f97316', 'target-arrow-color': '#f97316', 'width': 5, 'opacity': 1 } },
+      { selector: 'edge.unstable-focus', style: { 'line-style': 'dashed', 'line-color': '#ef4444', 'target-arrow-color': '#ef4444', 'width': 5, 'opacity': 1 } },
+      { selector: 'node.duplicate-focus', style: { 'border-color': '#22d3ee', 'border-width': 4 } },
+      { selector: '.selected-focus', style: { 'opacity': 1 } },
       { selector: 'node.path-hit', style: {
         'border-width': 4, 'border-color': '#facc15',
         'opacity': 1,
@@ -1925,13 +2413,32 @@ async function renderGraph() {
     wheelSensitivity: 0.2,
   });
 
-  // Run the real layout via the wrapper so fcose→cose fallback works on init.
   runGraphLayout(cy, graphLayoutOptions(cy.nodes().length, { randomize: true }));
+  if (viewport) {
+    cy.zoom(viewport.zoom);
+    cy.pan(viewport.pan);
+  }
 
-  // Click-to-trace: walk next_hop_to_otbr from the clicked node to the OTBR
-  // and highlight the entire forwarding path. Click background to clear.
-  cy.on('tap', 'node', (evt) => highlightPathToOtbr(evt.target.id()));
-  cy.on('tap', (evt) => { if (evt.target === cy) clearPathHighlight(); });
+  cy.on('tap', 'node', async (evt) => {
+    graphSelection = { type: 'node', id: evt.target.id() };
+    await highlightPathToOtbr(evt.target.id());
+    applyGraphPresentation();
+  });
+  cy.on('tap', 'edge', (evt) => {
+    graphSelection = { type: 'edge', id: evt.target.id() };
+    clearPathHighlight();
+    applyGraphPresentation();
+  });
+  cy.on('tap', (evt) => {
+    if (evt.target === cy) {
+      graphSelection = null;
+      clearPathHighlight();
+      applyGraphPresentation();
+    }
+  });
+
+  applyGraphPresentation();
+  renderGraphStatus();
 }
 
 function clearPathHighlight() {
@@ -1969,11 +2476,22 @@ async function highlightPathToOtbr(startEui) {
   }
 }
 
-$('#graph-show-phantoms').addEventListener('change', renderGraph);
+$('#graph-show-phantoms').addEventListener('change', () => renderGraph({ force: true }));
+$('#graph-refresh').addEventListener('click', () => renderGraph({ force: true }));
 $('#graph-relayout').addEventListener('click', () => {
   if (!cy) return;
   runGraphLayout(cy, graphLayoutOptions(cy.nodes().length, { randomize: true }));
 });
+$('#graph-area-filter').addEventListener('change', () => {
+  graphSelection = null;
+  renderGraph();
+});
+$('#graph-link-density').addEventListener('change', () => renderGraph());
+$('#graph-group-areas').addEventListener('change', () => renderGraph());
+$('#graph-group-duplicates').addEventListener('change', () => applyGraphPresentation());
+$('#graph-overlay-recent-changes').addEventListener('change', () => applyGraphPresentation());
+$('#graph-overlay-weak-links').addEventListener('change', () => applyGraphPresentation());
+$('#graph-overlay-unstable').addEventListener('change', () => applyGraphPresentation());
 
 // Nodes-table filter / search / sort handlers re-render only the table.
 function rerenderNodes() {
@@ -2015,6 +2533,7 @@ async function refresh() {
   try {
     const includeP = $('#show-phantoms').checked || $('#graph-show-phantoms').checked;
     const s = await fetchJSON('v1/dev/status?include_phantoms=' + (includeP ? '1' : '0'));
+    const previousNodes = (lastStatus && lastStatus.all_nodes) || [];
     lastStatus = s;
     $('#addon-version').textContent = s.addon_version || '—';
     $('#last-refresh').textContent = new Date().toLocaleTimeString();
@@ -2023,7 +2542,11 @@ async function refresh() {
     renderDiagnostics(s);
     renderChatSuggestions();
     await refreshAssessmentData({ preserveHistory: true });
-    if (document.getElementById('tab-graph').classList.contains('active')) renderGraph();
+    const nextNodes = s.all_nodes || [];
+    const changed = JSON.stringify(previousNodes.map((node) => [node.eui64, node.partition_id, node.area_name, node.status]))
+      !== JSON.stringify(nextNodes.map((node) => [node.eui64, node.partition_id, node.area_name, node.status]));
+    if (changed) graphNeedsRefresh = true;
+    renderGraphStatus();
   } catch (e) {
     $('#last-refresh').textContent = 'error: ' + e.message;
   }

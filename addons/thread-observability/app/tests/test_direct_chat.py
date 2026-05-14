@@ -1851,3 +1851,30 @@ def test_direct_chat_turn_clamps_forced_internal_tool_answer_that_requests_node_
         "inventory and the returned counter series was empty."
     )
     assert [row["name"] for row in result["tool_calls"]] == ["get_counter_series", "get_counter_series"]
+
+
+def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
+    policies = direct_chat._answer_review_policies(
+        internal_tool_request=False,
+        counter_question=False,
+        history_comparison_question=False,
+        node_question=False,
+    )
+
+    assert any("OTBR slug" in policy for policy in policies)
+    assert any("restarting the pipeline" in policy for policy in policies)
+
+
+def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message="How do I fix this from the dashboard?",
+        candidate_text="Open the dashboard, set OTBR slug, then restart pipeline.",
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "does not expose a control" in text
+    assert "set the OTBR slug" in text
+    assert "restart the pipeline" in text

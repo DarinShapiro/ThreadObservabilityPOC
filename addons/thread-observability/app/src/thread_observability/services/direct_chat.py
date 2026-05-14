@@ -48,7 +48,10 @@ _DEFAULT_SYSTEM_PROMPT = (
     "semantics are not generic IP routing. This is an interactive troubleshooting conversation: when multiple "
     "explanations fit the evidence, name the top hypotheses and say what tool result would distinguish them. "
     "Gather obvious diagnostic context before asking the user to restate the problem. Prefer concise answers in "
-    "this order: what you found, why it matters, and what to do next. Be concise, practical, and explicit about "
+    "this order: what you found, why it matters, and what to do next. Do not tell the user to click or use a "
+    "dashboard control unless that control is actually present in the current dashboard UI. In particular, do not "
+    "suggest nonexistent actions such as setting an OTBR slug or restarting the pipeline from the dashboard. "
+    "Be concise, practical, and explicit about "
     "uncertainty when the available evidence is insufficient."
 )
 _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
@@ -67,6 +70,10 @@ _NODE_EUI64_RE = re.compile(r"\b([0-9a-f]{16})\b", re.IGNORECASE)
 _POTENTIAL_NODE_ID_RE = re.compile(r"\b([0-9a-f]{12,16})\b", re.IGNORECASE)
 _STRICT_EUI64_RE = re.compile(r"^[0-9a-f]{16}$", re.IGNORECASE)
 _NODE_HISTORY_WINDOW = timedelta(hours=2)
+_UNSUPPORTED_DASHBOARD_ACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bset\s+otbr\s+slug\b", re.IGNORECASE),
+    re.compile(r"\brestart\s+pipeline\b", re.IGNORECASE),
+)
 
 
 class DirectChatConfigError(ValueError):
@@ -838,11 +845,35 @@ def _apply_deterministic_fallbacks(
         or _history_answer_overclaims_channel_change(message, candidate_text, tool_trace)
     ):
         return _build_history_insufficient_response(tool_trace)
+    if _answer_mentions_unsupported_dashboard_action(candidate_text):
+        return _build_unsupported_dashboard_action_response(candidate_text)
     if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
         return _build_internal_tool_refusal_response(message, tool_trace)
     if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):
         return _build_counter_insufficient_response(tool_trace)
     return candidate_text
+
+
+def _answer_mentions_unsupported_dashboard_action(candidate_text: str) -> bool:
+    normalized = str(candidate_text or "").strip()
+    if not normalized:
+        return False
+    return any(pattern.search(normalized) for pattern in _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS)
+
+
+def _build_unsupported_dashboard_action_response(candidate_text: str) -> str:
+    normalized = str(candidate_text or "")
+    blocked: list[str] = []
+    if re.search(r"\bset\s+otbr\s+slug\b", normalized, re.IGNORECASE):
+        blocked.append("set the OTBR slug")
+    if re.search(r"\brestart\s+pipeline\b", normalized, re.IGNORECASE):
+        blocked.append("restart the pipeline")
+    actions = ", ".join(blocked) if blocked else "use that dashboard action"
+    return (
+        "I can’t point you to that dashboard action because the current UI does not expose a control to "
+        f"{actions}. I can still help diagnose the issue from the available Thread evidence and describe any "
+        "required manual action in plain terms instead of referring to a nonexistent button or menu."
+    )
 
 
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -868,6 +899,7 @@ def _answer_review_policies(
         "Stay grounded in the gathered evidence from this turn; do not invent facts, fields, or timestamps.",
         "If the evidence is insufficient, say so explicitly and name the missing evidence instead of guessing.",
         "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
+        "Do not suggest dashboard controls or clicks that do not exist in the current UI. Avoid nonexistent actions such as setting an OTBR slug or restarting the pipeline from the dashboard.",
     ]
     if internal_tool_request:
         policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")

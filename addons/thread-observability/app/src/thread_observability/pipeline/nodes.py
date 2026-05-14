@@ -17,6 +17,89 @@ def _utc_now() -> str:
     return datetime.now(tz=UTC).isoformat()
 
 
+def _physical_identity_key(node: dict[str, Any]) -> tuple[int, int, str] | None:
+    vid = node.get("vendor_id")
+    pid = node.get("product_id")
+    serial_number = node.get("serial_number")
+    if not isinstance(vid, int) or not isinstance(pid, int):
+        return None
+    if not isinstance(serial_number, str) or not serial_number.strip():
+        return None
+    return (vid, pid, serial_number.strip())
+
+
+def _hardware_identity_rank(node: dict[str, Any]) -> tuple[Any, ...]:
+    status_rank = {
+        "online": 4,
+        "healthy": 4,
+        "stale": 3,
+        "offline": 2,
+        "unregistered": 1,
+        "phantom": 0,
+    }
+    status = str(node.get("status") or "").lower()
+    return (
+        status_rank.get(status, -1),
+        1 if node.get("device_id") else 0,
+        str(node.get("last_referenced_at") or ""),
+        str(node.get("last_seen") or ""),
+        str(node.get("availability_checked_at") or ""),
+        str(node.get("diag_updated_at") or ""),
+        1 if node.get("partition_id") is not None else 0,
+        str(node.get("eui64") or ""),
+    )
+
+
+def collapse_duplicate_hardware_rows(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse duplicate physical-device rows to one canonical node.
+
+    The storage layer intentionally preserves every EUI64 ever seen. For
+    downstream aggregate views, though, the same physical device should not
+    appear twice just because an older commissioning row is still retained.
+
+    Rows are grouped by ``vendor_id`` / ``product_id`` / ``serial_number``.
+    The most authoritative row wins, preferring a live/registered row with the
+    freshest references. Suppressed EUI64s are surfaced on the survivor so
+    higher layers can preserve some provenance without double-counting nodes.
+    """
+    groups: dict[tuple[int, int, str], list[dict[str, Any]]] = {}
+    for node in nodes:
+        key = _physical_identity_key(node)
+        if key is not None:
+            groups.setdefault(key, []).append(node)
+
+    canonical_by_eui: dict[str, dict[str, Any]] = {}
+    suppressed_by_eui: dict[str, list[str]] = {}
+    for grouped_nodes in groups.values():
+        if len(grouped_nodes) < 2:
+            continue
+        winner = max(grouped_nodes, key=_hardware_identity_rank)
+        winner_eui = str(winner.get("eui64") or "")
+        if not winner_eui:
+            continue
+        canonical_by_eui[winner_eui] = winner
+        suppressed_by_eui[winner_eui] = sorted(
+            str(node.get("eui64") or "")
+            for node in grouped_nodes
+            if str(node.get("eui64") or "") and str(node.get("eui64") or "") != winner_eui
+        )
+
+    collapsed: list[dict[str, Any]] = []
+    for node in nodes:
+        eui = str(node.get("eui64") or "")
+        key = _physical_identity_key(node)
+        if key is None or len(groups.get(key, [])) < 2:
+            collapsed.append(node)
+            continue
+        winner = canonical_by_eui.get(eui)
+        if winner is None:
+            continue
+        clone = dict(winner)
+        clone["suppressed_duplicate_euis"] = suppressed_by_eui.get(eui, [])
+        collapsed.append(clone)
+    return collapsed
+
+
 def get_node_display_name(node: dict[str, Any]) -> str:
     """Return friendly name or abbreviated EUI64."""
     if node.get("friendly_name"):
@@ -453,7 +536,7 @@ def list_nodes_enriched(
     parent router for sleepy/end devices, partition + peer count for routers).
     """
     s = store or get_store()
-    nodes = s.list_nodes()
+    nodes = collapse_duplicate_hardware_rows(s.list_nodes())
     parent_map = _build_parent_map(s)
     peer_counts = _build_router_peer_counts(s)
     peer_map = _build_router_peers(s)
@@ -515,6 +598,7 @@ def list_nodes_enriched(
             "parent_eui64": parent_eui,
             "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
             "next_hop_to_otbr": next_hop_map.get(eui) if eui else None,
+            "suppressed_duplicate_euis": list(node.get("suppressed_duplicate_euis") or []),
         }
         # v0.9.42: SED mesh-alive enrichment. Only meaningful for sleepy
         # end devices; for everything else we omit these keys so the

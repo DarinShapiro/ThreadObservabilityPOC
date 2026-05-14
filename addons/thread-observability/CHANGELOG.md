@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.33 — Dashboard UX and graph usability
+
+This release packages the current dashboard usability improvements and the
+matching direct-chat grounding guardrails.
+
+**Highlights:**
+- makes partition cards actionable so the Network table can be filtered to a
+  selected partition directly from the partition summary
+- moves device identity details into a compact hover card with serial-number
+  badges so node rows stay readable while preserving hardware context
+- stabilizes the Graph tab by keeping an interactive snapshot instead of
+  rerendering the graph every 10 seconds during background refreshes
+- adds graph area grouping, area filtering, richer overlays, and inspector
+  panels to make topology exploration more usable during troubleshooting
+- prevents direct chat from suggesting dashboard actions that do not exist,
+  such as setting the OTBR slug or restarting the pipeline from the UI
+
 ## 0.11.32 — Chat tool status-filter fix
 
 This patch fixes a live MCP inconsistency discovered during dashboard chat

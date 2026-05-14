@@ -67,6 +67,42 @@ def test_list_nodes_enriched(store) -> None:
     assert all("status" in n for n in enriched)
 
 
+def test_list_nodes_enriched_collapses_duplicate_hardware_rows(store) -> None:
+    stale_eui = "11" * 8
+    live_eui = "22" * 8
+
+    store.upsert_node_metadata(
+        eui64=stale_eui,
+        friendly_name="Hall Sensor",
+        device_id="old-device",
+        vendor_id=123,
+        product_id=456,
+        serial_number="SN-1",
+    )
+    store.upsert_node_metadata(
+        eui64=live_eui,
+        friendly_name="Hall Sensor",
+        device_id="live-device",
+        vendor_id=123,
+        product_id=456,
+        serial_number="SN-1",
+    )
+    store.set_node_diagnostics(stale_eui, partition_id=1111, routing_role="router")
+    store.set_node_diagnostics(live_eui, partition_id=2222, routing_role="router")
+    store.apply_availability([
+        (stale_eui, False, "ha_entity"),
+        (live_eui, True, "ha_entity"),
+    ])
+    store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+
+    enriched = nodes.list_nodes_enriched(store=store)
+
+    assert len(enriched) == 1
+    assert enriched[0]["eui64"] == live_eui
+    assert enriched[0]["partition_id"] == 2222
+    assert enriched[0]["suppressed_duplicate_euis"] == [stale_eui]
+
+
 def test_get_latest_signal_strength(store) -> None:
     store.insert_event(eui64="aabbccddeeff0011", type="parent_response", rssi=-65, lqi=200)
     store.insert_event(eui64="aabbccddeeff0011", type="parent_response", rssi=-70, lqi=180)
