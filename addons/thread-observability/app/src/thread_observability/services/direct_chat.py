@@ -310,10 +310,13 @@ def _looks_like_tool_deferral(text: str) -> bool:
         "you can call",
         "you can query the",
         "you can check the",
+        "we would need to call",
+        "i would need to call",
         "use the \"",
         "use the get_",
         "to investigate further, you can use",
         "to proceed, i would like to know",
+        "to proceed, i would need to know",
         "it's also a good idea to check",
         "you should use the",
         "i recommend analyzing",
@@ -346,6 +349,28 @@ def _looks_like_tool_deferral(text: str) -> bool:
             "query_history",
             "get_topology_history_entry",
             "list_topology_history",
+            "get_node_history",
+        )
+    )
+
+
+def _answer_requests_user_node_selection(candidate_text: str) -> bool:
+    normalized = " ".join(str(candidate_text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        phrase in normalized
+        for phrase in (
+            "please provide the eui64",
+            "provide the eui64 of the node",
+            "provide the node's eui64",
+            "please provide the node's eui64",
+            "which node you would like to investigate",
+            "i would need to know which node",
+            "need to know which node",
+            "selected eui64",
+            "selected node",
+            "none of them have a selected eui64",
         )
     )
 
@@ -652,12 +677,12 @@ def _counter_tool_arguments_are_invalid(tool_trace: list[dict[str, Any]]) -> boo
         arguments = row.get("arguments") if isinstance(row.get("arguments"), dict) else {}
         if name in {"get_counter_series", "analyze_node"}:
             eui64 = arguments.get("eui64")
-            if eui64 and not _is_valid_eui64(eui64):
+            if not _is_valid_eui64(eui64):
                 return True
         if name == "compare_node_counters":
             for key in ("eui64_a", "eui64_b"):
                 eui64 = arguments.get(key)
-                if eui64 and not _is_valid_eui64(eui64):
+                if not _is_valid_eui64(eui64):
                     return True
     return False
 
@@ -694,6 +719,7 @@ def _counter_answer_mentions_unsupported_evidence(candidate_text: str) -> bool:
             "nodes configuration",
             "node that changed channels",
             '"channel_change" counter',
+            "get_node_history",
         )
     )
 
@@ -703,6 +729,7 @@ def _counter_answer_is_unreliable(candidate_text: str, tool_trace: list[dict[str
         _counter_tool_arguments_are_invalid(tool_trace)
         or _counter_evidence_is_empty(tool_trace)
         or _response_references_unknown_node(candidate_text, tool_trace)
+        or _answer_requests_user_node_selection(candidate_text)
         or _counter_answer_mentions_unsupported_evidence(candidate_text)
     )
 
@@ -729,13 +756,40 @@ def _build_internal_tool_refusal_response(message: str, tool_trace: list[dict[st
     return prefix + "The available evidence is insufficient to answer that from the current turn."
 
 
+def _internal_tool_answer_needs_refusal(message: str, candidate_text: str, tool_trace: list[dict[str, Any]]) -> bool:
+    normalized = " ".join(str(candidate_text or "").lower().split())
+    if _looks_like_tool_deferral(candidate_text) or _counter_answer_mentions_unsupported_evidence(candidate_text):
+        return True
+    if _looks_like_counter_or_rf_question(message) and (
+        _counter_tool_arguments_are_invalid(tool_trace) or _counter_evidence_is_empty(tool_trace)
+    ):
+        return True
+    return any(
+        phrase in normalized
+        for phrase in (
+            "please provide the friendly name",
+            "please provide the eui64",
+            "please provide the node's eui64",
+            "provide the eui64 of the node",
+            "which node you would like to investigate",
+            "selected node",
+            "selected eui64",
+            "none of them have a selected eui64",
+            "i need to know which node",
+            "i would need to know which node",
+            "i do not have any information about which node",
+            "i don't have any information about which node",
+        )
+    )
+
+
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
     if name in {"get_counter_series", "analyze_node"}:
         eui64 = arguments.get("eui64")
-        if eui64 and not _is_valid_eui64(eui64):
+        if not _is_valid_eui64(eui64):
             return {"error": "invalid eui64 argument: expected 16 hex characters"}
     if name == "compare_node_counters":
-        invalid_keys = [key for key in ("eui64_a", "eui64_b") if arguments.get(key) and not _is_valid_eui64(arguments.get(key))]
+        invalid_keys = [key for key in ("eui64_a", "eui64_b") if not _is_valid_eui64(arguments.get(key))]
         if invalid_keys:
             return {"error": f"invalid eui64 argument(s): {', '.join(invalid_keys)} must be 16 hex characters"}
     return None
@@ -1219,13 +1273,13 @@ async def direct_chat_turn(
                     }
                 )
                 continue
-            if history_comparison_question and _history_answer_overclaims_channel_change(message, candidate_text, tool_trace):
+            if history_comparison_question and (
+                _history_comparison_is_unreliable(message, tool_trace)
+                or _history_answer_overclaims_channel_change(message, candidate_text, tool_trace)
+            ):
                 final_text = _build_history_insufficient_response(tool_trace)
                 break
-            if internal_tool_request and (
-                _looks_like_tool_deferral(candidate_text)
-                or _counter_answer_mentions_unsupported_evidence(candidate_text)
-            ):
+            if internal_tool_request and _internal_tool_answer_needs_refusal(message, candidate_text, tool_trace):
                 final_text = _build_internal_tool_refusal_response(message, tool_trace)
                 break
             if counter_question and _counter_answer_is_unreliable(candidate_text, tool_trace):

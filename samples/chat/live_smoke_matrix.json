@@ -30,7 +30,9 @@
       "expect_any_contains": [
         "channel-specific history",
         "retained history is insufficient",
-        "can't determine whether the Thread channel changed"
+        "can't determine whether the Thread channel changed",
+        "cannot determine if the channel changed",
+        "available evidence does not include channel-specific data"
       ],
       "forbid_contains": [
         "call the get_",
@@ -55,7 +57,9 @@
         "configuration history",
         "reset history",
         "call the get_",
-        "internal mcp"
+        "internal mcp",
+        "get_node_history",
+        "please provide the node's eui64"
       ],
       "require_tool_names": [
         "get_mesh_state"
@@ -76,7 +80,9 @@
         "you should call",
         "use the get_",
         "get_counter_series",
-        "internal mcp tool"
+        "internal mcp tool",
+        "please provide the eui64",
+        "which node you would like to investigate"
       ],
       "require_tool_names": [
         "list_all_nodes"

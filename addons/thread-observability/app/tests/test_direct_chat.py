@@ -1292,123 +1292,20 @@ def test_direct_chat_turn_does_not_map_topology_diff_to_channel_stability_claim(
     )
 
 
-def test_direct_chat_turn_falls_back_when_counter_answer_relies_on_unsupported_config_history(monkeypatch) -> None:
+def test_direct_chat_turn_refuses_internal_tool_request_when_counter_call_uses_null_eui64(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
-        model="llama-4-scout",
+        model="llama3.1-8b",
         base_url="https://api.cerebras.ai/v1",
         api_key="secret",
         temperature=0.2,
     )
-    calls: list[dict[str, object]] = []
 
     async def fake_post_chat_completions(target, body):  # noqa: ANN001
-        calls.append(json.loads(json.dumps(body)))
-        if len(calls) == 1:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call-counters",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "get_counter_series",
-                                        "arguments": '{"eui64":"e6684b9903e8970f","counter_names":["tx_retry","tx_err_cca"]}',
-                                    },
-                                }
-                            ],
-                        }
-                    }
-                ]
-            }
-        if len(calls) == 2:
-            return {
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "content": "The node shows no useful RF counters, so this was likely a configuration history or reset history event rather than RF.",
-                        }
-                    }
-                ]
-            }
-        note = next(
-            msg for msg in calls[2]["messages"]
-            if msg.get("role") == "system" and "Do not recommend config-history or reset-history evidence" in str(msg.get("content") or "")
-        )
-        assert "mesh inventory" in note["content"]
-        return {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "The node shows no useful RF counters, so this was likely a configuration history or reset history event rather than RF.",
-                    }
-                }
-            ]
-        }
-
-    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
-        if name == "get_counter_series":
-            assert arguments["eui64"] == "e6684b9903e8970f"
-            return {
-                "data": {"series": [], "eui64": "e6684b9903e8970f"},
-                "meta": {"tool": name},
-            }
-        if name == "list_all_nodes":
-            return {
-                "data": {
-                    "count": 1,
-                    "nodes": [
-                        {
-                            "eui64": "e6684b9903e8970f",
-                            "friendly_name": "Family Room Track Lights",
-                            "status": "online",
-                            "partition_id": 1846206278,
-                        }
-                    ],
-                },
-                "meta": {"tool": name},
-            }
-        raise AssertionError(f"unexpected tool {name}")
-
-    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
-    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
-
-    result = asyncio.run(
-        direct_chat.direct_chat_turn(
-            target=target,
-            message="Did RF conditions cause the channel change?",
-            rendered_message="User message: Did RF conditions cause the channel change?",
-            conversation_id=None,
-        )
-    )
-
-    assert result["response"]["text"] == (
-        "I can't determine whether RF conditions caused the channel change from the available evidence because the returned counter series was empty."
-    )
-    assert result["tool_calls"][0]["name"] == "get_counter_series"
-    assert result["tool_calls"][1]["name"] == "list_all_nodes"
-    assert len(calls) == 3
-
-
-def test_direct_chat_turn_refuses_internal_tool_request_without_unsupported_config_history(monkeypatch) -> None:
-    target = direct_chat.DirectChatTarget(
-        provider="cerebras",
-        model="llama-4-scout",
-        base_url="https://api.cerebras.ai/v1",
-        api_key="secret",
-        temperature=0.2,
-    )
-    calls: list[dict[str, object]] = []
-
-    async def fake_post_chat_completions(target, body):  # noqa: ANN001
-        calls.append(json.loads(json.dumps(body)))
-        if len(calls) == 1:
+        if not hasattr(fake_post_chat_completions, "calls"):
+            fake_post_chat_completions.calls = []
+        fake_post_chat_completions.calls.append(json.loads(json.dumps(body)))
+        if len(fake_post_chat_completions.calls) == 1:
             return {
                 "choices": [
                     {
@@ -1421,7 +1318,7 @@ def test_direct_chat_turn_refuses_internal_tool_request_without_unsupported_conf
                                     "type": "function",
                                     "function": {
                                         "name": "get_counter_series",
-                                        "arguments": '{"eui64":"selected_node_eui64","counter_names":["tx_retry","tx_err_cca"]}',
+                                        "arguments": '{"eui64":null,"counter_names":["tx_retry","tx_err_cca"]}',
                                     },
                                 }
                             ],
@@ -1429,47 +1326,22 @@ def test_direct_chat_turn_refuses_internal_tool_request_without_unsupported_conf
                     }
                 ]
             }
-        if len(calls) == 2:
+        if len(fake_post_chat_completions.calls) >= 2:
             return {
                 "choices": [
                     {
                         "message": {
                             "role": "assistant",
-                            "content": "",
-                            "tool_calls": [
-                                {
-                                    "id": "call-counters-2",
-                                    "type": "function",
-                                    "function": {
-                                        "name": "get_counter_series",
-                                        "arguments": '{"eui64":"selected_node_eui64","counter_names":["tx_retry","tx_err_cca"]}',
-                                    },
-                                },
-                                {
-                                    "id": "call-inventory",
-                                    "type": "function",
-                                    "function": {"name": "list_all_nodes", "arguments": "{}"},
-                                },
-                            ],
+                            "content": (
+                                "Based on the current mesh state, I can see that there are 19 nodes in the mesh, but I do not "
+                                "have any information about the selected node, as its EUI64 is still null. Therefore, the "
+                                "currently available evidence is insufficient to determine whether RF caused the channel change."
+                            ),
                         }
                     }
                 ]
             }
-        return {
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": (
-                            "Unfortunately, the available evidence is insufficient to determine which node's channel "
-                            "change was caused by RF. The current mesh inventory only shows the status and EUI64 of each "
-                            "node, but does not provide any information about channel changes or RF events. To proceed with "
-                            "the investigation, I would need to gather more evidence, such as counter series or config history."
-                        ),
-                    }
-                }
-            ]
-        }
+        raise AssertionError("unexpected model call")
 
     async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
         if name == "list_all_nodes":
@@ -1506,5 +1378,177 @@ def test_direct_chat_turn_refuses_internal_tool_request_without_unsupported_conf
         "change from the available evidence because the counter query was not grounded to a real 16-hex EUI64 from the mesh "
         "inventory and the returned counter series was empty."
     )
-    assert [row["name"] for row in result["tool_calls"][:2]] == ["get_counter_series", "get_counter_series"]
+    assert result["tool_calls"][0]["result"] == {"error": "invalid eui64 argument: expected 16 hex characters"}
+    assert result["tool_calls"][-1]["name"] == "list_all_nodes"
+
+
+def test_direct_chat_turn_uses_history_insufficient_fallback_when_only_current_mesh_state_is_available(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        if not hasattr(fake_post_chat_completions, "calls"):
+            fake_post_chat_completions.calls = []
+        fake_post_chat_completions.calls.append(json.loads(json.dumps(body)))
+        if len(fake_post_chat_completions.calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-mesh-1",
+                                    "type": "function",
+                                    "function": {"name": "get_mesh_state", "arguments": "{}"},
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        if len(fake_post_chat_completions.calls) >= 2:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "The current channel is 11. However, the available evidence is insufficient to determine if "
+                                "the channel changed between now and 24h ago."
+                            ),
+                        }
+                    }
+                ]
+            }
+        raise AssertionError("unexpected model call")
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "get_mesh_state":
+            return {
+                "data": {
+                    "channel": 11,
+                    "node_count": 19,
+                    "partition_id": 1846206278,
+                },
+                "meta": {"tool": name},
+            }
+        if name == "list_topology_history":
+            return {
+                "data": {
+                    "count": 0,
+                    "snapshots": [],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did the channel change between now and 24h ago?",
+            rendered_message="User message: Did the channel change between now and 24h ago?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I don't have channel-specific history for the retained comparison anchors, so I can't determine whether the "
+        "Thread channel changed in that window."
+    )
+    assert [row["name"] for row in result["tool_calls"]] == ["get_mesh_state", "list_topology_history"]
+
+
+def test_direct_chat_turn_falls_back_when_rf_answer_invents_get_node_history_and_requests_eui64(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-counters-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "get_counter_series",
+                                        "arguments": '{"eui64":null,"counter_names":["tx_retry","tx_err_cca"]}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "Unfortunately, the available evidence is still insufficient to determine if RF conditions caused "
+                            "the channel change. We would need to call the get_node_history function and know the node's EUI64. "
+                            "Please provide the node's EUI64 so I can continue with the analysis."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        if name == "list_all_nodes":
+            return {
+                "data": {
+                    "count": 1,
+                    "nodes": [
+                        {
+                            "eui64": "e6684b9903e8970f",
+                            "friendly_name": "Family Room Track Lights",
+                            "status": "online",
+                            "partition_id": 1846206278,
+                        }
+                    ],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Did RF conditions cause the channel change?",
+            rendered_message="User message: Did RF conditions cause the channel change?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == (
+        "I can't determine whether RF conditions caused the channel change from the available evidence because the counter "
+        "query was not grounded to a real 16-hex EUI64 from the mesh inventory and the returned counter series was empty."
+    )
+    assert result["tool_calls"][0]["result"] == {"error": "invalid eui64 argument: expected 16 hex characters"}
     assert result["tool_calls"][-1]["name"] == "list_all_nodes"

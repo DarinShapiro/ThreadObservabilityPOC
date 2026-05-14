@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.24 — Browser-authenticated smoke and stronger RF fallback clamping
+
+- **Browser-authenticated live smoke.** Added a reusable browser-side smoke helper for HA ingress sessions where terminal requests return `401 Unauthorized`, so live chat validation can reuse the same matrix and telemetry scoring inside an authenticated dashboard session.
+- **RF fallback hardening.** Direct chat now treats missing/null node EUI64 grounding, invented follow-up tools like `get_node_history`, and answers that ask the user to provide node selection/EUI64 as unreliable for RF/channel-cause questions, then clamps them to deterministic insufficient-evidence responses instead of drifting.
+- **History smoke refinement.** Relaxed history-channel smoke expectations to accept the broader grounded live answer shape when the tool trace clearly says channel-specific data is unavailable, without treating that as a false failure.
+
 ## 0.11.23 — Internal-tool refusal grounding and smoke matrix refinement
 
 - **Internal-tool refusal guard.** Direct chat now converts internal-tool-request prompts into a deterministic refusal when the answer still drifts into unsupported evidence like config/reset history, instead of leaking those suggestions back to the user.
