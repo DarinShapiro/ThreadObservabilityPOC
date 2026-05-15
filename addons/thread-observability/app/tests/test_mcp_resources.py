@@ -18,7 +18,7 @@ def test_mcp_resources_rest_list_and_read() -> None:
     assert glossary.status_code == 200
     glossary_payload = glossary.json()
     assert glossary_payload["resource"]["uri"] == "thread-observability://glossary"
-    assert "Thread Observability Glossary" in glossary_payload["contents"]
+    assert "Thread Mesh Detective Glossary" in glossary_payload["contents"]
 
 
 def test_mcp_jsonrpc_resources_support() -> None:

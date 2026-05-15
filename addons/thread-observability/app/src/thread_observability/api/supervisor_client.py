@@ -361,13 +361,18 @@ def _addon_update_entity_id(name: str | None, slug: str) -> str:
     """Compute the HA ``update.*`` entity id for a Supervisor add-on.
 
     Home Assistant's ``hassio`` integration creates one entity per add-on
-    named ``update.<slugified_name>_update``. For "Thread Observability"
-    this is ``update.thread_observability_update``. The slugifier mirrors
-    HA Core's: lowercased, non-alphanumerics replaced by underscores,
-    collapsed/trimmed.
+    named ``update.<slugified>_update``. For continuity, this code
+    intentionally derives the identifier from the add-on slug (dropping
+    any repository prefix like ``9e5048e8_``) rather than from the
+    human-facing add-on name, so rebranding does not change the entity id.
     """
     import re
-    source = (name or slug or "addon").lower()
+
+    # Supervisor store slugs can be ``<repo>_<slug>``; the HA entity id is
+    # derived from the actual add-on slug portion.
+    slug_suffix = (slug or "").split("_", 1)[1] if "_" in (slug or "") else (slug or "")
+
+    source = (slug_suffix or slug or name or "addon").lower()
     s = re.sub(r"[^a-z0-9]+", "_", source).strip("_")
     return f"update.{s}_update"
 
@@ -735,5 +740,3 @@ async def get_ha_device_registry() -> list[dict[str, Any]]:
     except Exception:
         pass
     return []
-
-

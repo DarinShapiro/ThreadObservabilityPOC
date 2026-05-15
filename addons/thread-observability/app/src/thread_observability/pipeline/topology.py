@@ -1,4 +1,4 @@
-"""Topology graph builder for Thread Observability.
+"""Topology graph builder for Thread Mesh Detective.
 
 Builds a deterministic network snapshot from the SQLite ``nodes`` and
 ``links`` tables. Links are populated by ``discover_and_sync`` from the

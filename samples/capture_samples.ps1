@@ -33,7 +33,7 @@ function Save-Mcp {
     }
 }
 
-# Thread Observability addon MCP tools
+# Thread Mesh Detective add-on MCP tools
 Save-Mcp "list_all_nodes"
 Save-Mcp "query_events" @{ limit = 20 }
 Save-Mcp "get_health_snapshot"

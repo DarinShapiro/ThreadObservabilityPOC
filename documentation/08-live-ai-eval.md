@@ -1,6 +1,6 @@
 # Live AI Evaluation
 
-This document is the live-test artifact for the Thread Observability chat assistant.
+This document is the live-test artifact for the Thread Mesh Detective chat assistant.
 
 Use it on real builds against a running Home Assistant instance to answer one question: can the AI actually help diagnose the full range of Thread-network problems we care about, using the available tools correctly and honestly?
 

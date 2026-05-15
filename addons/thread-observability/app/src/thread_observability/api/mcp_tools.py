@@ -1,4 +1,4 @@
-"""MCP JSON-RPC 2.0 server + REST API for Thread Observability add-on."""
+"""MCP JSON-RPC 2.0 server + REST API for Thread Mesh Detective add-on."""
 
 from __future__ import annotations
 
@@ -1354,7 +1354,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
 # ---------------------------------------------------------------------------
 
 def create_mcp_app() -> FastAPI:
-    app = FastAPI(title="Thread Observability MCP", version=ADDON_VERSION)
+    app = FastAPI(title="Thread Mesh Detective MCP", version=ADDON_VERSION)
     sse_sessions: dict[str, asyncio.Queue[dict[str, Any]]] = {}
 
     def _jsonrpc_ok(req_id: Any, result: Any) -> dict[str, Any]:

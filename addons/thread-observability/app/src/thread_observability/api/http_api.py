@@ -1,4 +1,4 @@
-"""Core HTTP API for Thread Observability add-on.
+"""Core HTTP API for Thread Mesh Detective add-on.
 
 Serves a lightweight status dashboard at ``/`` (Ingress entry-point) plus
 JSON endpoints under ``/v1/...`` for programmatic access.
@@ -577,7 +577,7 @@ async def _lifespan(app: FastAPI):
 def create_core_app() -> FastAPI:
     """Create the core FastAPI application."""
     app = FastAPI(
-        title="Thread Observability Core API",
+        title="Thread Mesh Detective Core API",
         version=ADDON_VERSION,
         lifespan=_lifespan,
     )
