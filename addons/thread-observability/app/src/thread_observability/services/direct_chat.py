@@ -77,8 +77,12 @@ _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\btoggl(?:e|ed)\b.*\bcurrent\b.*\bhistorical\b.*\bview", re.IGNORECASE),
     re.compile(r"\bcurrent\s+and\s+historical\s+views\b", re.IGNORECASE),
     re.compile(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", re.IGNORECASE),
-    re.compile(r"\bgraph\s+diagnostics\s+(?:panel|view)\b", re.IGNORECASE),
+    re.compile(r"\bgraph\s+diagnostics\W*(?:panel|view)\b", re.IGNORECASE),
     re.compile(r"\bweak\s+links?\s+(?:view|panel|details?)\b", re.IGNORECASE),
+    re.compile(r"\bhover\b.*\bhighlighted\s+edge\b", re.IGNORECASE),
+    re.compile(r"\bhover\b.*\bedge\b.*\blink[-\s]?quality\s+metrics\b", re.IGNORECASE),
+    re.compile(r"\bweak[_\s-]?link\s+flag\s+clears?\b", re.IGNORECASE),
+    re.compile(r"\bdiagnostics\s+panel\b.*\bweak[_\s-]?link\b", re.IGNORECASE),
 )
 _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:1|one)\s+partition\b", re.IGNORECASE),
@@ -999,11 +1003,19 @@ def _build_unsupported_dashboard_action_response(message: str, candidate_text: s
     if re.search(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", normalized, re.IGNORECASE):
         blocked.append("click a warning icon in graph diagnostics")
         graph_detail_blocked = True
-    if re.search(r"\bgraph\s+diagnostics\s+(?:panel|view)\b", normalized, re.IGNORECASE):
+    if re.search(r"\bgraph\s+diagnostics\W*(?:panel|view)\b", normalized, re.IGNORECASE):
         blocked.append("open a graph diagnostics panel")
         graph_detail_blocked = True
     if re.search(r"\bweak\s+links?\s+(?:view|panel|details?)\b", normalized, re.IGNORECASE):
         blocked.append("open a weak-links detail view")
+        graph_detail_blocked = True
+    if re.search(r"\bhover\b.*\bhighlighted\s+edge\b", normalized, re.IGNORECASE) or re.search(
+        r"\bhover\b.*\bedge\b.*\blink[-\s]?quality\s+metrics\b", normalized, re.IGNORECASE
+    ):
+        blocked.append("hover over highlighted edges for hidden link metrics")
+        graph_detail_blocked = True
+    if re.search(r"\bweak[_\s-]?link\s+flag\s+clears?\b", normalized, re.IGNORECASE):
+        blocked.append("wait for a weak-link flag to clear from a diagnostics panel")
         graph_detail_blocked = True
     if graph_detail_blocked and _looks_like_chokepoint_question(message):
         return (

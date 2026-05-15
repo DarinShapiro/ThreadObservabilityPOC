@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.46 — Chokepoint UI-hallucination follow-up
+
+This patch fixes the remaining live chokepoint answer defect found after the
+0.11.45 rollout.
+
+**Fixes:**
+- expands the thin unsupported-UI safety rail so quoted "graph diagnostics"
+  phrasing still triggers the chokepoint fallback instead of slipping through
+- blocks live hallucinations that tell the operator to hover highlighted edges
+  for hidden link metrics or wait for a weak-link flag to clear from a
+  diagnostics panel that the UI does not expose
+- adds regression coverage for the exact live chokepoint answer shape observed
+  in 0.11.45
+
 ## 0.11.45 — Direct-chat live follow-up
 
 This patch fixes the remaining live direct-chat failure found immediately after

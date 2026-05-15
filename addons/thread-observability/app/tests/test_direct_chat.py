@@ -2130,6 +2130,25 @@ def test_apply_deterministic_fallbacks_rewrites_chokepoint_graph_ui_hallucinatio
     assert "specific edge endpoints" in text
 
 
+def test_apply_deterministic_fallbacks_rewrites_live_chokepoint_graph_ui_hallucination() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message="What are the chokepoints in my network right now?",
+        candidate_text=(
+            "The dashboard's \"graph diagnostics\" panel flags 10 edges as weak_link or high_error. Inspect the weak "
+            "links in the topology view: hover over each highlighted edge to see the exact link-quality metrics, then "
+            "verify that the weak_link flag clears from the diagnostics panel after adjustment."
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "most likely chokepoints" in text
+    assert "does not expose a graph diagnostics panel" in text
+    assert "specific edge endpoints" in text
+
+
 def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradiction() -> None:
     text = direct_chat._apply_deterministic_fallbacks(
         message=(
