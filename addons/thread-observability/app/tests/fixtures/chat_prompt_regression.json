@@ -1,0 +1,104 @@
+{
+  "prompts": [
+    {
+      "id": "overall-health",
+      "category": "health",
+      "prompt": "What is the overall health of my Thread network right now?"
+    },
+    {
+      "id": "current-risks",
+      "category": "health",
+      "prompt": "What looks most risky in my Thread network right now?"
+    },
+    {
+      "id": "partition-reason",
+      "category": "topology",
+      "prompt": "Why are there two Thread networks showing up right now?"
+    },
+    {
+      "id": "chokepoints",
+      "category": "topology",
+      "prompt": "What are the chokepoints in my Thread network right now?"
+    },
+    {
+      "id": "weak-links",
+      "category": "rf",
+      "prompt": "Which links look weak or error-prone right now?"
+    },
+    {
+      "id": "node-specific-status",
+      "category": "node",
+      "prompt": "Tell me what is going on with node e6684b9903e8970f."
+    },
+    {
+      "id": "node-parent-instability",
+      "category": "node",
+      "prompt": "Has Family Room Track Lights been changing parents or partitions recently?"
+    },
+    {
+      "id": "offline-nodes",
+      "category": "availability",
+      "prompt": "Which offline or stale nodes should I investigate first?"
+    },
+    {
+      "id": "sleepy-end-device",
+      "category": "availability",
+      "prompt": "Why does my sleepy end device keep dropping off the network?"
+    },
+    {
+      "id": "commissioning-failure",
+      "category": "commissioning",
+      "prompt": "A new Matter device will not commission onto Thread. What should I check first?"
+    },
+    {
+      "id": "commissioning-timeout",
+      "category": "commissioning",
+      "prompt": "Why would commissioning time out even though the border router is online?"
+    },
+    {
+      "id": "credentials-mismatch",
+      "category": "commissioning",
+      "prompt": "Could stale credentials or an old dataset explain why a device cannot join Thread?"
+    },
+    {
+      "id": "duplicate-device",
+      "category": "identity",
+      "prompt": "Why is the same physical device showing up under multiple EUI64s?"
+    },
+    {
+      "id": "border-router-path",
+      "category": "routing",
+      "prompt": "Which routers look like the most important path to the border router right now?"
+    },
+    {
+      "id": "retry-counters",
+      "category": "counters",
+      "prompt": "Do retry or frame-error counters suggest RF problems right now?"
+    },
+    {
+      "id": "channel-change",
+      "category": "history",
+      "prompt": "Did the Thread channel change recently, and if so what evidence supports that?"
+    },
+    {
+      "id": "topology-change",
+      "category": "history",
+      "prompt": "What changed in the topology over the last 24 hours?"
+    },
+    {
+      "id": "re-attach-events",
+      "category": "history",
+      "prompt": "Which devices have re-attached recently, and does that suggest instability?"
+    },
+    {
+      "id": "router-placement",
+      "category": "mitigation",
+      "prompt": "Would adding or moving a router likely improve this Thread mesh?"
+    },
+    {
+      "id": "otbr-health",
+      "category": "infrastructure",
+      "prompt": "Does the current evidence point to a border-router problem or a mesh problem?"
+    }
+  ]
+}

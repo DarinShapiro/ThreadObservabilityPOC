@@ -2074,9 +2074,9 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
         node_question=False,
     )
 
-    assert any("OTBR slug" in policy for policy in policies)
-    assert any("restarting the pipeline" in policy for policy in policies)
-    assert any("Page context" in policy for policy in policies)
+    assert any("UI controls" in policy for policy in policies)
+    assert any("backend evidence only" in policy for policy in policies)
+    assert any("interface advice" in policy for policy in policies)
 
 
 def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() -> None:
@@ -2089,7 +2089,8 @@ def test_apply_deterministic_fallbacks_rewrites_nonexistent_dashboard_actions() 
         internal_tool_request=False,
     )
 
-    assert "does not expose a control" in text
+    assert "operator action" in text
+    assert "nonexistent interface step" in text
     assert "set the OTBR slug" in text
     assert "restart the pipeline" in text
 
@@ -2107,7 +2108,7 @@ def test_apply_deterministic_fallbacks_rewrites_nonexistent_graph_history_guidan
         internal_tool_request=False,
     )
 
-    assert "does not expose a control" in text
+    assert "operator action" in text
     assert "toggle between current and historical partition views" in text
     assert "click a warning icon in graph diagnostics" in text
 
@@ -2126,7 +2127,7 @@ def test_apply_deterministic_fallbacks_rewrites_chokepoint_graph_ui_hallucinatio
     )
 
     assert "most likely chokepoints" in text
-    assert "does not expose a graph diagnostics panel" in text
+    assert "gathered backend evidence in this turn does not name the exact node pairs" in text
     assert "specific edge endpoints" in text
 
 
@@ -2145,7 +2146,7 @@ def test_apply_deterministic_fallbacks_rewrites_live_chokepoint_graph_ui_halluci
     )
 
     assert "most likely chokepoints" in text
-    assert "does not expose a graph diagnostics panel" in text
+    assert "gathered backend evidence in this turn does not name the exact node pairs" in text
     assert "specific edge endpoints" in text
 
 

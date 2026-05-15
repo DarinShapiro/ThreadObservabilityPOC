@@ -131,7 +131,8 @@ def test_chat_agents_endpoint_includes_direct_agent_even_if_ai_enabled_false(mon
 
 def test_chat_turn_success_shapes_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_process(*, text: str, conversation_id: str | None = None, agent_id: str | None = None) -> dict[str, object]:
-        assert "Page context:" in text
+        assert "Page context:" not in text
+        assert text.endswith("User message: Why are there two partitions right now?")
         assert conversation_id == "conv-1"
         assert agent_id == "conversation.claude"
         return {
@@ -347,7 +348,7 @@ def test_chat_turn_injects_session_memory_on_direct_followup(monkeypatch: pytest
     assert second.json()["response"]["text"] == "Second reply"
 
 
-def test_chat_turn_injects_graph_diagnostics_into_rendered_message(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_chat_turn_does_not_inject_graph_diagnostics_into_rendered_message(monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = _chat_enabled_config(
         ai=AIConfig(
             enabled=True,
@@ -393,10 +394,11 @@ def test_chat_turn_injects_graph_diagnostics_into_rendered_message(monkeypatch: 
     ])
 
     async def fake_direct_turn(*, target, message: str, rendered_message: str, conversation_id: str | None):  # noqa: ANN001
-        assert "graph_diagnostics" in rendered_message
-        assert "split_mesh" in rendered_message
-        assert "weak_links" in rendered_message
-        assert "subtree_dependency" in rendered_message
+        assert "graph_diagnostics" not in rendered_message
+        assert "split_mesh" not in rendered_message
+        assert "weak_links" not in rendered_message
+        assert "subtree_dependency" not in rendered_message
+        assert rendered_message.endswith("User message: What is the likely choke point in this mesh, and would placement changes help?")
         return {
             "conversation_id": str(conversation_id),
             "agent_id": target.agent_id,

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.11.48 — API-only chat reasoning follow-up
+
+This patch removes UI-shaped prompt material from the direct-chat reasoning
+path and adds an API-level prompt regression corpus.
+
+**Fixes:**
+- stops injecting page-context and graph-diagnostics payloads into model-facing
+  chat prompt text so the assistant reasons from backend evidence instead of UI
+  state
+- reframes direct-chat and audit prompts around Thread-network evidence rather
+  than dashboard/UI wording
+- adds a representative `/v1/chat/turn` regression corpus that runs without UI
+  context and verifies the API prompt path stays UI-agnostic
+
 ## 0.11.47 — Unsupported-UI fallback follow-up
 
 This patch fixes the remaining live direct-chat cases where the unsupported-UI

@@ -33,14 +33,14 @@ _MAX_COUNTER_GROUNDING_RETRIES = 1
 _MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
 _MAX_EVIDENCE_MESSAGE_CHARS = 5000
 _DEFAULT_SYSTEM_PROMPT = (
-    "You are the Thread Observability dashboard troubleshooting assistant. Answer using only the provided "
-    "Thread dashboard context, the user's request, and the available diagnostic tools. "
+    "You are the Thread Observability Thread-network troubleshooting assistant. Answer using only the user's "
+    "request, evidence gathered from available diagnostic tools, and retained backend conversation context. "
     "Use tools when you need current mesh state, counters, history, or node-specific evidence. "
     "Do not tell the user to run the available diagnostic tools themselves. If a relevant tool exists, call it "
     "yourself before answering. The user does not have direct access to MCP tools, functions, or internal data "
     "services. Never tell the user to call, query, check, inspect, or use those services directly; do that "
     "yourself when possible. Ask the user only for information they uniquely have or for a physical/manual action "
-    "you cannot perform from the dashboard. "
+    "you cannot perform from the available backend evidence. "
     "Use web_search only when outside product or protocol context is actually needed. "
     "Prefer a node's friendly/display name when present; on first mention include its EUI64 only when that helps "
     "disambiguate. Ground conclusions in tool output, clearly separate observed facts from hypotheses, and mention "
@@ -49,9 +49,8 @@ _DEFAULT_SYSTEM_PROMPT = (
     "semantics are not generic IP routing. This is an interactive troubleshooting conversation: when multiple "
     "explanations fit the evidence, name the top hypotheses and say what tool result would distinguish them. "
     "Gather obvious diagnostic context before asking the user to restate the problem. Prefer concise answers in "
-    "this order: what you found, why it matters, and what to do next. Do not tell the user to click or use a "
-    "dashboard control unless that control is actually present in the current dashboard UI. In particular, do not "
-    "suggest nonexistent actions such as setting an OTBR slug or restarting the pipeline from the dashboard. "
+    "this order: what you found, why it matters, and what to do next. Do not reason from UI controls, page state, "
+    "or view-specific labels. If a claim is not present in backend evidence, do not use it. "
     "Be concise, practical, and explicit about "
     "uncertainty when the available evidence is insufficient."
 )
@@ -1027,10 +1026,9 @@ def _build_unsupported_dashboard_action_response(message: str, candidate_text: s
         or re.search(r"\bhigh[_\s-]?error\b", normalized, re.IGNORECASE)
     ):
         return (
-            "The current evidence suggests weak-link or high-error edges are the most likely chokepoints, but the current "
-            "dashboard does not expose a graph diagnostics panel or weak-links detail view that names the exact node pairs. "
-            "So I can say the chokepoints are in the weak-link set, but I cannot identify the specific edge endpoints from "
-            "this turn without inventing UI or evidence that is not present."
+            "The current evidence suggests weak-link or high-error edges are the most likely chokepoints, but the gathered "
+            "backend evidence in this turn does not name the exact node pairs. So I can say the chokepoints are in the "
+            "weak-link set, but I cannot identify the specific edge endpoints without inventing evidence that is not present."
         )
     if _looks_like_partition_summary_question(message):
         page_context = _extract_page_context_from_message(message) or {}
@@ -1047,20 +1045,20 @@ def _build_unsupported_dashboard_action_response(message: str, candidate_text: s
         if partition_count > 0 or distinct_thread_networks > 0:
             if partition_count <= 1 and distinct_thread_networks > 1:
                 return (
-                    "The current dashboard does not show two active partitions. It shows 1 partition but "
+                    "The current evidence does not show two active partitions. It shows 1 partition but "
                     f"{distinct_thread_networks} distinct Thread networks. That usually points to stale registrations, "
                     "duplicate commissioning, or mismatched device metadata rather than a live mesh split."
                 )
             return (
-                f"The current dashboard shows {partition_count} partition{'s' if partition_count != 1 else ''} and "
+                f"The current evidence shows {partition_count} partition{'s' if partition_count != 1 else ''} and "
                 f"{distinct_thread_networks} distinct Thread network{'s' if distinct_thread_networks != 1 else ''}. "
-                "So the right interpretation is the current visible topology state, not the invented dashboard action."
+                "So the right interpretation is the current topology state, not the invented operator action."
             )
     actions = ", ".join(blocked) if blocked else "use that dashboard action"
     return (
-        "I can’t point you to that dashboard action because the current UI does not expose a control to "
-        f"{actions}. I can still help diagnose the issue from the available Thread evidence and describe any "
-        "required manual action in plain terms instead of referring to a nonexistent button or menu."
+        "That recommendation depends on an operator action that is not supported by the evidence gathered in this turn: "
+        f"{actions}. I can still diagnose the issue from available Thread evidence and describe any required manual "
+        "action in plain backend terms instead of referring to a nonexistent interface step."
     )
 
 
@@ -1306,8 +1304,8 @@ def _answer_review_policies(
         "Stay grounded in the gathered evidence from this turn; do not invent facts, fields, or timestamps.",
         "If the evidence is insufficient, say so explicitly and name the missing evidence instead of guessing.",
         "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
-        "Do not suggest dashboard controls or clicks that do not exist in the current UI. Avoid nonexistent actions such as setting an OTBR slug or restarting the pipeline from the dashboard.",
-        "When the prompt includes Page context, do not contradict its visible counts or status summaries unless you explicitly explain the source disagreement.",
+        "Do not reason from UI controls, page state, or display labels. Use backend evidence only.",
+        "Do not translate missing evidence into interface advice or invented operator workflows.",
     ]
     if internal_tool_request:
         policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")
@@ -1545,7 +1543,7 @@ async def _audit_answer_candidate(
                 "role": "system",
                 "content": (
                     "You are a strict audit model for a Thread diagnostics assistant. Review the turn using the user "
-                    "question, rendered page context, available tool catalog, actual tool trace, and candidate answer. "
+                    "question, backend turn context, available tool catalog, actual tool trace, and candidate answer. "
                     "Return JSON only with this exact shape: "
                     '{"answered_question":true,"grounded_in_evidence":true,"hallucinated_ui_or_actions":false,'
                     '"tool_choice_ok":true,"missing_tool_opportunities":[],"contains_extraneous_content":false,'
@@ -1563,7 +1561,7 @@ async def _audit_answer_candidate(
                     f"{system_prompt}\n\n"
                     "User question:\n"
                     f"{user_message}\n\n"
-                    "Rendered turn context:\n"
+                    "Turn context:\n"
                     f"{context_message}\n\n"
                     "Candidate answer:\n"
                     f"{candidate_text}\n\n"

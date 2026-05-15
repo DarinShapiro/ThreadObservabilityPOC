@@ -271,16 +271,9 @@ def _render_chat_message(
             "Session memory: "
             + json.dumps(session_context, separators=(",", ":"), ensure_ascii=True)
         )
-    if page_context:
-        sections.append(
-            "Page context: "
-            + json.dumps(page_context, separators=(",", ":"), ensure_ascii=True)
-        )
     sections.append(f"User message: {text}")
     if sections:
         return "\n\n".join(sections)
-    if not page_context:
-        return text
     return text
 
 
