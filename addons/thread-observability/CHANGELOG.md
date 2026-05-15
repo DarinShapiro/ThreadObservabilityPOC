@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.47 — Unsupported-UI fallback follow-up
+
+This patch fixes the remaining live direct-chat cases where the unsupported-UI
+rail still replaced grounded answers with a generic refusal.
+
+**Fixes:**
+- keeps chokepoint prompts on the weak-link grounded fallback even when the
+  live model uses unsupported-UI phrasing that the response builder previously
+  failed to classify
+- rewrites partition prompts with invented graph-diagnostics actions into a
+  page-context-grounded explanation of 1 partition versus 2 distinct Thread
+  networks
+- adds regression coverage for the live partition-prompt failure shape seen on
+  0.11.46
+
 ## 0.11.46 — Chokepoint UI-hallucination follow-up
 
 This patch fixes the remaining live chokepoint answer defect found after the

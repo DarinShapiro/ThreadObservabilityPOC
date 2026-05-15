@@ -1017,13 +1017,45 @@ def _build_unsupported_dashboard_action_response(message: str, candidate_text: s
     if re.search(r"\bweak[_\s-]?link\s+flag\s+clears?\b", normalized, re.IGNORECASE):
         blocked.append("wait for a weak-link flag to clear from a diagnostics panel")
         graph_detail_blocked = True
-    if graph_detail_blocked and _looks_like_chokepoint_question(message):
+    if re.search(r"\bdiagnostics\s+panel\b.*\bweak[_\s-]?link\b", normalized, re.IGNORECASE):
+        blocked.append("inspect weak-link diagnostics in a hidden panel")
+        graph_detail_blocked = True
+    if _looks_like_chokepoint_question(message) and (
+        graph_detail_blocked
+        or re.search(r"\bgraph\s+diagnostics\b", normalized, re.IGNORECASE)
+        or re.search(r"\bweak[_\s-]?link\b", normalized, re.IGNORECASE)
+        or re.search(r"\bhigh[_\s-]?error\b", normalized, re.IGNORECASE)
+    ):
         return (
             "The current evidence suggests weak-link or high-error edges are the most likely chokepoints, but the current "
             "dashboard does not expose a graph diagnostics panel or weak-links detail view that names the exact node pairs. "
             "So I can say the chokepoints are in the weak-link set, but I cannot identify the specific edge endpoints from "
             "this turn without inventing UI or evidence that is not present."
         )
+    if _looks_like_partition_summary_question(message):
+        page_context = _extract_page_context_from_message(message) or {}
+        summary = page_context.get("snapshot_summary") if isinstance(page_context, dict) else {}
+        summary = summary if isinstance(summary, dict) else {}
+        try:
+            partition_count = int(summary.get("partition_count") or 0)
+        except (TypeError, ValueError):
+            partition_count = 0
+        try:
+            distinct_thread_networks = int(summary.get("distinct_thread_networks") or 0)
+        except (TypeError, ValueError):
+            distinct_thread_networks = 0
+        if partition_count > 0 or distinct_thread_networks > 0:
+            if partition_count <= 1 and distinct_thread_networks > 1:
+                return (
+                    "The current dashboard does not show two active partitions. It shows 1 partition but "
+                    f"{distinct_thread_networks} distinct Thread networks. That usually points to stale registrations, "
+                    "duplicate commissioning, or mismatched device metadata rather than a live mesh split."
+                )
+            return (
+                f"The current dashboard shows {partition_count} partition{'s' if partition_count != 1 else ''} and "
+                f"{distinct_thread_networks} distinct Thread network{'s' if distinct_thread_networks != 1 else ''}. "
+                "So the right interpretation is the current visible topology state, not the invented dashboard action."
+            )
     actions = ", ".join(blocked) if blocked else "use that dashboard action"
     return (
         "I can’t point you to that dashboard action because the current UI does not expose a control to "

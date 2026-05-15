@@ -2149,6 +2149,27 @@ def test_apply_deterministic_fallbacks_rewrites_live_chokepoint_graph_ui_halluci
     assert "specific edge endpoints" in text
 
 
+def test_apply_deterministic_fallbacks_rewrites_partition_prompt_with_ui_hallucination_to_page_context() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message=(
+            'Page context: {"snapshot_summary":{"partition_count":1,"distinct_thread_networks":2}}\n\n'
+            'User message: Why are there two partitions right now?'
+        ),
+        candidate_text=(
+            "The graph diagnostics panel shows why the mesh split. Open the panel and inspect the weak_link overlays to "
+            "see the partition boundary."
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "does not show two active partitions" in text
+    assert "2 distinct Thread networks" in text
+    assert "stale registrations" in text
+
+
 def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradiction() -> None:
     text = direct_chat._apply_deterministic_fallbacks(
         message=(
