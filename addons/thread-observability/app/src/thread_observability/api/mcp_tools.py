@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from . import supervisor_client
 from . import triage as triage_mod
 from . import counter_series as counter_series_mod
+from . import signal_series as signal_series_mod
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
 from ..pipeline import nodes as nodes_mod
@@ -682,6 +683,25 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "required": ["eui64_a", "eui64_b"],
         },
     },
+    {
+        "name": "get_signal_series",
+        "description": (
+            "Use when: you need before/after per-device signal evidence over time, such as whether a node's RSSI or LQI "
+            "got better or worse across a troubleshooting window. Returns event-backed RSSI/LQI samples for one node over "
+            "[since, until], plus summary metrics (first, last, delta, min, max, avg). "
+            "Caveats: event-driven telemetry only; sparse series mean the backend did not observe signal-bearing events in that window."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "eui64": {"type": "string", "description": "Target node EUI-64 whose signal series should be returned."},
+                "since": {"type": "string", "description": "ISO-8601 lower bound; default 24h ago."},
+                "until": {"type": "string", "description": "ISO-8601 upper bound; default now."},
+                "resolution": {"type": "string", "enum": ["raw", "5min"], "default": "raw", "description": "Return raw event samples or 5-minute averages."},
+            },
+            "required": ["eui64"],
+        },
+    },
     # ---- Phase 4 Background Diagnostics tools -----------------------------
     {
         "name": "get_assessment_state",
@@ -902,6 +922,7 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "get_pipeline_health",
     "get_counter_series",
     "compare_node_counters",
+    "get_signal_series",
 })
 
 
@@ -1305,6 +1326,16 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 eui64_a=str(arguments.get("eui64_a") or ""),
                 eui64_b=str(arguments.get("eui64_b") or ""),
                 counter_names=arguments.get("counter_names") or None,
+                since=arguments.get("since"),
+                until=arguments.get("until"),
+                resolution=str(arguments.get("resolution") or "raw"),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_signal_series":
+        try:
+            return signal_series_mod.get_signal_series(
+                eui64=str(arguments.get("eui64") or ""),
                 since=arguments.get("since"),
                 until=arguments.get("until"),
                 resolution=str(arguments.get("resolution") or "raw"),

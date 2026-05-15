@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.55 — Add signal time series and tighten chat evidence handling
+
+This patch adds a first-class per-device signal time-series surface so
+questions about network change over time can be grounded in historical
+RSSI/LQI evidence, and tightens direct-chat auditing to avoid leaking
+backend evidence wishlists back to the user.
+
+**Fixes:**
+- adds event-backed per-device signal time series with MCP and HTTP API
+  access, including raw and 5-minute bucketed RSSI/LQI history plus summary
+  metrics over a requested window
+- lets direct chat validate and call the new signal-series tool for
+  device-specific historical signal questions
+- tightens direct-chat audit rules so topology diffs alone are not treated as
+  proof of signal-quality improvement and unperformed backend investigations
+  are not emitted as user-facing missing-evidence or next-step lists
+- adds focused regression coverage for signal-series behavior and the related
+  direct-chat audit path
+
 ## 0.11.54 — Preserve node signal evidence for direct chat
 
 This patch fixes a direct-chat regression where node inventory results were

@@ -769,6 +769,34 @@ class SQLiteStore:
             rows = self._conn.execute(sql, params).fetchall()
         return [_row_to_event(r) for r in rows]
 
+    def get_signal_samples(
+        self,
+        *,
+        eui64: str,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 2000,
+    ) -> list[dict[str, Any]]:
+        """Return event-backed RSSI/LQI samples for one node, oldest first."""
+        clauses: list[str] = ["eui64 = ?", "(rssi IS NOT NULL OR lqi IS NOT NULL)"]
+        params: list[Any] = [eui64]
+        if since:
+            clauses.append("ts >= ?")
+            params.append(since)
+        if until:
+            clauses.append("ts <= ?")
+            params.append(until)
+        params.append(max(1, min(int(limit), 100_000)))
+        sql = (
+            "SELECT id, ts, eui64, type, parent_eui64, rssi, lqi"
+            " FROM events WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY ts ASC, id ASC LIMIT ?"
+        )
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [dict(row) for row in rows]
+
     # -- nodes ---------------------------------------------------------
 
     def upsert_node_metadata(

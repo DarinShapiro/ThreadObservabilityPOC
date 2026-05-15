@@ -48,6 +48,7 @@ _DEFAULT_SYSTEM_PROMPT = (
     "explanations fit the evidence, name the top hypotheses and say what tool result would distinguish them. "
     "Gather obvious diagnostic context before asking the user to restate the problem. Once you have gathered the relevant evidence, "
     "answer concisely in this order: what you found, why it matters, and what to do next. Do not trade completeness for brevity "
+    "Do not present hypothetical backend analyses you did not run as next steps for the user. When evidence is missing, say exactly what is missing rather than prescribing unperformed internal analysis. "
     "when the user asks for multiple dimensions of analysis. Do not reason from UI controls, page state, "
     "or view-specific labels. If a claim is not present in backend evidence, do not use it. "
     "Be concise, practical, and explicit about uncertainty only after using the relevant available tools and only when the remaining gap "
@@ -500,7 +501,7 @@ def _tool_result_for_prompt(name: str, arguments: dict[str, Any], result: Any) -
 
 
 def _validate_chat_tool_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any] | None:
-    if name in {"get_counter_series", "analyze_node"}:
+    if name in {"get_counter_series", "get_signal_series", "analyze_node"}:
         eui64 = arguments.get("eui64")
         if not _is_valid_eui64(eui64):
             return {"error": "invalid eui64 argument: expected 16 hex characters"}
@@ -524,8 +525,10 @@ def _answer_review_policies(
         "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
         "Do not reason from UI controls, page state, or display labels. Use backend evidence only.",
         "Do not translate missing evidence into interface advice or invented operator workflows.",
+        "Do not prescribe backend analyses, routing-table checks, node-health checks, or other internal investigations as next steps unless you actually performed them in this turn and are summarizing their results.",
         "Do not answer with self-referential meta commentary about what you should or should not do; answer the user's question directly from evidence.",
         "Do not infer network improvement, better routing, or a better path to OTBR from node counts, link counts, or generic topology diffs alone; require explicit path, parent, route, or OTBR-role evidence before making that claim.",
+        "Do not infer that signal quality improved for any device from node additions, link additions, REED/router roles, or generic topology diffs alone; require explicit before/after RSSI, LQI, parent-change, attachment, or route evidence for the affected devices.",
         "Do not imply that the retained evidence covers the full requested history window when it only spans a shorter interval; state the actual observed coverage and the missing earlier history instead.",
     ]
     if internal_tool_request:

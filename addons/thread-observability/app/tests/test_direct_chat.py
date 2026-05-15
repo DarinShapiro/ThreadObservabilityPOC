@@ -2067,8 +2067,10 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
     assert any("UI controls" in policy for policy in policies)
     assert any("backend evidence only" in policy for policy in policies)
     assert any("interface advice" in policy for policy in policies)
+    assert any("routing-table checks" in policy for policy in policies)
     assert any("self-referential meta commentary" in policy for policy in policies)
     assert any("better path to OTBR" in policy for policy in policies)
+    assert any("signal quality improved" in policy for policy in policies)
     assert any("full requested history window" in policy for policy in policies)
 
 
@@ -2314,4 +2316,88 @@ def test_direct_chat_turn_rewrites_sparse_history_window_overclaim_via_audit(mon
     assert "only spans a shorter same-day window" in result["response"]["text"]
     assert "not the full requested 3 days" in result["response"]["text"]
     assert "earlier history is missing" in result["response"]["text"]
+    assert len(calls) == 2
+
+
+def test_direct_chat_turn_rewrites_speculative_signal_quality_improvement_claim_via_audit(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+    audits = [
+        direct_chat.AuditVerdict(
+            answered_question=False,
+            grounded_in_evidence=False,
+            contains_extraneous_content=True,
+            rewrite_needed=True,
+            repair_action="rewrite_once",
+            critique=(
+                "Do not infer that signal quality improved for any device from a new REED/router and a few new links alone. "
+                "Do not prescribe routing-table or node-health checks as next steps when you did not run them. "
+                "State the actual retained history coverage, the observed topology change, and the missing before/after signal or route evidence."
+            ),
+        ),
+        direct_chat.AuditVerdict(),
+    ]
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "Over the past 3 days the network added a new REED with three links, which likely improved signal quality for some devices. "
+                                "Check the routing tables and node-health metrics next to confirm which devices benefited."
+                            ),
+                        }
+                    }
+                ]
+            }
+        critique = next(
+            msg for msg in body["messages"]
+            if msg.get("role") == "system" and "Audit critique:" in str(msg.get("content") or "")
+        )
+        assert "signal quality improved" in critique["content"]
+        assert "routing-table" in critique["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "The retained history visible here shows a shorter same-day span, not the full requested 3 days. "
+                            "Within that retained span, one node and three links were added. I cannot tell from that topology diff alone "
+                            "whether signal quality improved for any device, because I do not have explicit before/after RSSI, LQI, attachment, or route evidence for the affected devices."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return audits.pop(0)
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="How as has my network changed over the past 3 days? What did that change do for signal quality, did it improve for some devices?",
+            rendered_message="User message: How as has my network changed over the past 3 days? What did that change do for signal quality, did it improve for some devices?",
+            conversation_id=None,
+        )
+    )
+
+    assert "shorter same-day span" in result["response"]["text"]
+    assert "one node and three links were added" in result["response"]["text"]
+    assert "cannot tell from that topology diff alone" in result["response"]["text"]
+    assert "before/after RSSI, LQI, attachment, or route evidence" in result["response"]["text"]
     assert len(calls) == 2

@@ -36,6 +36,7 @@ from ..pipeline import topology_snapshot as topology_snapshot_mod
 from ..utils.datetime import utc_now_iso
 from ..services import chat_memory
 from ..services import direct_chat
+from . import signal_series as signal_series_mod
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -1040,6 +1041,18 @@ def create_core_app() -> FastAPI:
             "windows": {"1h": since_1h, "24h": since_24h},
             "nodes": out,
         }
+
+    @app.get("/v1/signals/{eui64}/series")
+    def signal_series(eui64: str, since: str | None = None, until: str | None = None, resolution: str = "raw") -> dict[str, object]:
+        try:
+            return signal_series_mod.get_signal_series(
+                eui64=eui64.lower(),
+                since=since,
+                until=until,
+                resolution=resolution,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc), "series": [], "metrics": {}}
 
     @app.post("/v1/reasoner/run")
     def reasoner_run() -> dict[str, object]:
