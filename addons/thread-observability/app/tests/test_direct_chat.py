@@ -1966,6 +1966,7 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
     assert any("backend evidence only" in policy for policy in policies)
     assert any("interface advice" in policy for policy in policies)
     assert any("self-referential meta commentary" in policy for policy in policies)
+    assert any("better path to OTBR" in policy for policy in policies)
 
 
 def test_direct_chat_turn_rewrites_duplicate_device_meta_response_via_audit(monkeypatch) -> None:
@@ -2043,4 +2044,91 @@ def test_direct_chat_turn_rewrites_duplicate_device_meta_response_via_audit(monk
 
     assert "multiple EUI64 rows" in result["response"]["text"]
     assert "same real device" in result["response"]["text"]
+    assert len(calls) == 2
+
+
+def test_direct_chat_turn_rewrites_ungrounded_otbr_path_improvement_claim_via_audit(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+    audits = [
+        direct_chat.AuditVerdict(
+            answered_question=False,
+            grounded_in_evidence=False,
+            contains_extraneous_content=False,
+            rewrite_needed=True,
+            repair_action="rewrite_once",
+            critique=(
+                "Do not infer route improvement or a better OTBR path from node and link-count deltas alone. "
+                "Answer with the actual evidence and state what is missing."
+            ),
+        ),
+        direct_chat.AuditVerdict(),
+    ]
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "A single device was added and the three new links mean it improved the network by giving "
+                                "existing devices a better path to the OTBR."
+                            ),
+                        }
+                    }
+                ]
+            }
+        critique = next(
+            msg for msg in body["messages"]
+            if msg.get("role") == "system" and "Audit critique:" in str(msg.get("content") or "")
+        )
+        assert "better OTBR path" in critique["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "The retained history supports only that one node and three links appeared in that window. "
+                            "I cannot tell from those counts alone whether any device found a better path to the OTBR, "
+                            "because that would require explicit route, parent, or OTBR-role evidence for the affected devices."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return audits.pop(0)
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message=(
+                "Looking at the past 3 days, tell me about the most recent devices added to the network and whether "
+                "any device found a new and better path to the OTBR."
+            ),
+            rendered_message=(
+                "User message: Looking at the past 3 days, tell me about the most recent devices added to the network "
+                "and whether any device found a new and better path to the OTBR."
+            ),
+            conversation_id=None,
+        )
+    )
+
+    assert "one node and three links appeared" in result["response"]["text"]
+    assert "cannot tell from those counts alone" in result["response"]["text"]
+    assert "better path to the OTBR" in result["response"]["text"]
     assert len(calls) == 2

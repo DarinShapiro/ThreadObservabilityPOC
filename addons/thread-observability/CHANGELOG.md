@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.51 — Audit rule refinement for route-improvement claims
+
+This patch tightens the direct-chat audit criteria so the assistant does not
+claim route improvement or a better OTBR path from generic topology deltas
+alone.
+
+**Fixes:**
+- adds an explicit audit rule requiring route, parent, or OTBR-role evidence
+  before claiming that a newly added device improved routing or found a better
+  path to the border router
+- adds a direct-chat regression for the exact overclaim shape where node/link
+  count changes were incorrectly turned into a routing-improvement conclusion
+- expands the API prompt regression corpus and smoke run to include this
+  history-plus-OTBR-path scenario
+
 ## 0.11.50 — Reflection-only direct-chat repair
 
 This patch removes the remaining deterministic direct-chat fallback text path

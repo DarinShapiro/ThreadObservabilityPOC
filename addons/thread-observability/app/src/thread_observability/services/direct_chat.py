@@ -568,6 +568,7 @@ def _answer_review_policies(
         "Do not reason from UI controls, page state, or display labels. Use backend evidence only.",
         "Do not translate missing evidence into interface advice or invented operator workflows.",
         "Do not answer with self-referential meta commentary about what you should or should not do; answer the user's question directly from evidence.",
+        "Do not infer network improvement, better routing, or a better path to OTBR from node counts, link counts, or generic topology diffs alone; require explicit path, parent, route, or OTBR-role evidence before making that claim.",
     ]
     if internal_tool_request:
         policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")
