@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.40 — Chokepoint chat fallback fix
+
+This patch fixes the remaining direct-chat hallucination found during live
+validation after 0.11.39 was queued.
+
+**Fixes:**
+- blocks invented "graph diagnostics" and "Weak Links" dashboard views in
+  chokepoint answers instead of letting the model point operators to UI that
+  does not exist
+- rewrites those chokepoint answers into a grounded fallback that says the weak
+  link set is the likely bottleneck area while admitting the current UI does
+  not expose per-edge endpoints
+- adds regression coverage for chokepoint prompts that previously hallucinated
+  graph-detail surfaces
+
 ## 0.11.39 — Chat contradiction fallback follow-up
 
 This patch fixes the remaining live-chat defect found immediately after the

@@ -77,6 +77,8 @@ _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\btoggl(?:e|ed)\b.*\bcurrent\b.*\bhistorical\b.*\bview", re.IGNORECASE),
     re.compile(r"\bcurrent\s+and\s+historical\s+views\b", re.IGNORECASE),
     re.compile(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", re.IGNORECASE),
+    re.compile(r"\bgraph\s+diagnostics\s+(?:panel|view)\b", re.IGNORECASE),
+    re.compile(r"\bweak\s+links?\s+(?:view|panel|details?)\b", re.IGNORECASE),
 )
 _PAGE_CONTEXT_SINGLE_PARTITION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\b(?:1|one)\s+partition\b", re.IGNORECASE),
@@ -516,6 +518,13 @@ def _looks_like_counter_or_rf_question(text: str) -> bool:
     )
 
 
+def _looks_like_chokepoint_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in ("chokepoint", "chokepoints", "bottleneck", "bottlenecks"))
+
+
 def _looks_like_internal_tool_request(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -884,7 +893,7 @@ def _apply_deterministic_fallbacks(
     ):
         return _build_history_insufficient_response(tool_trace)
     if _answer_mentions_unsupported_dashboard_action(candidate_text):
-        return _build_unsupported_dashboard_action_response(candidate_text)
+        return _build_unsupported_dashboard_action_response(message, candidate_text)
     if _answer_contradicts_page_context(message, candidate_text):
         return _build_page_context_contradiction_response(message)
     if _answer_leaks_internal_tool_names(candidate_text):
@@ -903,9 +912,10 @@ def _answer_mentions_unsupported_dashboard_action(candidate_text: str) -> bool:
     return any(pattern.search(normalized) for pattern in _UNSUPPORTED_DASHBOARD_ACTION_PATTERNS)
 
 
-def _build_unsupported_dashboard_action_response(candidate_text: str) -> str:
+def _build_unsupported_dashboard_action_response(message: str, candidate_text: str) -> str:
     normalized = str(candidate_text or "")
     blocked: list[str] = []
+    graph_detail_blocked = False
     if re.search(r"\bset\s+otbr\s+slug\b", normalized, re.IGNORECASE):
         blocked.append("set the OTBR slug")
     if re.search(r"\brestart\s+pipeline\b", normalized, re.IGNORECASE):
@@ -916,6 +926,20 @@ def _build_unsupported_dashboard_action_response(candidate_text: str) -> str:
         blocked.append("toggle between current and historical partition views")
     if re.search(r"\bwarning\s+icon\b.*\bgraph\s+diagnostics\b", normalized, re.IGNORECASE):
         blocked.append("click a warning icon in graph diagnostics")
+        graph_detail_blocked = True
+    if re.search(r"\bgraph\s+diagnostics\s+(?:panel|view)\b", normalized, re.IGNORECASE):
+        blocked.append("open a graph diagnostics panel")
+        graph_detail_blocked = True
+    if re.search(r"\bweak\s+links?\s+(?:view|panel|details?)\b", normalized, re.IGNORECASE):
+        blocked.append("open a weak-links detail view")
+        graph_detail_blocked = True
+    if graph_detail_blocked and _looks_like_chokepoint_question(message):
+        return (
+            "The current evidence suggests weak-link or high-error edges are the most likely chokepoints, but the current "
+            "dashboard does not expose a graph diagnostics panel or weak-links detail view that names the exact node pairs. "
+            "So I can say the chokepoints are in the weak-link set, but I cannot identify the specific edge endpoints from "
+            "this turn without inventing UI or evidence that is not present."
+        )
     actions = ", ".join(blocked) if blocked else "use that dashboard action"
     return (
         "I can’t point you to that dashboard action because the current UI does not expose a control to "

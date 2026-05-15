@@ -1899,6 +1899,24 @@ def test_apply_deterministic_fallbacks_rewrites_nonexistent_graph_history_guidan
     assert "click a warning icon in graph diagnostics" in text
 
 
+def test_apply_deterministic_fallbacks_rewrites_chokepoint_graph_ui_hallucination() -> None:
+    text = direct_chat._apply_deterministic_fallbacks(
+        message="What are the chokepoints in my network right now?",
+        candidate_text=(
+            "The dashboard's graph diagnostics panel flags 10 edges as weak_link or high_error. Ask the dashboard to "
+            "display the Weak Links view so you can inspect the exact node pairs."
+        ),
+        tool_trace=[],
+        history_comparison_question=False,
+        counter_question=False,
+        internal_tool_request=False,
+    )
+
+    assert "most likely chokepoints" in text
+    assert "does not expose a graph diagnostics panel" in text
+    assert "specific edge endpoints" in text
+
+
 def test_apply_deterministic_fallbacks_rewrites_page_context_partition_contradiction() -> None:
     text = direct_chat._apply_deterministic_fallbacks(
         message=(
