@@ -2,7 +2,7 @@
 
 Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes the result over MCP and a small HTTP surface for AI-assisted triage.
 
-**Current version**: 0.11.40 / schema v19 / 41 MCP tools.
+**Current version**: 0.11.43 / schema v19 / 41 MCP tools.
 
 ## What it does
 
@@ -13,8 +13,8 @@ Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes t
   - Discovers Thread nodes via OTBR / Matter Server
   - Correlates EUI-64 with HA device registry
   - Records per-node MAC/MLE counter samples (schema v19, Phase 4)
-  - Runs deterministic reasoner rules and persists open issues
-  - Records a pipeline-tick row for temporal honesty (`meta.pipeline_tick`)
+  - Recomputes health/topology state and records a pipeline-tick row for temporal honesty (`meta.pipeline_tick`)
+  - Calls the paused issue-reasoner shim, which closes any residual legacy issues and returns a paused summary until the rule redesign tracked by GitHub issue #5 lands
 - Retention prunes counter samples older than `full_resolution_days` (default 3) into 5-minute averaged buckets up to `sampled_archive_days` (default 14).
 
 ## MCP surface
@@ -52,3 +52,4 @@ Returns environment + health + active issues + up to 3 `recommended_next` tool c
 
 - Legacy node-shaping reference exports now live under `../../samples/addon/`. They are retained for offline inspection only and are not runtime inputs for the add-on.
 - The ad hoc OTBR parser smoke helper lives at `../../scripts/test_real_logs.py` rather than the repository root.
+- `app/src/thread_observability/pipeline/reasoner.py` intentionally retains the pre-redesign rule body as reference code while the active runtime keeps issue detection paused pending GitHub issue #5.

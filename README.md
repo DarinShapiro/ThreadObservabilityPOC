@@ -30,13 +30,14 @@ Recommended split:
 
 - addons/thread-observability: Home Assistant add-on package
 - documentation: architecture and product documentation
-- samples: captured fixtures and example payloads for development/debugging
-- scripts: local assessment helpers and repo automation
+- samples: captured fixtures and example payloads for development/debugging; see [samples/README.md](samples/README.md)
+- scripts: local developer helpers and repo automation; see [scripts/README.md](scripts/README.md)
 
 ## Current Status
 
 - Active add-on implementation with a shipping Home Assistant ingress UI.
 - Current runtime/version details live in [addons/thread-observability/README.md](addons/thread-observability/README.md) and [documentation/README.md](documentation/README.md).
+- Deterministic issue definitions are intentionally paused pending the redesign tracked in GitHub issue #5; the current runtime still exposes health, topology, assessment, and chat surfaces.
 - The remaining backlog is grouped in [documentation/08-work-buckets.md](documentation/08-work-buckets.md).
 
 ## Releases and Updates
