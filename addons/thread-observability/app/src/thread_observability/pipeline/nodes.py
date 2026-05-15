@@ -33,6 +33,7 @@ def _hardware_identity_rank(node: dict[str, Any]) -> tuple[Any, ...]:
     status_rank = {
         "online": 4,
         "healthy": 4,
+        "sleeping": 3,
         "stale": 3,
         "offline": 2,
         "unregistered": 1,
@@ -573,6 +574,7 @@ def list_nodes_enriched(
         eui = node.get("eui64")
         routing_role = node.get("routing_role")
         parent_eui = parent_map.get(eui) if eui else None
+        parent_inferred = False
         partition_id = node.get("partition_id")
         leader_eui = leader_by_partition.get(partition_id) if partition_id is not None else None
         summary: dict[str, Any] = {
@@ -611,8 +613,6 @@ def list_nodes_enriched(
                 {"eui64": p, "name": name_by_eui.get(p)}
                 for p in (peer_map.get(eui) or [])
             ] if eui else [],
-            "parent_eui64": parent_eui,
-            "parent_name": name_by_eui.get(parent_eui) if parent_eui else None,
             "next_hop_to_otbr": next_hop_map.get(eui) if eui else None,
             "suppressed_duplicate_euis": list(node.get("suppressed_duplicate_euis") or []),
         }
@@ -633,5 +633,14 @@ def list_nodes_enriched(
                 summary["sed_classification"] = "orphan"
         if include_signal_strength and eui:
             summary["signal_strength"] = get_latest_signal_strength(eui, store=s)
+            if not parent_eui and summary["device_kind"] == "sed":
+                best_peer = (summary["signal_strength"] or {}).get("best_reporter")
+                inferred_parent = best_peer.get("eui64") if isinstance(best_peer, dict) else None
+                if inferred_parent:
+                    parent_eui = inferred_parent
+                    parent_inferred = True
+        summary["parent_eui64"] = parent_eui
+        summary["parent_name"] = name_by_eui.get(parent_eui) if parent_eui else None
+        summary["parent_inferred"] = parent_inferred
         out.append(summary)
     return out

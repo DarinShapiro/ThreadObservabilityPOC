@@ -138,6 +138,25 @@ def test_get_latest_signal_strength_falls_back_to_reported_router_links(store) -
     assert [row["eui64"] for row in strength["neighbors"]] == [peer_b, peer_a]
 
 
+def test_list_nodes_enriched_infers_sed_parent_from_strongest_peer(store) -> None:
+    child = "dd" * 8
+    parent = "ee" * 8
+
+    store.upsert_node_metadata(eui64=child, friendly_name="Window Shade", device_id="shade-1")
+    store.upsert_node_metadata(eui64=parent, friendly_name="Hall Router", device_id="router-1")
+    store.set_node_diagnostics(child, routing_role="sleepy_end_device")
+    store.set_node_diagnostics(parent, routing_role="router")
+    store.replace_links_for_reporter(parent, "neighbor_table", [
+        {"neighbor_eui64": child, "rssi_avg": -62, "lqi_in": 3},
+    ])
+
+    enriched = {n["eui64"]: n for n in nodes.list_nodes_enriched(store=store, include_signal_strength=True)}
+
+    assert enriched[child]["parent_eui64"] == parent
+    assert enriched[child]["parent_name"] == "Hall Router"
+    assert enriched[child]["parent_inferred"] is True
+
+
 def _setup_three_router_partition(store) -> tuple[str, str, str]:
     """Set up an OTBR + two routers in one partition with route-table links.
 

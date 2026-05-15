@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.41 — Hot spot and sleepy-device status fixes
+
+This patch packages the validated fixes for issues 104 and 105.
+
+**Fixes:**
+- changes the Network hot-spots card to rank the weakest node by its strongest
+  available link instead of a single incidental RSSI field
+- introduces a `sleeping` node state for mesh-alive sleepy end devices that HA
+  currently marks unavailable, so they no longer show up as offline
+- infers a sleepy device's parent from the strongest observed peer when no
+  explicit parent claim is currently present and surfaces that in the node view
+
 ## 0.11.40 — Chokepoint chat fallback fix
 
 This patch fixes the remaining direct-chat hallucination found during live

@@ -33,6 +33,11 @@ DEFAULT_DB_PATH = Path(
     os.getenv("THREAD_OBS_DB_PATH", "/data/thread-observability/state.db")
 )
 
+# A sleepy end device can look unavailable to HA while still being freshly
+# claimed by its parent router in NeighborTable. Keep this window aligned
+# with the topology/UI SED mesh-alive view.
+_SED_MESH_ALIVE_WINDOW_SECONDS = 300
+
 # Each entry is applied in order; ``version`` matches its index (1-based).
 _MIGRATIONS: list[str] = [
     # v1: initial schema
@@ -1788,8 +1793,12 @@ class SQLiteStore:
 
         State machine (evaluated atomically against the current timestamp):
 
-        * ``online``       — ``available = 1`` (HA can talk to it).
-        * ``offline``      — ``available = 0`` AND HA-registered
+                * ``online``       — ``available = 1`` (HA can talk to it).
+                * ``sleeping``     — HA-registered sleepy end device with
+                    ``available = 0`` (or still-unprobed stale availability) while a
+                    parent router has claimed it in NeighborTable within the last
+                    five minutes.
+                * ``offline``      — ``available = 0`` AND HA-registered
           (``device_id`` not null), OR ``available IS NULL`` but the row
           has a ``device_id`` (registry-known, availability not yet
           probed). HA-registered nodes never auto-purge.
@@ -1818,6 +1827,9 @@ class SQLiteStore:
         phantom_cutoff = (
             datetime.now(tz=UTC) - timedelta(seconds=phantom_seconds)
         ).isoformat()
+        sed_alive_cutoff = (
+            datetime.now(tz=UTC) - timedelta(seconds=_SED_MESH_ALIVE_WINDOW_SECONDS)
+        ).isoformat()
         # Compute the new status per node in one common-table-expression so
         # we can both (a) emit a status_change event for each transition and
         # (b) update the row, all inside a single transaction.
@@ -1826,6 +1838,19 @@ class SQLiteStore:
                    CASE
                        -- Primary signal: HA entity availability.
                        WHEN available = 1 THEN 'online'
+                       WHEN available = 0
+                        AND device_id IS NOT NULL
+                        AND routing_role = 'sleepy_end_device'
+                        AND EXISTS (
+                            SELECT 1
+                              FROM links
+                             WHERE links.neighbor_eui64 = nodes.eui64
+                               AND links.is_child = 1
+                               AND links.source = 'neighbor_table'
+                               AND links.observed_at IS NOT NULL
+                               AND links.observed_at >= ?
+                        )
+                           THEN 'sleeping'
                        WHEN available = 0 AND device_id IS NOT NULL
                            THEN 'offline'
                        -- Availability not yet probed: fall back to
@@ -1836,6 +1861,19 @@ class SQLiteStore:
                         AND last_referenced_at IS NOT NULL
                         AND last_referenced_at >= ?
                            THEN 'online'
+                                             WHEN available IS NULL
+                                                AND device_id IS NOT NULL
+                                                AND routing_role = 'sleepy_end_device'
+                                                AND EXISTS (
+                                                        SELECT 1
+                                                            FROM links
+                                                         WHERE links.neighbor_eui64 = nodes.eui64
+                                                             AND links.is_child = 1
+                                                             AND links.source = 'neighbor_table'
+                                                             AND links.observed_at IS NOT NULL
+                                                             AND links.observed_at >= ?
+                                                )
+                                                     THEN 'sleeping'
                        WHEN device_id IS NOT NULL THEN 'offline'
                        -- No device_id: aged out or never seen.
                        WHEN last_referenced_at IS NULL THEN 'unregistered'
@@ -1848,7 +1886,7 @@ class SQLiteStore:
             transitions = [
                 (row["eui64"], row["old_status"], row["new_status"])
                 for row in conn.execute(
-                    calc_sql, (offline_cutoff, phantom_cutoff)
+                    calc_sql, (sed_alive_cutoff, offline_cutoff, sed_alive_cutoff, phantom_cutoff)
                 ).fetchall()
                 if (row["old_status"] or "") != (row["new_status"] or "")
             ]
@@ -1876,7 +1914,7 @@ class SQLiteStore:
                   FROM ({calc_sql}) AS calc
                  WHERE nodes.eui64 = calc.eui64
                 """,
-                (now, offline_cutoff, phantom_cutoff),
+                (now, sed_alive_cutoff, offline_cutoff, sed_alive_cutoff, phantom_cutoff),
             )
             changed = int(cur.rowcount or 0)
             counts = {
@@ -1887,6 +1925,7 @@ class SQLiteStore:
             }
         out = {
             "online": counts.get("online", 0),
+            "sleeping": counts.get("sleeping", 0),
             "offline": counts.get("offline", 0),
             "unregistered": counts.get("unregistered", 0),
             "phantom": counts.get("phantom", 0),

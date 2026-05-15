@@ -401,6 +401,26 @@ def test_recompute_node_statuses_availability_first(store: SQLiteStore) -> None:
     assert store.get_node(mesh_only_phantom)["status"] == "phantom"
 
 
+def test_recompute_node_statuses_marks_mesh_alive_sed_as_sleeping(store: SQLiteStore) -> None:
+    sleepy = "06" * 8
+    parent = "07" * 8
+
+    store.upsert_node_metadata(eui64=sleepy, friendly_name="Shade", device_id="shade-1")
+    store.upsert_node_metadata(eui64=parent, friendly_name="Router Parent")
+    store.set_node_diagnostics(sleepy, routing_role="sleepy_end_device")
+    store.set_node_diagnostics(parent, routing_role="router")
+    store.apply_availability([(sleepy, False, "ha_entity")])
+    store.replace_links_for_reporter(parent, "neighbor_table", [
+        {"neighbor_eui64": sleepy, "rssi_avg": -68, "lqi_in": 3, "is_child": True},
+    ])
+
+    summary = store.recompute_node_statuses(offline_seconds=900, phantom_seconds=24 * 3600)
+
+    assert summary["sleeping"] == 1
+    assert summary["offline"] == 0
+    assert store.get_node(sleepy)["status"] == "sleeping"
+
+
 def test_purge_expired_nodes_preserves_ha_registered(store: SQLiteStore) -> None:
     keep = "11" * 8
     purge = "22" * 8

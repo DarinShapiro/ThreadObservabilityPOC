@@ -439,7 +439,7 @@
           <div class="toolbar" style="flex-wrap:wrap;">
             <h2 style="margin:0; flex:1;">Thread Nodes</h2>
             <input type="search" id="nodes-search" placeholder="search name / EUI" style="background:var(--panel2); color:var(--fg); border:1px solid var(--border); border-radius:6px; padding:4px 8px; font-size:12px;">
-            <select id="nodes-filter-status" class="filter-select"><option value="">all status</option><option value="online">online</option><option value="offline">offline</option><option value="phantom">phantom</option></select>
+            <select id="nodes-filter-status" class="filter-select"><option value="">all status</option><option value="online">online</option><option value="sleeping">sleeping</option><option value="offline">offline</option><option value="phantom">phantom</option></select>
             <select id="nodes-filter-role" class="filter-select"><option value="">all roles</option><option value="leader">leader</option><option value="router">router</option><option value="reed">REED</option><option value="fed">end (FED)</option><option value="sed">sleepy (SED)</option></select>
             <select id="nodes-filter-area" class="filter-select"><option value="">all areas</option></select>
             <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
@@ -912,6 +912,7 @@ function nodeHealthRank(n) {
   if (!n) return 99;
   if (n.status === 'offline') return 0;
   if (n.status === 'phantom') return 1;
+  if (n.status === 'sleeping') return 4;
   const sig = n.signal_strength || {};
   const rssi = sig.rssi;
   const lqi = sig.lqi;
@@ -929,6 +930,14 @@ function deltaForNode(eui, window, counter) {
   const win = node[window];
   if (!win) return undefined;
   return win[counter];  // number, null (reset), or undefined (missing)
+}
+
+function strongestAvailableLink(node) {
+  const sig = (node && node.signal_strength) || {};
+  const rssi = typeof sig.rssi === 'number' ? sig.rssi : null;
+  const lqi = typeof sig.lqi === 'number' ? sig.lqi : null;
+  if (rssi == null && lqi == null) return null;
+  return { rssi, lqi };
 }
 
 function shortTime(iso) {
@@ -988,6 +997,7 @@ function currentPageContext() {
     snapshot_summary: {
       total_nodes: counts.total || 0,
       online_nodes: counts.online || 0,
+      sleeping_nodes: counts.sleeping || 0,
       offline_nodes: counts.offline || 0,
       stale_nodes: ((lastStatus && lastStatus.health && lastStatus.health.summary) || {}).stale_nodes || 0,
       distinct_thread_networks: ((lastStatus && lastStatus.health && lastStatus.health.summary) || {}).distinct_thread_networks || 0,
@@ -1408,11 +1418,12 @@ function renderHeadline(s) {
   const dupRows = summary.duplicate_physical_device_rows || 0;
   const partCount = (s.partitions && s.partitions.partition_count) || 0;
   const online = counts.online || 0;
+  const sleeping = counts.sleeping || 0;
   const offline = counts.offline || 0;
-  const total = counts.total || (online + offline);
+  const total = counts.total || (online + sleeping + offline);
   const bits = [];
   bits.push(`<span class="lead ${lead}">${escapeHtml(status)}</span>`);
-  bits.push(`${online} online / ${offline} offline of ${total}`);
+  bits.push(`${online} online / ${sleeping} sleeping / ${offline} offline of ${total}`);
   bits.push(`${issuesCount} active issue${issuesCount === 1 ? '' : 's'}`);
   bits.push(`${partCount} partition${partCount === 1 ? '' : 's'}`);
   if (distinctNets > 1) bits.push(`<span class="bad">${distinctNets} distinct Thread networks</span>`);
@@ -1474,21 +1485,39 @@ function renderHotSpots(s) {
   const online = nodes.filter(n => n.status === 'online');
   const spots = [];
 
-  // 1) worst RSSI online
-  let worstRssi = null;
+  // 1) weakest node by its strongest available link
+  let weakestBestLink = null;
   for (const n of online) {
-    const r = (n.signal_strength || {}).rssi;
-    if (r == null) continue;
-    if (!worstRssi || r < (worstRssi.signal_strength || {}).rssi) worstRssi = n;
+    const link = strongestAvailableLink(n);
+    if (!link) continue;
+    if (!weakestBestLink) {
+      weakestBestLink = { node: n, link };
+      continue;
+    }
+    const current = weakestBestLink.link;
+    if (link.rssi != null && current.rssi != null) {
+      if (link.rssi < current.rssi || (link.rssi === current.rssi && (link.lqi || -1) < (current.lqi || -1))) {
+        weakestBestLink = { node: n, link };
+      }
+      continue;
+    }
+    if (link.rssi != null && current.rssi == null) {
+      weakestBestLink = { node: n, link };
+      continue;
+    }
+    if (link.rssi == null && current.rssi == null && (link.lqi || 99) < (current.lqi || 99)) {
+      weakestBestLink = { node: n, link };
+    }
   }
-  if (worstRssi) {
-    const r = (worstRssi.signal_strength || {}).rssi;
+  if (weakestBestLink) {
+    const r = weakestBestLink.link.rssi;
+    const lqi = weakestBestLink.link.lqi;
     spots.push({
-      eui: worstRssi.eui64,
-      label: 'Weakest signal',
-      name: worstRssi.display_name || (worstRssi.eui64 || '').slice(-4).toUpperCase(),
-      value: r + ' dBm',
-      valueCls: rssiClass(r),
+      eui: weakestBestLink.node.eui64,
+      label: 'Weakest best link',
+      name: weakestBestLink.node.display_name || (weakestBestLink.node.eui64 || '').slice(-4).toUpperCase(),
+      value: r != null ? (r + ' dBm') : ('LQI ' + lqi),
+      valueCls: r != null ? rssiClass(r) : lqiClass(lqi),
     });
   }
 
@@ -1850,7 +1879,7 @@ function renderNodesTable(nodes) {
       : null;
     if (n.device_kind === 'sed' || n.device_kind === 'fed') {
       const parent = n.parent_name || (n.parent_eui64 ? n.parent_eui64.slice(-4).toUpperCase() : null);
-      if (parent) roleHtml += '<span class="parent-hint">via ' + parent + '</span>';
+      if (parent) roleHtml += '<span class="parent-hint">via ' + parent + (n.parent_inferred ? ' (inferred)' : '') + '</span>';
       else roleHtml += '<span class="parent-hint">no parent reported</span>';
     } else if (n.routing_role === 'leader') {
       if (partTag) roleHtml += '<span class="parent-hint">' + partTag + ' · ' + (n.router_peer_count || 0) + ' router peers · control-plane only</span>';
@@ -1917,7 +1946,7 @@ function renderNodesTable(nodes) {
       html: isRouterClass ? fmtDeltaNotApplicable() : fmtDelta(parentDelta24h),
     });
 
-    const statusCls = n.status === 'online' ? 'good' : (n.status === 'offline' ? 'bad' : 'muted');
+    const statusCls = n.status === 'online' ? 'good' : (n.status === 'sleeping' ? 'running' : (n.status === 'offline' ? 'bad' : 'muted'));
     const statusCell = el('td', {html: '<span class="pill ' + statusCls + '">' + (n.status || '—') + '</span>'});
     const seenCell = el('td', {title: n.last_seen || ''}, fmtAge(n.last_seen));
     const euiTipBits = [];

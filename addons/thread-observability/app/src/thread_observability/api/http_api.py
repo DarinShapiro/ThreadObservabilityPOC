@@ -1118,6 +1118,7 @@ def create_core_app() -> FastAPI:
             st = n.get("status") or "online"
             node_counts[st] = node_counts.get(st, 0) + 1
         node_counts.setdefault("online", 0)
+        node_counts.setdefault("sleeping", 0)
         node_counts.setdefault("offline", 0)
         node_counts.setdefault("unregistered", 0)
         node_counts.setdefault("phantom", 0)
