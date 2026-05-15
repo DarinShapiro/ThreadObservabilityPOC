@@ -1,4 +1,4 @@
-"""MCP JSON-RPC 2.0 server + REST API for Thread Observability add-on."""
+"""MCP JSON-RPC 2.0 server + REST API for Thread Mesh Detective add-on."""
 
 from __future__ import annotations
 

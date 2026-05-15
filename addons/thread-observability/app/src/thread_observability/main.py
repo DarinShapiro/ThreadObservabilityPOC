@@ -9,7 +9,7 @@ from thread_observability.services.mcp_service import run_mcp_service
 
 
 def cli() -> None:
-    parser = argparse.ArgumentParser(description="Thread Observability service entrypoint")
+    parser = argparse.ArgumentParser(description="Thread Mesh Detective service entrypoint")
     parser.add_argument("--service", choices=["core", "mcp"], required=True)
     args = parser.parse_args()
 

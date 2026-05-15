@@ -1,8 +1,17 @@
-# ThreadPOC
+# Thread Mesh Detective
 
-ThreadPOC is a Home Assistant-focused Thread observability platform.
+Thread Mesh Detective is a Home Assistant-focused Thread mesh observability and troubleshooting add-on.
 
 The active product lives in the Home Assistant add-on at [addons/thread-observability](addons/thread-observability). It currently ships a live ingress dashboard, MCP/API surface, direct chat integration, background assessment plumbing, and the supporting storage/pipeline code used by the add-on.
+
+## Branding and compatibility
+
+This repository is rebranding the product from **Thread Observability** → **Thread Mesh Detective**.
+
+To preserve Home Assistant upgrade/install continuity, we intentionally keep these identifiers stable:
+
+- Add-on slug: `thread-observability`
+- Python package/module path: `thread_observability`
 
 ## Deployment Strategy
 
@@ -15,7 +24,7 @@ Use this when you want a packaged service with its own container/runtime.
 1. In Home Assistant, go to Settings -> Add-ons -> Add-on Store.
 2. Open the three-dot menu and choose Repositories.
 3. Add this repository URL.
-4. Install the Thread Observability add-on.
+4. Install the Thread Mesh Detective add-on.
 
 ### HACS Considerations
 

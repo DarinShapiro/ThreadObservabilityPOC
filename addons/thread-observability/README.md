@@ -1,8 +1,13 @@
-# Thread Observability Add-on
+# Thread Mesh Detective Add-on
 
 Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes the result over MCP and a small HTTP surface for AI-assisted triage.
 
-**Current version**: 0.11.49 / schema v19 / 41 MCP tools.
+**Current version**: 0.11.53 / schema v19 / 41 MCP tools.
+
+## Branding and compatibility
+
+Thread Mesh Detective is the product name shown in Home Assistant UI surfaces (add-on name, ingress dashboard title, and API docs).
+To preserve upgrade continuity, the add-on slug remains `thread-observability` and internal module paths remain `thread_observability`.
 
 ## What it does
 
@@ -23,7 +28,7 @@ All read tools return a `{data, meta}` envelope. See [../../documentation/06-mcp
 
 ## Connecting an AI agent
 
-Use the Home Assistant MCP Client integration to expose the Thread Observability tool catalog to your chosen conversation agent.
+Use the Home Assistant MCP Client integration to expose the Thread Mesh Detective tool catalog to your chosen conversation agent.
 
 1. Follow [../../documentation/10-ha-mcp-client-setup.md](../../documentation/10-ha-mcp-client-setup.md).
 2. In Home Assistant, add the MCP Client integration and use `http://9e5048e8-thread-observability:8100/mcp/sse` as the server URL.

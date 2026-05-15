@@ -1,6 +1,6 @@
-# Thread Observability Glossary
+# Thread Mesh Detective Glossary
 
-This glossary is the shared MCP background resource for the Thread Observability add-on.
+This glossary is the shared MCP background resource for the Thread Mesh Detective add-on (formerly Thread Observability).
 Use it to interpret the tool catalog, mesh snapshots, issue payloads, and diagnostics fields. For live versions and deployment identity, call `get_environment`.
 
 ## Core identifiers

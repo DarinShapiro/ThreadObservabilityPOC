@@ -82,7 +82,7 @@ def test_update_addon_no_update_available(monkeypatch: pytest.MonkeyPatch) -> No
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.1",
                 "version_latest": "0.9.1",
                 "update_available": False,
@@ -119,7 +119,7 @@ def test_update_addon_with_token_calls_ha_core_update_install(
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.52",
                 "version_latest": "0.9.53",
                 "update_available": True,
@@ -169,7 +169,7 @@ def test_update_addon_without_token_queues_via_auto_update(
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.52",
                 "version_latest": "0.9.53",
                 "update_available": True,
@@ -212,7 +212,7 @@ def test_update_addon_dry_run_does_not_post(monkeypatch: pytest.MonkeyPatch) -> 
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.52",
                 "version_latest": "0.9.53",
                 "update_available": True,
@@ -252,7 +252,7 @@ def test_update_addon_falls_back_to_self_slug_when_store_unreachable(
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.1",
                 "version_latest": "0.9.1",
                 "update_available": False,
@@ -285,7 +285,7 @@ def test_update_addon_transport_error_is_not_silent_success(
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.52",
                 "version_latest": "0.9.53",
                 "update_available": True,
@@ -324,7 +324,7 @@ def test_update_addon_http_error_includes_status_and_body(
         if path == "/addons/self/info":
             return {
                 "slug": "9e5048e8_thread-observability",
-                "name": "Thread Observability",
+                "name": "Thread Mesh Detective",
                 "version": "0.9.52",
                 "version_latest": "0.9.53",
                 "update_available": True,

@@ -1,14 +1,14 @@
 # Sprint Design: Agentic AI Integration
 
 **Status:** Draft for review — *do not implement until accepted.*
-**Owner:** @DarinShapiroMS
+**Owner:** @darinshapiro
 **Tracking epic:** GitHub Issue #6 (filed alongside this doc)
 
 ---
 
 ## 1. Goal
 
-Let a user **stand on the Thread Observability diagnostics page and chat
+Let a user **stand on the Thread Mesh Detective diagnostics page and chat
 with an AI agent about their Thread network** — using their existing Home
 Assistant conversation agent as the LLM, and our MCP server as the tool
 source. No API keys live in this add-on, ever.
@@ -77,7 +77,7 @@ makes LLM choices: HA's integration page.
 2. Enters `http://9e5048e8-thread-observability:8100/mcp/sse` (the add-on hostname).
 3. Picks a conversation agent (existing or new).
 4. From that moment on, Assist on phone / voice / panel / mobile app
-   knows all 36 Thread Observability tools, automatically.
+   knows all 36 Thread Mesh Detective tools, automatically.
 
 ### Path B — In-page chat panel (the sprint deliverable)
 
@@ -203,7 +203,7 @@ Token cost is bounded: only IDs and counts go in, not full payloads.
 
 ## 9. Resolved design decisions (2026-05-12)
 
-All five open questions resolved by @DarinShapiroMS:
+All five open questions resolved by @darinshapiro:
 
 1. **Transport: sync now, hybrid streaming later.** Ship `conversation.process`
    sync in v1 (#10). Phase 5 adds a hybrid path that streams when the

@@ -1,1 +1,1 @@
-"""Shared internal utility helpers for Thread Observability."""
+"""Shared internal utility helpers for Thread Mesh Detective."""

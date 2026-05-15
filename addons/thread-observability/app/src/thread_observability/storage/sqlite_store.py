@@ -1,4 +1,4 @@
-"""SQLite identity / event / issue store for Thread Observability.
+"""SQLite identity / event / issue store for Thread Mesh Detective.
 
 Schema is migration-versioned via a single ``schema_version`` table; each
 migration is idempotent and applied in order. The store is intentionally
@@ -3117,4 +3117,3 @@ def reset_store_for_tests(store: SQLiteStore | None = None) -> None:
             except Exception:  # noqa: BLE001
                 pass
         _store = store
-

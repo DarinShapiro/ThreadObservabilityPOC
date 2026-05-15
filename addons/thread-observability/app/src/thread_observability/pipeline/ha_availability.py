@@ -1,6 +1,6 @@
 """Home Assistant entity-availability lookup.
 
-"Online" in Thread Observability v0.9.39+ means **HA can control this
+"Online" in Thread Mesh Detective v0.9.39+ means **HA can control this
 device right now**, not "we saw radio traffic recently". This module is
 the bridge from the user's mental model (entity availability in the UI)
 to our internal ``nodes.available`` column.

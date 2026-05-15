@@ -1,4 +1,4 @@
-"""Core HTTP API for Thread Observability add-on.
+"""Core HTTP API for Thread Mesh Detective add-on.
 
 Serves a lightweight status dashboard at ``/`` (Ingress entry-point) plus
 JSON endpoints under ``/v1/...`` for programmatic access.

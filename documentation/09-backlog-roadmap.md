@@ -22,7 +22,7 @@ Closed foundation work already landed:
 Open issues still driving execution order:
 
 - #7 MCP: add SSE / Streamable-HTTP transport for HA MCP-Client compatibility
-- #8 Docs: HA MCP-Client setup walkthrough for Thread Observability
+- #8 Docs: HA MCP-Client setup walkthrough for Thread Mesh Detective
 - #21 HA integration: device + entities + Repairs + events + blueprint
 - #6 [Epic] Agentic AI chat integration sprint
 - #5 Redesign issue definitions (tracking)

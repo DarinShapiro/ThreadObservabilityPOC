@@ -1,11 +1,11 @@
 # HA MCP Client Setup
 
-This guide takes a Home Assistant user from a fresh Thread Observability install to a working Assist agent with Thread tools.
+This guide takes a Home Assistant user from a fresh Thread Mesh Detective install (formerly Thread Observability) to a working Assist agent with Thread tools.
 
 ## Prerequisites
 
 - Home Assistant 2025.x or newer.
-- Thread Observability installed and running.
+- Thread Mesh Detective installed and running.
 - At least one configured Home Assistant conversation agent.
 - The MCP server exposed on port 8100 from the add-on.
 
@@ -24,9 +24,9 @@ The add-on also exposes `POST /mcp/stream` for streamable HTTP clients, but the 
 3. Choose **Add integration**.
 4. Search for **MCP Client**.
 5. When prompted for the server URL, paste `http://9e5048e8-thread-observability:8100/mcp/sse`.
-6. Choose the conversation agent that should receive the Thread Observability tools.
+6. Choose the conversation agent that should receive the Thread Mesh Detective tools.
 7. Finish the integration flow and wait for the agent to refresh.
-8. Open the Thread Observability dashboard and reload it once.
+8. Open the Thread Mesh Detective dashboard and reload it once.
 9. Open the **Chat** panel. If the integration is visible, the setup card disappears and the chat composer becomes active.
 
 ## What the dashboard shows before setup
