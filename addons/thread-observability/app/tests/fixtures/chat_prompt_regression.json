@@ -91,6 +91,11 @@
       "prompt": "Looking at the past 3 days, tell me about the most recent devices added to the network and whether any device found a new and better path to the OTBR."
     },
     {
+      "id": "network-change-past-3-days",
+      "category": "history",
+      "prompt": "How has my network changed in the past 3 days?"
+    },
+    {
       "id": "re-attach-events",
       "category": "history",
       "prompt": "Which devices have re-attached recently, and does that suggest instability?"

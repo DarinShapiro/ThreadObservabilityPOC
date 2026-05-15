@@ -1967,6 +1967,7 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
     assert any("interface advice" in policy for policy in policies)
     assert any("self-referential meta commentary" in policy for policy in policies)
     assert any("better path to OTBR" in policy for policy in policies)
+    assert any("full requested history window" in policy for policy in policies)
 
 
 def test_direct_chat_turn_rewrites_duplicate_device_meta_response_via_audit(monkeypatch) -> None:
@@ -2131,4 +2132,84 @@ def test_direct_chat_turn_rewrites_ungrounded_otbr_path_improvement_claim_via_au
     assert "one node and three links appeared" in result["response"]["text"]
     assert "cannot tell from those counts alone" in result["response"]["text"]
     assert "better path to the OTBR" in result["response"]["text"]
+    assert len(calls) == 2
+
+
+def test_direct_chat_turn_rewrites_sparse_history_window_overclaim_via_audit(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+    audits = [
+        direct_chat.AuditVerdict(
+            answered_question=False,
+            grounded_in_evidence=False,
+            rewrite_needed=True,
+            repair_action="rewrite_once",
+            critique=(
+                "Do not present a same-day retained snapshot span as if it covered the full requested 3-day window. "
+                "State the actual retained coverage and the missing earlier history."
+            ),
+        ),
+        direct_chat.AuditVerdict(),
+    ]
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": (
+                                "Over the past 3 days, the network grew from 16 nodes to 17 nodes and from 62 links to 65 links, "
+                                "with no other topology changes."
+                            ),
+                        }
+                    }
+                ]
+            }
+        critique = next(
+            msg for msg in body["messages"]
+            if msg.get("role") == "system" and "Audit critique:" in str(msg.get("content") or "")
+        )
+        assert "requested 3-day window" in critique["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            "The retained topology history I can see here only spans a shorter same-day window, not the full requested 3 days. "
+                            "Within that retained span, the network changed from 16 nodes and 62 links to 17 nodes and 65 links. "
+                            "I cannot say from the current evidence whether that was the only change across the full 3-day window because the earlier history is missing."
+                        ),
+                    }
+                }
+            ]
+        }
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return audits.pop(0)
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="How has my network changed in the past 3 days?",
+            rendered_message="User message: How has my network changed in the past 3 days?",
+            conversation_id=None,
+        )
+    )
+
+    assert "only spans a shorter same-day window" in result["response"]["text"]
+    assert "not the full requested 3 days" in result["response"]["text"]
+    assert "earlier history is missing" in result["response"]["text"]
     assert len(calls) == 2

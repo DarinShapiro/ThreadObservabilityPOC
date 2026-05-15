@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.52 — Audit rule refinement for sparse history windows
+
+This patch tightens direct-chat auditing so the assistant does not answer a
+multi-day history question as if the retained evidence covered the full window
+when the observed snapshot span is shorter.
+
+**Fixes:**
+- adds an explicit audit rule requiring the answer to state the actual retained
+  history coverage and call out missing earlier history when the requested
+  window is larger than the available snapshot span
+- adds a direct-chat regression for the live failure shape where a same-day
+  snapshot span was presented as if it covered the full past 3 days
+- expands the API prompt regression corpus and smoke run to include this
+  multi-day network-change question
+
 ## 0.11.51 — Audit rule refinement for route-improvement claims
 
 This patch tightens the direct-chat audit criteria so the assistant does not
