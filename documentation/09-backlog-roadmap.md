@@ -27,6 +27,10 @@ Open issues still driving execution order:
 - #6 [Epic] Agentic AI chat integration sprint
 - #5 Redesign issue definitions (tracking)
 
+Newly opened follow-up to triage during backlog hygiene:
+
+- #105 Refine SED node state and parent presentation
+
 ## Phase 0: backlog hygiene
 
 Status: in progress
@@ -36,6 +40,7 @@ Goals:
 - Collapse duplicate execution threads where one implementation already resolved multiple diagnostics or graph issues.
 - Keep #5 scoped to issue-definition redesign work instead of using it as the umbrella for all remaining product work.
 - Keep documentation, GitHub issue state, and the runtime surface synchronized after each completed slice.
+- Decide whether #105 belongs as an operator-UX fix, backend evidence-model refinement, or an input to #5 before it grows into overlapping work.
 
 Exit criteria:
 

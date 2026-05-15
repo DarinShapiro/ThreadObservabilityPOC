@@ -9,6 +9,7 @@ Goal: close the loop on issues that directly affect what an operator sees in the
 Active issues:
 - #82 Diagnostics chat suggests nonexistent UI actions
 - #92 Graph UX: show node/link metadata on hover
+- #105 Refine SED node state and parent presentation
 
 Recently shipped and expected to be closed:
 - #80 Graph area filter does not populate with real Home Assistant areas
@@ -21,6 +22,7 @@ Recently shipped and expected to be closed:
 Exit criteria:
 - Chat guidance only references real UI affordances.
 - Graph and network views expose enough inline metadata that operators do not need to guess what they are looking at.
+- Sleepy end devices no longer look broken by default when the evidence only shows expected sleepy-child behavior.
 - No recently fixed UX issues remain open unless there is a verified residual defect.
 
 ## Bucket 2: Proactive Monitoring and Home Assistant Surfacing
