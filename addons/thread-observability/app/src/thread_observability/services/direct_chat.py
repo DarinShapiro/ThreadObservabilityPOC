@@ -12,7 +12,7 @@ import os
 import re
 import time
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -130,6 +130,47 @@ class AnswerReview:
     @property
     def failed(self) -> bool:
         return self.verdict == "fail"
+
+
+@dataclass(slots=True)
+class AuditVerdict:
+    answered_question: bool = True
+    grounded_in_evidence: bool = True
+    hallucinated_ui_or_actions: bool = False
+    tool_choice_ok: bool = True
+    missing_tool_opportunities: list[str] = field(default_factory=list)
+    contains_extraneous_content: bool = False
+    rewrite_needed: bool = False
+    repair_action: str = "accept"
+    critique: str = ""
+
+    @property
+    def failed(self) -> bool:
+        return self.repair_action != "accept"
+
+    @property
+    def requires_rewrite(self) -> bool:
+        return self.repair_action == "rewrite_once"
+
+    @property
+    def requires_missing_evidence(self) -> bool:
+        return self.repair_action == "gather_missing_evidence_once"
+
+
+def _coerce_audit_verdict(review: AuditVerdict | AnswerReview | Any) -> AuditVerdict:
+    if isinstance(review, AuditVerdict):
+        return review
+    if isinstance(review, AnswerReview):
+        if review.failed:
+            return AuditVerdict(
+                answered_question=False,
+                grounded_in_evidence=False,
+                rewrite_needed=True,
+                repair_action="rewrite_once",
+                critique=review.critique,
+            )
+        return AuditVerdict()
+    return AuditVerdict()
 
 
 def _tool_deferral_retry_budget(target: DirectChatTarget) -> int:
@@ -475,6 +516,37 @@ def _looks_like_overall_health_question(text: str) -> bool:
             "how healthy is my network",
             "is my network healthy",
         )
+    )
+
+
+def _looks_like_partition_summary_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    if not any(marker in normalized for marker in ("partition", "thread network", "thread networks", "unified mesh")):
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "why are there two partitions",
+            "how many partitions",
+            "partition status",
+            "partitions right now",
+            "single unified",
+            "one partition",
+            "unified thread network",
+            "distinct thread networks",
+            "two networks",
+            "network split",
+        )
+    )
+
+
+def _should_apply_page_context_contradiction_guard(text: str) -> bool:
+    return (
+        _looks_like_offline_nodes_question(text)
+        or _looks_like_overall_health_question(text)
+        or _looks_like_partition_summary_question(text)
     )
 
 
@@ -894,7 +966,7 @@ def _apply_deterministic_fallbacks(
         return _build_history_insufficient_response(tool_trace)
     if _answer_mentions_unsupported_dashboard_action(candidate_text):
         return _build_unsupported_dashboard_action_response(message, candidate_text)
-    if _answer_contradicts_page_context(message, candidate_text):
+    if _should_apply_page_context_contradiction_guard(message) and _answer_contradicts_page_context(message, candidate_text):
         return _build_page_context_contradiction_response(message)
     if _answer_leaks_internal_tool_names(candidate_text):
         return _build_internal_tool_name_leak_response()
@@ -1206,6 +1278,87 @@ def _answer_review_evidence(tool_trace: list[dict[str, Any]]) -> list[dict[str, 
     return reviewed
 
 
+def _audit_tool_catalog_summary(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summary: list[dict[str, Any]] = []
+    for row in tools:
+        function = row.get("function") if isinstance(row.get("function"), dict) else {}
+        parameters = function.get("parameters") if isinstance(function.get("parameters"), dict) else {}
+        properties = parameters.get("properties") if isinstance(parameters.get("properties"), dict) else {}
+        summary.append(
+            {
+                "name": str(function.get("name") or "").strip(),
+                "description": str(function.get("description") or "").strip(),
+                "parameters": sorted(str(name) for name in properties.keys())[:8],
+            }
+        )
+    return [row for row in summary if row["name"]]
+
+
+def _audit_tool_trace(
+    tool_trace: list[dict[str, Any]],
+    tool_catalog_summary: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    descriptions = {
+        str(row.get("name") or ""): str(row.get("description") or "")
+        for row in tool_catalog_summary
+        if isinstance(row, dict)
+    }
+    audited: list[dict[str, Any]] = []
+    for row in tool_trace[-6:]:
+        name = str(row.get("name") or "")
+        audited.append(
+            {
+                "name": name,
+                "description": descriptions.get(name, ""),
+                "arguments": row.get("arguments"),
+                "result": _tool_result_data(row.get("result")),
+            }
+        )
+    return audited
+
+
+def _parse_audit_verdict(payload: dict[str, Any]) -> AuditVerdict:
+    text = _extract_message_text(payload).strip()
+    if not text:
+        return AuditVerdict()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return AuditVerdict()
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return AuditVerdict()
+    if not isinstance(parsed, dict):
+        return AuditVerdict()
+    missing_tool_opportunities = parsed.get("missing_tool_opportunities")
+    if not isinstance(missing_tool_opportunities, list):
+        missing_tool_opportunities = []
+    normalized_missing_tools = [str(name).strip() for name in missing_tool_opportunities if str(name).strip()]
+    repair_action = str(parsed.get("repair_action") or "accept").strip().lower()
+    if repair_action not in {"accept", "rewrite_once", "gather_missing_evidence_once"}:
+        repair_action = "accept"
+    rewrite_needed = bool(parsed.get("rewrite_needed"))
+    tool_choice_ok = bool(parsed.get("tool_choice_ok", True))
+    if normalized_missing_tools and repair_action == "accept":
+        repair_action = "gather_missing_evidence_once"
+    elif rewrite_needed and repair_action == "accept":
+        repair_action = "rewrite_once"
+    return AuditVerdict(
+        answered_question=bool(parsed.get("answered_question", True)),
+        grounded_in_evidence=bool(parsed.get("grounded_in_evidence", True)),
+        hallucinated_ui_or_actions=bool(parsed.get("hallucinated_ui_or_actions", False)),
+        tool_choice_ok=tool_choice_ok,
+        missing_tool_opportunities=normalized_missing_tools,
+        contains_extraneous_content=bool(parsed.get("contains_extraneous_content", False)),
+        rewrite_needed=rewrite_needed,
+        repair_action=repair_action,
+        critique=str(parsed.get("critique") or "").strip(),
+    )
+
+
 def _parse_answer_review(payload: dict[str, Any]) -> AnswerReview:
     text = _extract_message_text(payload).strip()
     if not text:
@@ -1227,6 +1380,27 @@ def _parse_answer_review(payload: dict[str, Any]) -> AnswerReview:
     if verdict not in {"pass", "fail"}:
         verdict = "pass"
     return AnswerReview(verdict=verdict, critique=critique)
+
+
+def _audit_retry_message(verdict: AuditVerdict) -> str:
+    critique = verdict.critique or "The prior answer was not sufficiently grounded in the gathered evidence."
+    return (
+        "Rewrite the prior answer once using the audit feedback below. Keep the answer grounded in the evidence already "
+        "gathered in this turn. Do not ask the user to call internal tools or services. If the evidence is insufficient, "
+        "say that directly instead of guessing. Keep the answer focused and operator-facing.\n\n"
+        f"Audit critique: {critique}"
+    )
+
+
+def _audit_missing_evidence_message(verdict: AuditVerdict) -> str:
+    missing_tools = ", ".join(verdict.missing_tool_opportunities) or "the missing evidence bundle"
+    critique = verdict.critique or "The first answer did not gather the right evidence for this question."
+    return (
+        "The first answer skipped needed evidence. Gather one additional evidence bundle now before answering again. "
+        f"Prefer these tools if they are available and relevant: {missing_tools}. After that, answer directly from the "
+        "observed results. If the evidence is still insufficient, say so plainly instead of guessing.\n\n"
+        f"Audit critique: {critique}"
+    )
 
 
 def _answer_review_retry_message(review: AnswerReview) -> str:
@@ -1291,6 +1465,78 @@ async def _evaluate_answer_candidate(
     except Exception:
         return AnswerReview(verdict="pass")
     return _parse_answer_review(payload)
+
+
+async def _audit_answer_candidate(
+    target: DirectChatTarget,
+    *,
+    system_prompt: str,
+    user_message: str,
+    context_message: str,
+    candidate_text: str,
+    available_tools: list[dict[str, Any]],
+    tool_trace: list[dict[str, Any]],
+    internal_tool_request: bool,
+    counter_question: bool,
+    history_comparison_question: bool,
+    node_question: bool,
+) -> AuditVerdict:
+    review_target = _answer_review_target(target)
+    tool_catalog_summary = _audit_tool_catalog_summary(available_tools)
+    body = {
+        "model": review_target.model,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a strict audit model for a Thread diagnostics assistant. Review the turn using the user "
+                    "question, rendered page context, available tool catalog, actual tool trace, and candidate answer. "
+                    "Return JSON only with this exact shape: "
+                    '{"answered_question":true,"grounded_in_evidence":true,"hallucinated_ui_or_actions":false,'
+                    '"tool_choice_ok":true,"missing_tool_opportunities":[],"contains_extraneous_content":false,'
+                    '"rewrite_needed":false,"repair_action":"accept"|"rewrite_once"|"gather_missing_evidence_once",'
+                    '"critique":"short guidance"}. '
+                    "Use gather_missing_evidence_once only when the answer skipped an obviously better available tool or "
+                    "missing evidence bundle. Use rewrite_once when the existing tools were sufficient but the answer needs "
+                    "to be rewritten to answer directly, stay grounded, or remove extraneous content."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    "System prompt:\n"
+                    f"{system_prompt}\n\n"
+                    "User question:\n"
+                    f"{user_message}\n\n"
+                    "Rendered turn context:\n"
+                    f"{context_message}\n\n"
+                    "Candidate answer:\n"
+                    f"{candidate_text}\n\n"
+                    "Policy bundle:\n"
+                    + "\n".join(f"- {policy}" for policy in _answer_review_policies(
+                        internal_tool_request=internal_tool_request,
+                        counter_question=counter_question,
+                        history_comparison_question=history_comparison_question,
+                        node_question=node_question,
+                    ))
+                    + "\n\nAvailable tool catalog:\n"
+                    + _serialize_for_prompt(tool_catalog_summary, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)
+                    + "\n\nActual tool trace:\n"
+                    + _serialize_for_prompt(
+                        _audit_tool_trace(tool_trace, tool_catalog_summary),
+                        max_chars=_MAX_EVIDENCE_MESSAGE_CHARS,
+                    )
+                ),
+            },
+        ],
+        "temperature": review_target.temperature,
+        "stream": False,
+    }
+    try:
+        payload = await _post_chat_completions(review_target, body)
+    except Exception:
+        return AuditVerdict()
+    return _parse_audit_verdict(payload)
 
 
 def _force_answer_retry_message() -> str:
@@ -1688,7 +1934,8 @@ async def direct_chat_turn(
     tool_trace: list[dict[str, Any]] = []
     tool_calls_used = 0
     tool_deferral_retries = 0
-    answer_validation_retries = 0
+    audit_rewrite_retries = 0
+    audit_evidence_retries = 0
     node_evidence_retries = 0
     history_comparison_retries = 0
     counter_grounding_retries = 0
@@ -1793,33 +2040,40 @@ async def direct_chat_turn(
                     }
                 )
                 continue
-            review = await _evaluate_answer_candidate(
+            audit = _coerce_audit_verdict(
+                await _audit_answer_candidate(
                 target,
-                message=context_message,
+                system_prompt=_DEFAULT_SYSTEM_PROMPT,
+                user_message=message,
+                context_message=context_message,
                 candidate_text=candidate_text,
+                available_tools=tools,
                 tool_trace=tool_trace,
                 internal_tool_request=internal_tool_request,
                 counter_question=counter_question,
                 history_comparison_question=history_comparison_question,
                 node_question=node_question,
             )
-            if review.failed and answer_validation_retries < _MAX_ANSWER_VALIDATION_RETRIES:
-                answer_validation_retries += 1
+            )
+            if audit.requires_missing_evidence and audit_evidence_retries < 1:
+                audit_evidence_retries += 1
                 messages.append(
                     {
                         "role": "system",
-                        "content": _answer_review_retry_message(review),
+                        "content": _audit_missing_evidence_message(audit),
                     }
                 )
                 continue
-            final_text = _apply_deterministic_fallbacks(
-                message=context_message,
-                candidate_text=candidate_text,
-                tool_trace=tool_trace,
-                history_comparison_question=history_comparison_question,
-                counter_question=counter_question,
-                internal_tool_request=internal_tool_request,
-            )
+            if audit.requires_rewrite and audit_rewrite_retries < 1:
+                audit_rewrite_retries += 1
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": _audit_retry_message(audit),
+                    }
+                )
+                continue
+            final_text = candidate_text
             break
 
         for tool_call in tool_calls:

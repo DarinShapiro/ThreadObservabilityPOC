@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.44 — Direct-chat audit loop refactor
+
+This patch starts the direct-chat runtime shift from deterministic rewrite
+guards toward a structured audit loop.
+
+**Fixes:**
+- replaces the thin pass/fail evaluator with a structured audit verdict that
+  reviews the user question, rendered page context, tool catalog, tool trace,
+  and candidate answer together
+- bounds direct-chat repair to one rewrite pass or one missing-evidence gather
+  pass instead of leaning on open-ended deterministic retry behavior
+- narrows the page-context contradiction clamp so unrelated prompts no longer
+  collapse into the generic multi-partition fallback just because the page
+  context shows more than one network or partition
+- adds regression coverage for the new audit rewrite and missing-evidence
+  branches plus the narrowed contradiction guard
+
 ## 0.11.43 — Sleepy-device reported-link follow-up
 
 This patch fixes the remaining live sleepy-device gap found after the
