@@ -138,33 +138,33 @@ def _seed_store(store: SQLiteStore) -> None:
     )
     store.insert_topology_snapshot(
         snapshot={
-            "computed_at": (now_dt - timedelta(hours=1)).isoformat(),
+            "computed_at": (now_dt - timedelta(days=2, hours=3)).isoformat(),
             "node_count": 2,
             "link_count": 1,
             "nodes": [
-                {"eui64": router, "role": "router", "routing_role": "router", "partition_id": 1234, "parent_eui64": otbr},
-                {"eui64": otbr, "role": "border_router", "routing_role": "leader", "partition_id": 1234, "parent_eui64": None},
+                {"eui64": router, "role": "router", "routing_role": "router", "partition_id": 1234, "parent_eui64": otbr, "channel": 20},
+                {"eui64": otbr, "role": "border_router", "routing_role": "leader", "partition_id": 1234, "parent_eui64": None, "channel": 20},
             ],
             "links": [
                 {"from": router, "to": otbr, "source": "route_table", "is_child": False},
             ],
-            "partitions": [{"partition_id": 1234, "leader_eui64": otbr, "member_count": 2}],
+            "partitions": [{"partition_id": 1234, "leader_eui64": otbr, "member_count": 2, "channel": 20, "network_name": "TestMesh"}],
         },
         snapshot_hash="snapshot-a",
-        captured_at=(now_dt - timedelta(hours=1)).isoformat(),
+        captured_at=(now_dt - timedelta(days=2, hours=3)).isoformat(),
     )
     current_snapshot = {
         "computed_at": now,
         "nodes": [
-            {"eui64": sleepy, "role": None, "routing_role": "sleepy_end_device", "partition_id": 1234, "parent_eui64": router},
-            {"eui64": router, "role": "router", "routing_role": "router", "partition_id": 1234, "parent_eui64": otbr},
-            {"eui64": otbr, "role": "border_router", "routing_role": "leader", "partition_id": 1234, "parent_eui64": None},
+            {"eui64": sleepy, "role": None, "routing_role": "sleepy_end_device", "partition_id": 1234, "parent_eui64": router, "channel": 15},
+            {"eui64": router, "role": "router", "routing_role": "router", "partition_id": 1234, "parent_eui64": otbr, "channel": 15},
+            {"eui64": otbr, "role": "border_router", "routing_role": "leader", "partition_id": 1234, "parent_eui64": None, "channel": 15},
         ],
         "links": [
             {"from": router, "to": sleepy, "source": "neighbor_table", "is_child": True},
             {"from": router, "to": otbr, "source": "route_table", "is_child": False},
         ],
-        "partitions": [{"partition_id": 1234, "leader_eui64": otbr, "member_count": 3}],
+        "partitions": [{"partition_id": 1234, "leader_eui64": otbr, "member_count": 3, "channel": 15, "network_name": "TestMesh"}],
     }
     store.insert_topology_snapshot(
         snapshot=current_snapshot,

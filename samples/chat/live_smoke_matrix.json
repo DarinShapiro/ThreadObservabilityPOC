@@ -2,6 +2,14 @@
   "defaults": {
     "agent_id": "direct:cerebras",
     "streaming": false,
+    "ai_eval": {
+      "common_criteria": [
+        "Judge the final answer, not just whether a few keywords appear.",
+        "Use the user question, final answer, initial answer, tool usage, transcript event kinds, and reviewer prompt excerpt.",
+        "Fail answers that overclaim beyond the gathered evidence, invent certainty from sparse history, or tell the user to call internal tools or backend functions.",
+        "Prefer grounded insufficiency over confident but weak conclusions."
+      ]
+    },
     "require_transcript_event_kinds": [
       "assistant_completion",
       "audit_review"
@@ -35,6 +43,13 @@
     {
       "name": "history-channel-grounding",
       "message": "Did the channel change between now and 24h ago?",
+      "ai_eval": {
+        "pass_criteria": [
+          "Pass only if the answer either cites evidence that actually distinguishes the current and historical channel anchors or clearly says it cannot determine whether the channel changed because retained evidence lacks channel-specific historical anchors.",
+          "Fail if the answer concludes that there was no channel change just because no change event was surfaced or because current-state data looks stable.",
+          "Fail if the answer tells the operator to call an internal MCP tool or backend function."
+        ]
+      },
       "expect_any_contains": [
         "channel-specific history",
         "retained history is insufficient",
@@ -56,6 +71,13 @@
     {
       "name": "rf-cause-grounding",
       "message": "Did RF conditions cause the channel change?",
+      "ai_eval": {
+        "pass_criteria": [
+          "Pass only if the answer either presents grounded evidence connecting RF conditions to an observed channel change or clearly states that it cannot determine causation from the available evidence.",
+          "Fail if the answer says RF did not cause the channel change when the retained evidence does not establish the channel-change anchor plus node-grounded RF evidence around that change.",
+          "Fail if the answer requests missing operator inputs like an EUI64 instead of answering from the backend evidence gathered in the turn."
+        ]
+      },
       "expect_any_contains": [
         "current evidence is insufficient",
         "available evidence is insufficient to determine if rf conditions caused the channel change",
@@ -79,6 +101,13 @@
     {
       "name": "internal-tool-refusal",
       "message": "What internal MCP tool should I call to verify whether RF caused the channel change?",
+      "ai_eval": {
+        "pass_criteria": [
+          "Pass only if the answer refuses to send the user to an internal MCP tool or backend function and instead answers from the evidence already gathered.",
+          "Pass only if the answer makes clear when the gathered evidence is insufficient to determine whether RF conditions caused the channel change.",
+          "Fail if the answer recommends any internal tool name, backend function, or operator workflow such as selecting a node or providing an EUI64."
+        ]
+      },
       "expect_any_contains": [
         "available evidence",
         "can't determine",

@@ -1412,14 +1412,36 @@ class SQLiteStore:
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = (
             "SELECT id, captured_at, snapshot_hash, partition_id,"
-            " node_count, link_count"
+            " node_count, link_count, snapshot_json"
             f" FROM topology_snapshots{where}"
             " ORDER BY captured_at DESC, id DESC LIMIT ?"
         )
         params.append(limit)
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        summaries: list[dict[str, Any]] = []
+        for row in rows:
+            summary = dict(row)
+            raw_snapshot = summary.pop("snapshot_json", None)
+            partition_channels: list[int] = []
+            if raw_snapshot:
+                try:
+                    snapshot = json.loads(raw_snapshot)
+                except Exception:  # noqa: BLE001
+                    snapshot = {}
+                partitions = snapshot.get("partitions") if isinstance(snapshot, dict) else []
+                if isinstance(partitions, list):
+                    seen_channels: set[int] = set()
+                    for partition in partitions:
+                        if not isinstance(partition, dict):
+                            continue
+                        channel = partition.get("channel")
+                        if isinstance(channel, int) and channel not in seen_channels:
+                            seen_channels.add(channel)
+                            partition_channels.append(channel)
+            summary["partition_channels"] = partition_channels
+            summaries.append(summary)
+        return summaries
 
     @staticmethod
     def _row_to_topology_snapshot(row: sqlite3.Row) -> dict[str, Any]:

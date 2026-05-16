@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from thread_observability.pipeline import topology as topology_mod
 from thread_observability.pipeline import topology_snapshot as ts_mod
 from thread_observability.storage.sqlite_store import SQLiteStore
 
@@ -111,7 +112,20 @@ def test_diff_topology_missing_snapshot_returns_error(store: SQLiteStore) -> Non
 def test_list_topology_snapshots_returns_summary_no_body(store: SQLiteStore) -> None:
     _seed_two_nodes(store)
     t0 = datetime(2026, 5, 12, 12, 0, 0, tzinfo=UTC)
-    ts_mod.capture_snapshot(store, now=t0)
+    snapshot = topology_mod.build_topology(store=store)
+    snapshot["partitions"] = [
+        {
+            "partition_id": 1234,
+            "leader_eui64": "aa" * 8,
+            "member_count": 2,
+            "channel": 15,
+        }
+    ]
+    store.insert_topology_snapshot(
+        snapshot=snapshot,
+        snapshot_hash=ts_mod._canonicalize_snapshot_for_hash(snapshot),
+        captured_at=t0.isoformat(),
+    )
     summaries = store.list_topology_snapshots()
     assert len(summaries) == 1
     s = summaries[0]
@@ -119,3 +133,4 @@ def test_list_topology_snapshots_returns_summary_no_body(store: SQLiteStore) -> 
     assert "snapshot_json" not in s
     assert "snapshot" not in s
     assert s["node_count"] >= 1
+    assert s["partition_channels"] == [15]

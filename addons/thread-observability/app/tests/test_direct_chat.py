@@ -52,7 +52,7 @@ def test_direct_chat_turn_executes_mcp_tool_and_returns_trace(monkeypatch) -> No
             ]
         }
 
-    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
         assert name == "get_health_snapshot"
         assert arguments == {}
         return {"data": {"status": "healthy"}, "meta": {"tool": name}}
@@ -60,9 +60,13 @@ def test_direct_chat_turn_executes_mcp_tool_and_returns_trace(monkeypatch) -> No
     async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
         return direct_chat.AuditVerdict()
 
+    async def fake_prefetch(**kwargs):  # noqa: ANN003
+        return None
+
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
     monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
     monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+    monkeypatch.setattr(direct_chat, "_prefetch_turn_evidence", fake_prefetch)
 
     result = asyncio.run(
         direct_chat.direct_chat_turn(
@@ -85,6 +89,299 @@ def test_direct_chat_turn_executes_mcp_tool_and_returns_trace(monkeypatch) -> No
     assert result["transcript"]["kind"] == "direct_chat"
     assert any(event["kind"] == "assistant_completion" for event in result["transcript"]["events"])
     assert any(event["kind"] == "tool_result" for event in result["transcript"]["events"])
+
+
+def test_direct_chat_turn_prefetches_risk_evidence_before_first_answer(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The biggest current risk is the stale neighbor path and the sleepy end device being offline.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
+        if name == "get_health_snapshot":
+            return {"data": {"summary": {"offline_nodes": 1, "active_issue_count": 0}}, "meta": {"tool": name}}
+        if name == "get_mesh_state":
+            return {
+                "data": {
+                    "nodes": [{"eui64": "11" * 8, "status": "online"}, {"eui64": "22" * 8, "status": "offline"}],
+                    "links": [{"from": "11" * 8, "to": "44" * 8, "lqi_in": 1}],
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AuditVerdict()
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What looks most risky in my Thread network right now?",
+            rendered_message="User message: What looks most risky in my Thread network right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"].startswith("The biggest current risk")
+    assert [row["name"] for row in result["tool_calls"]] == ["get_health_snapshot", "get_mesh_state"]
+    system_message = next(msg for msg in calls[0]["messages"] if msg.get("role") == "system" and "Backend evidence already gathered" in str(msg.get("content") or ""))
+    assert "get_health_snapshot" in system_message["content"]
+    assert "get_mesh_state" in system_message["content"]
+    assert any(event["kind"] == "system_prefetch" for event in result["transcript"]["events"])
+
+
+def test_direct_chat_turn_prefetches_partition_evidence_before_first_answer(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "There are two current partitions in the mesh state, so Home Assistant is showing two Thread networks right now.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
+        if name == "get_health_snapshot":
+            return {"data": {"summary": {"offline_nodes": 0, "active_issue_count": 0}}, "meta": {"tool": name}}
+        assert name == "get_mesh_state"
+        return {
+            "data": {
+                "nodes": [
+                    {"eui64": "11" * 8, "partition_id": 1234},
+                    {"eui64": "22" * 8, "partition_id": 5678},
+                ],
+                "partition_id": 1234,
+            },
+            "meta": {"tool": name},
+        }
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AuditVerdict()
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="Why are there two Thread networks showing up right now?",
+            rendered_message="User message: Why are there two Thread networks showing up right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"].startswith("There are two current partitions")
+    assert [row["name"] for row in result["tool_calls"]] == ["get_health_snapshot", "get_mesh_state"]
+    system_message = next(msg for msg in calls[0]["messages"] if msg.get("role") == "system" and "Backend evidence already gathered" in str(msg.get("content") or ""))
+    assert "multiple active partitions" in system_message["content"]
+    assert any(event["kind"] == "system_prefetch" for event in result["transcript"]["events"])
+
+
+def test_direct_chat_turn_prefetches_baseline_evidence_for_generic_question(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "The Thread network looks healthy overall based on the current health and mesh evidence.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
+        if name == "get_health_snapshot":
+            return {"data": {"summary": {"offline_nodes": 0, "active_issue_count": 0}}, "meta": {"tool": name}}
+        if name == "get_mesh_state":
+            return {
+                "data": {
+                    "nodes": [{"eui64": "11" * 8, "status": "online", "partition_id": 1234}],
+                    "links": [],
+                    "partition_id": 1234,
+                },
+                "meta": {"tool": name},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AuditVerdict()
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="What is the overall health of my Thread network right now?",
+            rendered_message="User message: What is the overall health of my Thread network right now?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"].startswith("The Thread network looks healthy overall")
+    assert [row["name"] for row in result["tool_calls"]] == ["get_health_snapshot", "get_mesh_state"]
+    system_message = next(msg for msg in calls[0]["messages"] if msg.get("role") == "system" and "Backend evidence already gathered" in str(msg.get("content") or ""))
+    assert "get_health_snapshot" in system_message["content"]
+    assert "get_mesh_state" in system_message["content"]
+
+
+def test_prefetch_evidence_keeps_health_and_mesh_load_bearing_fields(monkeypatch) -> None:
+    tool_trace: list[dict[str, object]] = []
+    transcript_events: list[dict[str, object]] = []
+
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
+        if name == "get_health_snapshot":
+            return {
+                "data": {
+                    "computed_at": "2026-05-16T05:35:50.338238+00:00",
+                    "status": "ok",
+                    "data_age_seconds": 0.002,
+                    "summary": {
+                        "healthy_nodes": 2,
+                        "online_nodes": 2,
+                        "sleeping_nodes": 1,
+                        "stale_nodes": 0,
+                        "offline_nodes": 0,
+                        "total_nodes": 3,
+                        "duplicate_physical_device_groups": 0,
+                        "duplicate_physical_device_rows": 0,
+                        "distinct_thread_networks": 0,
+                    },
+                    "active_issues": {"count": 2, "by_severity": {"warning": 2}},
+                },
+                "meta": {"tool": name, "as_of": "2026-05-16T05:35:50.339236+00:00", "data_source": "persisted_state"},
+            }
+        if name == "get_mesh_state":
+            return {
+                "data": {
+                    "computed_at": "2026-05-16T05:35:50.339236+00:00",
+                    "freshness_minutes": 60,
+                    "node_count": 3,
+                    "link_count": 3,
+                    "split": False,
+                    "partitions": [{"partition_id": 1234, "leader_eui64": "33" * 8, "member_count": 3}],
+                    "nodes": [
+                        {"eui64": "11" * 8, "status": "online"},
+                        {"eui64": "22" * 8, "status": "sleeping"},
+                        {"eui64": "33" * 8, "status": "online"},
+                    ],
+                },
+                "meta": {"tool": name, "as_of": "2026-05-16T05:35:50.339236+00:00", "data_source": "persisted_state"},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    system_message = asyncio.run(
+        direct_chat._prefetch_turn_evidence(
+            message="What is the overall health of my Thread network right now?",
+            tool_trace=tool_trace,
+            transcript_events=transcript_events,
+        )
+    )
+
+    assert system_message is not None
+    assert '"healthy_nodes":2' in system_message
+    assert '"active_issue_count":2' in system_message
+    assert '"active_issue_severity_counts":{"warning":2}' in system_message
+    assert '"freshness_minutes":60' in system_message
+    assert '"node_status_counts":{"online":2,"sleeping":1}' in system_message
+    assert 'dict with 9 keys' not in system_message
+    assert 'dict with 2 keys' not in system_message
+
+
+def test_direct_chat_turn_does_not_prefetch_baseline_evidence_for_history_question(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama3.1-8b",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I do not yet have historical comparison anchors for that time window.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
+        raise AssertionError(f"unexpected prefetch tool {name}")
+
+    async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
+        return direct_chat.AuditVerdict()
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+    monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="How has my network changed in the past 3 days?",
+            rendered_message="User message: How has my network changed in the past 3 days?",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"].startswith("I do not yet have historical comparison anchors")
+    assert result["tool_calls"] == []
+    assert not any(event["kind"] == "system_prefetch" for event in result["transcript"]["events"])
 
 
 def test_direct_chat_turn_compacts_large_tool_results_for_prompt(monkeypatch) -> None:
@@ -275,8 +572,10 @@ def test_parse_tool_arguments_accepts_json_string() -> None:
 def test_chat_tools_include_web_search_and_safe_read_tools() -> None:
     tools = direct_chat._chat_tools()
     names = {row["function"]["name"] for row in tools}
-    assert "get_health_snapshot" in names
+    assert "get_health_snapshot" not in names
+    assert "get_mesh_state" not in names
     assert "query_history" in names
+    assert "get_timeseries_health" in names
     assert "web_search" in names
     assert "get_config" not in names
     assert "ha_get_addon_logs" not in names
@@ -358,6 +657,7 @@ def test_audit_answer_candidate_uses_isolated_evaluator_model(monkeypatch) -> No
             internal_tool_request=False,
             counter_question=False,
             history_comparison_question=False,
+            partition_split_question=False,
             node_question=False,
         )
     )
@@ -478,6 +778,7 @@ def test_direct_chat_turn_gathers_missing_evidence_once_when_audit_requests_it(m
                 if msg.get("role") == "system" and "Gather one additional evidence bundle now" in str(msg.get("content") or "")
             )
             assert "get_health_snapshot" in audit_note["content"]
+            assert "call that exact tool now instead of describing the plan" in audit_note["content"]
             return {
                 "choices": [
                     {
@@ -506,7 +807,7 @@ def test_direct_chat_turn_gathers_missing_evidence_once_when_audit_requests_it(m
             ]
         }
 
-    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
         assert name == "get_health_snapshot"
         assert arguments == {}
         return {"data": {"status": "degraded", "offline_nodes": 1}, "meta": {"tool": name}}
@@ -514,9 +815,13 @@ def test_direct_chat_turn_gathers_missing_evidence_once_when_audit_requests_it(m
     async def fake_audit(*args, **kwargs):  # noqa: ANN002, ANN003
         return audits.pop(0)
 
+    async def fake_prefetch(**kwargs):  # noqa: ANN003
+        return None
+
     monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
     monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
     monkeypatch.setattr(direct_chat, "_audit_answer_candidate", fake_audit)
+    monkeypatch.setattr(direct_chat, "_prefetch_turn_evidence", fake_prefetch)
 
     result = asyncio.run(
         direct_chat.direct_chat_turn(
@@ -2064,6 +2369,7 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
         internal_tool_request=False,
         counter_question=False,
         history_comparison_question=False,
+        partition_split_question=False,
         node_question=False,
     )
 
@@ -2072,9 +2378,98 @@ def test_answer_review_policies_block_nonexistent_dashboard_actions() -> None:
     assert any("interface advice" in policy for policy in policies)
     assert any("routing-table checks" in policy for policy in policies)
     assert any("self-referential meta commentary" in policy for policy in policies)
+    assert any("raw tool-call JSON" in policy for policy in policies)
     assert any("better path to OTBR" in policy for policy in policies)
     assert any("signal quality improved" in policy for policy in policies)
     assert any("full requested history window" in policy for policy in policies)
+
+
+def test_answer_review_policies_force_internal_tool_and_sparse_history_failures() -> None:
+    policies = direct_chat._answer_review_policies(
+        internal_tool_request=True,
+        counter_question=True,
+        history_comparison_question=True,
+        partition_split_question=False,
+        node_question=False,
+    )
+
+    assert any("names an internal MCP tool" in policy for policy in policies)
+    assert any("observed channel-change anchor" in policy for policy in policies)
+    assert any("comparison anchors are explicitly established" in policy for policy in policies)
+
+
+def test_audit_answer_candidate_prompt_marks_internal_tool_and_insufficient_history_as_failures(monkeypatch) -> None:
+    target = direct_chat.DirectChatTarget(
+        provider="openai",
+        model="gpt-4.1",
+        base_url="https://api.openai.com/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    seen: list[tuple[str, dict[str, object]]] = []
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        seen.append((target.model, json.loads(json.dumps(body))))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            '{"answered_question":false,"grounded_in_evidence":false,'
+                            '"hallucinated_ui_or_actions":false,"tool_choice_ok":true,'
+                            '"missing_tool_opportunities":[],"contains_extraneous_content":false,'
+                            '"rewrite_needed":true,"repair_action":"rewrite_once",'
+                            '"critique":"The answer recommended an internal tool and overstated missing historical evidence."}'
+                        ),
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+
+    review = asyncio.run(
+        direct_chat._audit_answer_candidate(
+            target,
+            system_prompt=direct_chat._DEFAULT_SYSTEM_PROMPT,
+            user_message="What internal MCP tool should I call to verify whether RF caused the channel change?",
+            context_message=(
+                "User message: What internal MCP tool should I call to verify whether RF caused the channel change?"
+            ),
+            candidate_text=(
+                "Use get_node_link_signal_history. There was no channel change, so RF did not cause it."
+            ),
+            available_tools=direct_chat._chat_tools(),
+            tool_trace=[
+                {"name": "query_history", "arguments": {"limit": 20}, "result": {"data": []}},
+                {"name": "list_topology_history", "arguments": {"hours": 24}, "result": {"count": 1}},
+            ],
+            internal_tool_request=True,
+            counter_question=True,
+            history_comparison_question=True,
+            partition_split_question=False,
+            node_question=False,
+        )
+    )
+
+    assert review.failed is True
+    prompt = str(seen[0][1]["messages"][0]["content"])
+    assert "exposes raw function-call JSON" in prompt
+    assert "says it wants to call an internal tool instead of doing so" in prompt
+
+
+def test_answer_review_policies_force_partition_split_uncertainty() -> None:
+    policies = direct_chat._answer_review_policies(
+        internal_tool_request=False,
+        counter_question=False,
+        history_comparison_question=False,
+        partition_split_question=True,
+        node_question=False,
+    )
+
+    assert any("do not claim multiple current Thread networks" in policy for policy in policies)
+    assert any("live split is not confirmed" in policy for policy in policies)
 
 
 def test_direct_chat_turn_rewrites_duplicate_device_meta_response_via_audit(monkeypatch) -> None:

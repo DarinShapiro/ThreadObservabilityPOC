@@ -118,7 +118,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "description": (
             "Use when: starting a triage session or answering 'what does the mesh look like right now?'. "
             "Returns the live Thread mesh: nodes + links + partition_id, computed deterministically from "
-            "the SQLite event log and most-recent Matter discovery tick. Phantom nodes are excluded by default. "
+            "the latest retained Thread events and most-recent Matter discovery tick. Phantom nodes are excluded by default. "
             "Returns: {nodes:[{eui64, role, partition_id, parent_eui64, last_rssi, last_lqi, status, ...}], "
             "links:[...], partition_id, computed_at, node_count, link_count}. "
             "Caveats: derived from the latest persisted pipeline state. Check meta.cache_age_s on the response; if stale, call ingest_now to force "
@@ -146,7 +146,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "list_active_issues",
         "description": (
-            "Return all currently-open Thread network issues from the SQLite issues table. "
+            "Return all currently-open Thread network issues. "
             "NOTE: Issue detection is currently paused pending a redesign of the rule set "
             "(see tracking issue #5). Until new rules ship, this tool returns an empty list "
             "with `status: \"placeholder\"`. Do NOT infer \"all clear\" from the empty list — "
@@ -332,7 +332,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "get_storage_stats",
         "description": (
-            "Return SQLite store stats (schema version, file size, row counts per table, "
+            "Return storage stats for retained network data (schema version, file size, row counts, "
             "oldest/newest event timestamps) plus the active time-series backend."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
@@ -527,7 +527,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
     },
     {
         "name": "get_timeseries_health",
-        "description": "Probe the time-series backend (Influx if configured, else SQLite fallback) and return status.",
+        "description": "Probe the active time-series backend and return status.",
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
     {

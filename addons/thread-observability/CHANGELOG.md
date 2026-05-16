@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.11.58 — Tighten direct-chat evidence packing and prompt smoke review
+
+This patch makes the prompt-visible current-state evidence more faithful for
+direct chat, and adds prompt-focused smoke tooling that can judge and review
+live model behavior from the full turn transcript.
+
+**Fixes:**
+- preserves load-bearing `get_health_snapshot` and `get_mesh_state` fields in
+  prefetched direct-chat evidence so the model sees explicit health counts,
+  issue counts, freshness, partition shape, and node-status counts instead of
+  collapsed placeholder summaries
+- removes storage-implementation wording from model-visible MCP tool
+  descriptions and tightens direct-chat prompt and audit behavior around
+  evidence grounding, tool use, and missing-evidence retries
+- adds a prompt-focused direct-chat smoke harness plus AI-based evaluator and
+  transcript failure review scripts for local regression runs against authored
+  prompt cases
+- adds focused regression coverage for prefetched evidence packing and related
+  direct-chat smoke prompt behavior
+
 ## 0.11.57 — Persist full chat transcripts and inspect them in smoke runs
 
 This patch keeps the exact observable chat exchange for persisted sessions so

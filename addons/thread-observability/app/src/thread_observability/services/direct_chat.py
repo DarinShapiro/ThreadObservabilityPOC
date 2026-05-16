@@ -27,35 +27,203 @@ _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
 _MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
 _MAX_EVIDENCE_MESSAGE_CHARS = 5000
-_DEFAULT_SYSTEM_PROMPT = (
-    "You are the Thread Mesh Detective Thread-network troubleshooting assistant. Answer using only the user's "
-    "request, evidence gathered from available diagnostic tools, and retained backend conversation context. "
-    "Use tools proactively when current mesh state, counters, history, routing, health, or node-specific evidence is relevant. "
-    "For multi-part questions, gather evidence for each requested dimension that the available tools can cover before answering; "
-    "do not stop at a partial answer just because one slice is already grounded. "
-    "Do not tell the user to run the available diagnostic tools themselves. If a relevant tool exists, call it "
-    "yourself before answering. The user does not have direct access to MCP tools, functions, or internal data "
-    "services. Never tell the user to call, query, check, inspect, or use those services directly; do that "
-    "yourself when possible. Ask the user only for information they uniquely have or for a physical/manual action "
-    "you cannot perform from the available backend evidence. "
-    "Use web_search when current Matter or Thread specifications, vendor documentation, or other external protocol context "
-    "is relevant and the answer is not available from backend evidence alone. "
-    "Prefer a node's friendly/display name when present; on first mention include its EUI64 only when that helps "
-    "disambiguate. Ground conclusions in tool output, clearly separate observed facts from hypotheses, and mention "
-    "when evidence is stale or cache-aged before making a strong claim. Use correct Thread terminology: the Leader "
-    "is not a mandatory forwarding hop, parent-child attachment matters for end devices, and RouteTable next-hop "
-    "semantics are not generic IP routing. This is an interactive troubleshooting conversation: when multiple "
-    "explanations fit the evidence, name the top hypotheses and say what tool result would distinguish them. "
-    "Gather obvious diagnostic context before asking the user to restate the problem. Once you have gathered the relevant evidence, "
-    "answer concisely in this order: what you found, why it matters, and what to do next. Do not trade completeness for brevity "
-    "Do not present hypothetical backend analyses you did not run as next steps for the user. When evidence is missing, say exactly what is missing rather than prescribing unperformed internal analysis. "
-    "when the user asks for multiple dimensions of analysis. Do not reason from UI controls, page state, "
-    "or view-specific labels. If a claim is not present in backend evidence, do not use it. "
-    "Be concise, practical, and explicit about uncertainty only after using the relevant available tools and only when the remaining gap "
-    "cannot be closed from the available evidence."
-)
+
+
+_DEFAULT_SYSTEM_PROMPT = """# Role
+You are the Thread Mesh Detective, a Thread-network troubleshooting
+assistant. You answer questions about a live Thread mesh using backend
+diagnostic tools, retained conversation context, and, when needed, web
+search for external protocol documentation.
+
+The user does not have direct access to tools, MCP services, functions,
+or internal data. Anything that can be retrieved from the backend, you
+retrieve yourself.
+
+# Tool usage (mandatory)
+
+Call tools before answering whenever current mesh state, counters,
+history, routing, health, or node-specific evidence is relevant to the
+question.
+
+- If you identify a tool that would provide information needed to
+    answer, call it in this turn. Do not describe the call, propose it,
+    or ask permission - call it.
+- If you find yourself writing "I would need to check," "let me
+    investigate," or "we should look at," stop and call the tool instead.
+    Narrating intent to call a tool is treated as a failure to call it.
+- Never instruct the user to run, query, check, inspect, or use
+    internal tools or services. Do it yourself.
+- Never expose tool-call JSON, meta plans, or self-referential
+    commentary about your process.
+- For multi-part questions, gather evidence for every requested
+    dimension the available tools can cover before answering. Do not
+    stop at a partial answer because one slice is already grounded.
+- Use web_search when current Matter or Thread specifications, vendor
+    documentation, or external protocol context is needed and the answer
+    is not in backend evidence.
+
+Ask the user only for information they uniquely have, for example
+physical observations, intent, what they were doing when the issue
+occurred, or for manual actions you cannot perform from the backend.
+
+# Response contract
+
+- First sentence: the strongest supported direct answer to the user's
+    actual question. No tool-plan language. No self-referential
+    commentary. No "investigate further" wording unless the gathered
+    evidence genuinely cannot support a best conclusion.
+- Second sentence: concrete evidence anchors from this turn. Name
+    at least one tool result explicitly - the tool or evidence source
+    plus the specific fact you relied on.
+- Then: what it means and what to do next, concisely.
+
+If a top-line conclusion would be contradicted by later caveats, lead
+with the mixed or uncertain conclusion directly instead. Do not
+summarize overall health as "good," "healthy," or "clear" when
+gathered evidence shows active issues, offline nodes, stale data, or
+explicit warnings - lead with the strongest supported concern, then
+qualify.
+
+# Response shape by question type
+
+- Yes/no or presence/absence: answer "yes," "no," or "no clear
+    evidence right now."
+- Ranking, for example biggest risk or most likely cause: name the
+    strongest supported candidate, or say none clearly stands out. Do
+    not promote a speculative watch item into the top risk just because
+    the user asked for one. If evidence shows only mild or ambiguous
+    concerns, say no major current risk stands out, then name the mild
+    concern.
+- Forced-choice classification: pick the best-supported bucket
+    when evidence rules out broader alternatives. Do not stop at
+    "cannot determine" if one class is clearly the best fit. Example:
+    if evidence rules out a full-mesh outage and a border-router
+    outage, say so plainly and classify as device-specific or no outage
+    evident.
+- History or change-over-time: cite the actual comparison anchors
+    - timestamps and before/after values when available - and make
+    them visible in the answer. Do not answer history questions with
+    current-snapshot absence language. If the historical anchor for the
+    requested window is missing, say so.
+- Why or cause: do not invent a root cause from weak current-state
+    evidence. If the cause is not established, say so directly and name
+    what the current evidence does rule out or weakly suggests.
+- Multi-part: address each requested dimension, gathering
+    evidence for each one before answering.
+
+# Evidence grounding
+
+- Ground every claim in tool output. Clearly separate observed facts
+    from hypotheses.
+- When data is stale or cache-aged, mention that before making a
+    strong claim.
+- Absence claims, for example no chokepoint, no outage, no split, or no
+    change, must cite the supporting tool result. Phrase
+    current-state absence as "no clear evidence in the current
+    snapshot" unless evidence truly proves absence more strongly. Never
+    claim "no issue," "no change," or "no current evidence" unless
+    gathered evidence explicitly supports that absence.
+- When evidence is genuinely missing, say exactly what is missing -
+    do not prescribe unperformed internal analyses as next steps for
+    the user.
+- When multiple explanations fit the evidence, name the top
+    hypotheses and say what tool result would distinguish them.
+- Do not reason from UI controls, page state, or view-specific
+    labels. If a claim is not present in backend evidence, do not use
+    it.
+
+# Thread domain rules
+
+- The Leader is not a mandatory forwarding hop. Do not treat traffic
+    as routed "through the Leader" by default.
+- Parent-child attachment matters for end devices. Do not infer a
+    specific node's parent or partition instability from generic
+    topology additions, removals, or link diffs unless those changes
+    are explicitly tied to that node.
+- RouteTable next-hop semantics are Thread-specific and are not
+    generic IP routing - interpret accordingly.
+- Use a node's friendly/display name when present. On first mention,
+    include its EUI64 only when needed to disambiguate.
+
+# Priority when rules conflict
+
+1. Direct, evidence-grounded conclusion
+2. Honest scoping of uncertainty and missing evidence
+3. Completeness across all dimensions the user asked about
+4. Conciseness
+
+Be concise and practical, but do not trade completeness for brevity
+when the user asks for multiple dimensions of analysis. Be explicit
+about uncertainty only after using the relevant available tools and
+only when the remaining gap cannot be closed from available evidence.
+
+# Examples
+
+The blocks below illustrate patterns to follow and avoid. The data is
+synthetic - node-alpha, node-beta, T+0, all-zero EUI64s, and example
+tool names are placeholders. Do not copy them. Use actual node names,
+identifiers, timestamps, and tool names from your real tool calls.
+
+---
+
+Pattern: punting to the user when a tool could answer.
+
+    Avoid:
+        "To determine node-alpha's parent, I would need to check the
+        route table. Could you confirm which node you mean?"
+
+    Good:
+        "node-alpha's parent is node-beta (EUI64 0000000000000001), per
+        route_table at T+0. This matches the T-15 snapshot - attachment
+        is stable."
+
+---
+
+Pattern: burying active issues under a healthy summary.
+
+    Avoid:
+        "Overall the mesh looks healthy. Note: node-alpha has been
+        offline for some time and node-beta's last sync was stale."
+
+    Good:
+        "Two active concerns: node-alpha offline for about 6h per node_health
+        (last_seen T-6h), and stale sync on node-beta per border_status
+        (last_sync T-18h). Remaining nodes report nominal state in the
+        current snapshot."
+
+---
+
+Pattern: answering a history question with current-snapshot language.
+
+    Avoid:
+        "No changes detected in the topology."
+        in response to: "what's changed in the last hour?"
+
+    Good:
+        "The earliest available comparison anchor is from T-3h per
+        topology_history - I don't have a one-hour-ago snapshot. Against
+        T-3h, current topology adds node-gamma and drops node-delta; no
+        other diffs."
+
+---
+
+Pattern: inventing a root cause from weak evidence.
+
+    Avoid:
+        "node-alpha is probably experiencing RF interference."
+        when no tool result actually indicates interference
+
+    Good:
+        "Root cause is not established from current evidence. node_health
+        shows node-alpha online with normal link metrics at T+0, and
+        route_table shows stable parent attachment. What's ruled out:
+        full disconnection and parent loss. What's not yet checked:
+        historical link-quality trend - happy to pull that next."
+"""
 _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
     {
+        "get_health_snapshot",
+        "get_mesh_state",
         "get_config",
         "get_recent_logs",
         "ha_get_addon_state",
@@ -63,6 +231,13 @@ _CHAT_TOOL_EXCLUDE: frozenset[str] = frozenset(
         "ha_get_supervisor_logs",
         "ha_check_for_update",
         "list_otbr_candidates",
+        "list_thread_datasets",
+        "get_chat_stats",
+        "list_playbooks",
+        "lookup_playbook",
+        "get_environment",
+        "get_pipeline_health",
+        "start_triage",
     }
 )
 _WEB_SEARCH_TOOL_NAME = "web_search"
@@ -405,6 +580,90 @@ def _looks_like_counter_or_rf_question(text: str) -> bool:
             "attach attempt",
         )
     )
+
+
+def _looks_like_network_risk_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "most risky",
+            "what looks most risky",
+            "looks risky",
+            "should i investigate first",
+            "what looks wrong",
+        )
+    )
+
+
+def _looks_like_network_health_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "overall health of my thread network",
+            "overall health of the thread network",
+            "health of my thread network",
+            "health of the thread network",
+            "offline or stale nodes",
+            "border-router problem or a mesh problem",
+            "mesh outage",
+            "few devices dropping off",
+        )
+    )
+
+
+def _looks_like_current_state_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    if (
+        _looks_like_network_risk_question(normalized)
+        or _looks_like_network_health_question(normalized)
+        or _looks_like_partition_split_question(normalized)
+    ):
+        return True
+    return any(
+        marker in normalized
+        for marker in (
+            "right now",
+            "current mesh state",
+            "current evidence",
+            "currently",
+            "chokepoint",
+            "weak links",
+            "error-prone right now",
+            "border router right now",
+            "phantom router",
+            "ghost node in the mesh",
+            "stale routing entries",
+            "retry storm right now",
+            "bad path to the border router",
+        )
+    )
+
+
+def _looks_like_partition_split_question(text: str) -> bool:
+    normalized = " ".join(str(text or "").lower().split())
+    if not normalized:
+        return False
+    return any(
+        marker in normalized
+        for marker in (
+            "why are there two thread networks",
+            "why are there two networks",
+            "two thread networks",
+            "two networks showing up",
+            "mesh split",
+            "split into two partitions",
+        )
+    )
+
+
 def _looks_like_internal_tool_request(text: str) -> bool:
     normalized = " ".join(str(text or "").lower().split())
     if not normalized:
@@ -500,10 +759,72 @@ def _compact_node_inventory(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_health_snapshot(result: dict[str, Any]) -> dict[str, Any]:
+    data = _tool_result_data(result)
+    summary = data.get("summary") if isinstance(data, dict) and isinstance(data.get("summary"), dict) else {}
+    active_issues = data.get("active_issues") if isinstance(data, dict) and isinstance(data.get("active_issues"), dict) else {}
+    meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    return {
+        "computed_at": data.get("computed_at") if isinstance(data, dict) else None,
+        "status": data.get("status") if isinstance(data, dict) else None,
+        "data_age_seconds": data.get("data_age_seconds") if isinstance(data, dict) else None,
+        "summary": {
+            "healthy_nodes": summary.get("healthy_nodes"),
+            "online_nodes": summary.get("online_nodes"),
+            "sleeping_nodes": summary.get("sleeping_nodes"),
+            "stale_nodes": summary.get("stale_nodes"),
+            "offline_nodes": summary.get("offline_nodes"),
+            "total_nodes": summary.get("total_nodes"),
+            "duplicate_physical_device_groups": summary.get("duplicate_physical_device_groups"),
+            "duplicate_physical_device_rows": summary.get("duplicate_physical_device_rows"),
+            "distinct_thread_networks": summary.get("distinct_thread_networks"),
+        },
+        "active_issue_count": active_issues.get("count"),
+        "active_issue_severity_counts": active_issues.get("by_severity"),
+        "as_of": meta.get("as_of"),
+        "data_source": meta.get("data_source"),
+        "cache_age_s": meta.get("cache_age_s"),
+        "stale_after_s": meta.get("stale_after_s"),
+    }
+
+
+def _compact_current_mesh_state(result: dict[str, Any]) -> dict[str, Any]:
+    data = _tool_result_data(result)
+    meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    nodes = data.get("nodes") if isinstance(data, dict) and isinstance(data.get("nodes"), list) else []
+    partitions = data.get("partitions") if isinstance(data, dict) and isinstance(data.get("partitions"), list) else []
+    status_counts: dict[str, int] = {}
+    for row in nodes:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "unknown").strip().lower() or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+    return {
+        "computed_at": data.get("computed_at") if isinstance(data, dict) else None,
+        "freshness_minutes": data.get("freshness_minutes") if isinstance(data, dict) else None,
+        "node_count": data.get("node_count") if isinstance(data, dict) else None,
+        "link_count": data.get("link_count") if isinstance(data, dict) else None,
+        "split": data.get("split") if isinstance(data, dict) else None,
+        "partition_count": len(partitions),
+        "partition_ids": [row.get("partition_id") for row in partitions[:6] if isinstance(row, dict)],
+        "partition_leaders": [row.get("leader_eui64") for row in partitions[:6] if isinstance(row, dict)],
+        "partition_member_counts": [row.get("member_count") for row in partitions[:6] if isinstance(row, dict)],
+        "node_status_counts": status_counts,
+        "as_of": meta.get("as_of"),
+        "data_source": meta.get("data_source"),
+        "cache_age_s": meta.get("cache_age_s"),
+        "stale_after_s": meta.get("stale_after_s"),
+    }
+
+
 def _tool_result_for_prompt(name: str, arguments: dict[str, Any], result: Any) -> Any:
     data = _tool_result_data(result)
     if name == "list_all_nodes" and isinstance(data, dict) and isinstance(data.get("nodes"), list):
         return _compact_node_inventory(data)
+    if name == "get_health_snapshot" and isinstance(data, dict):
+        return _compact_health_snapshot(result if isinstance(result, dict) else {"data": data})
+    if name == "get_mesh_state" and isinstance(data, dict):
+        return _compact_current_mesh_state(result if isinstance(result, dict) else {"data": data})
     return result
 
 
@@ -524,12 +845,28 @@ def _answer_review_policies(
     internal_tool_request: bool,
     counter_question: bool,
     history_comparison_question: bool,
+    partition_split_question: bool,
     node_question: bool,
 ) -> list[str]:
     policies = [
         "Stay grounded in the gathered evidence from this turn; do not invent facts, fields, or timestamps.",
+        "In the first sentence, answer the user's actual question with the strongest supported conclusion. For yes/no or presence questions, say yes, no, or no clear evidence right now. For ranking questions, name the strongest supported candidate or say none clearly stands out.",
+        "Do not spend the first sentence on tool plans, self-referential commentary, or 'more investigation is needed' language when the gathered evidence already supports a best conclusion.",
+        "In the next sentence, cite at least one concrete evidence anchor from this turn: name the tool or evidence source and the specific fact, count, status, timestamp, or value you relied on.",
+        "For ranking questions, do not inflate a speculative watch item into the top risk. If the gathered evidence shows only mild or ambiguous concerns, say no major current risk stands out and then name the mild concern.",
+        "For forced-choice classification questions, choose the best-supported category when the gathered evidence rules out broader alternatives; do not default to 'cannot determine' if one category is already the clear best fit.",
         "If the evidence is insufficient, say so explicitly and name the missing evidence instead of guessing.",
+        "If the evidence shows no current problem, say that plainly instead of inventing a likely issue to be helpful.",
+        "Do not summarize overall health as good, healthy, or clear when the gathered evidence includes active issues, offline nodes, stale data, or another explicit warning; lead with the strongest supported concern and then qualify the overall state.",
+        "Do not give a top-line conclusion that is contradicted by later caveats or follow-up sentences. If the evidence is mixed or uncertain, lead with that mixed or uncertain conclusion directly.",
+        "For why/cause questions, do not invent a root cause from weak current-state evidence. If the cause is not established, say that directly and then name what the gathered evidence does rule out or weakly suggests.",
+        "Do not infer a specific node's parent or partition instability from generic topology additions, removals, or link diffs unless those changes are explicitly tied to that node.",
+        "For current-state absence claims, prefer 'no clear evidence in the current snapshot' over absolute language unless the gathered evidence strongly proves absence.",
+        "Fail answers that mention generic evidence without citing a concrete anchor from the gathered tool results.",
+        "Do not ask the user for more context, a node selection, or an EUI64 when the available tools could gather the next relevant evidence without that user input.",
+        "Do not answer with 'no evidence', 'no change', 'no issue', or similar absence claims unless the gathered evidence explicitly supports that absence claim.",
         "Do not tell the user to call internal MCP tools, functions, or backend services themselves.",
+        "Do not expose raw tool-call JSON, function-call envelopes, or statements about wanting to call a backend function in the final answer. If more evidence is needed and a relevant tool exists, call it instead of describing that plan to the user.",
         "Do not reason from UI controls, page state, or display labels. Use backend evidence only.",
         "Do not translate missing evidence into interface advice or invented operator workflows.",
         "Do not prescribe backend analyses, routing-table checks, node-health checks, or other internal investigations as next steps unless you actually performed them in this turn and are summarizing their results.",
@@ -539,11 +876,35 @@ def _answer_review_policies(
         "Do not imply that the retained evidence covers the full requested history window when it only spans a shorter interval; state the actual observed coverage and the missing earlier history instead.",
     ]
     if internal_tool_request:
-        policies.append("For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user.")
+        policies.append(
+            "For internal-tool questions, either answer from gathered evidence or refuse clearly; never punt internal tool usage back to the user."
+        )
+        policies.append(
+            "For internal-tool questions, fail any answer that names an internal MCP tool, backend function, or service for the user to call, even if that tool would be relevant."
+        )
     if counter_question:
         policies.append("Do not invent node IDs or RF/channel conclusions from empty counter series or missing node inventory evidence.")
+        policies.append(
+            "Do not conclude that RF conditions did or did not cause a channel change unless the gathered evidence includes an observed channel-change anchor and node-grounded RF evidence around that change."
+        )
     if history_comparison_question:
         policies.append("Do not claim a historical change unless the gathered evidence actually distinguishes the current and historical anchors.")
+        policies.append(
+            "Do not answer that no channel or topology change occurred from current-state snapshots, sparse retained history, or generic history rows unless the comparison anchors are explicitly established in the gathered evidence."
+        )
+        policies.append(
+            "Do not answer a history question with only current-snapshot language such as 'no clear evidence in the current snapshot'; either cite the historical comparison anchors or say that the historical anchor for the requested window is missing."
+        )
+        policies.append(
+            "When you claim a historical change, cite the compared anchors explicitly, including timestamps and before/after values when the gathered evidence provides them."
+        )
+        policies.append(
+            "Do not imply historical comparison anchors; surface them explicitly in the answer so the operator can see what current state was compared against what older state."
+        )
+    if partition_split_question:
+        policies.append(
+            "For questions about two Thread networks or partition splits, do not claim multiple current Thread networks unless the gathered current-state evidence actually shows more than one active partition. If current evidence shows one partition or remains ambiguous, say that a live split is not confirmed and stale or historical state may explain the display."
+        )
     if node_question:
         policies.append("For node troubleshooting, account for recent attach, recommission, parent-change, or partition-transition evidence before calling a node stable.")
     return policies
@@ -670,7 +1031,7 @@ def _audit_retry_message(verdict: AuditVerdict) -> str:
     critique = verdict.critique or "The prior answer was not sufficiently grounded in the gathered evidence."
     return (
         "Rewrite the prior answer once using the audit feedback below. Keep the answer grounded in the evidence already "
-        "gathered in this turn. Do not ask the user to call internal tools or services. If the evidence is insufficient, "
+        "gathered in this turn. Start with the strongest supported direct answer to the user's question. Do not replace that direct answer with tool-plan language or 'investigate further' wording when the current evidence already supports a best conclusion. In the next sentence, cite at least one concrete evidence anchor from the gathered tool results. Do not ask the user for more context, a node selection, or an EUI64 unless the user uniquely has information no tool can gather. Do not ask the user to call internal tools or services. If the evidence is insufficient, "
         "say that directly instead of guessing. Keep the answer focused and operator-facing.\n\n"
         f"Audit critique: {critique}"
     )
@@ -681,7 +1042,8 @@ def _audit_missing_evidence_message(verdict: AuditVerdict) -> str:
     critique = verdict.critique or "The first answer did not gather the right evidence for this question."
     return (
         "The first answer skipped needed evidence. Gather one additional evidence bundle now before answering again. "
-        f"Prefer these tools if they are available and relevant: {missing_tools}. After that, answer directly from the "
+        f"If the prior answer already referenced one of these tools, call that exact tool now instead of describing the plan: {missing_tools}. "
+        "Do not spend this retry on prose-only revision before the missing evidence is gathered. After that, answer directly from the "
         "observed results. If the evidence is still insufficient, say so plainly instead of guessing.\n\n"
         f"Audit critique: {critique}"
     )
@@ -691,7 +1053,7 @@ def _answer_review_retry_message(review: AnswerReview) -> str:
     critique = review.critique or "The prior answer was not sufficiently grounded in the gathered evidence."
     return (
         "Revise the prior answer once using the evaluator feedback below. Keep the answer grounded in the evidence already "
-        "gathered in this turn. Do not ask the user to call internal tools or services. If the evidence is insufficient, "
+        "gathered in this turn. Start with the strongest supported direct answer to the user's question. Do not replace that direct answer with tool-plan language or 'investigate further' wording when the current evidence already supports a best conclusion. In the next sentence, cite at least one concrete evidence anchor from the gathered tool results. Do not ask the user for more context, a node selection, or an EUI64 unless the user uniquely has information no tool can gather. Do not ask the user to call internal tools or services. If the evidence is insufficient, "
         "say that directly instead of guessing.\n\n"
         f"Evaluator critique: {critique}"
     )
@@ -706,6 +1068,7 @@ async def _evaluate_answer_candidate(
     internal_tool_request: bool,
     counter_question: bool,
     history_comparison_question: bool,
+    partition_split_question: bool,
     node_question: bool,
     transcript_events: list[dict[str, Any]] | None = None,
 ) -> AnswerReview:
@@ -716,11 +1079,20 @@ async def _evaluate_answer_candidate(
             {
                 "role": "system",
                 "content": (
-                    "You are a strict reviewer for a Thread diagnostics assistant. Review the candidate answer against the "
-                    "user request, gathered evidence, and policy bundle. Return JSON only with this shape: "
-                    '{"verdict":"pass"|"fail","critique":"short guidance for one retry"}. '
-                    "Use verdict fail only when the answer is materially ungrounded, punts internal tool usage back to the "
-                    "user, or ignores clear insufficiency in the evidence."
+                    "You are a strict reviewer for a Thread diagnostics assistant. Given the user request, the assistant's "
+                    "candidate answer, the gathered tool evidence, and the policy bundle, decide whether the answer passes. "
+                    "Output a single JSON object, no code fences, no surrounding prose: "
+                    '{"verdict":"pass"|"fail","critique":"<=2 sentences of retry guidance, empty string if pass"}. '
+                    "Fail if any of the following hold: the answer's load-bearing claims lack anchors to specific items in the "
+                    "gathered evidence; the answer asks the user for information the assistant could have gathered with an "
+                    "available tool; the answer describes a tool plan or names a tool it would call instead of having called it "
+                    "and the retry must execute the call; the answer makes an unsupported absence claim such as no issue or "
+                    "nothing changed without evidence ruling it out; the evidence supports a direct conclusion and the answer "
+                    "hedges or defers anyway; the answer ignores a clear gap or contradiction in the evidence; or the answer "
+                    "violates any rule in the policy bundle. Treat the policy bundle as mandatory, not advisory. Pass requires "
+                    "a direct conclusion at the strongest level the evidence supports, anchored to specific evidence items, with "
+                    "hedging calibrated to genuine evidence quality. Honest insufficiency claims pass only when no available tool "
+                    "could have closed the gap."
                 ),
             },
             {
@@ -735,6 +1107,7 @@ async def _evaluate_answer_candidate(
                         internal_tool_request=internal_tool_request,
                         counter_question=counter_question,
                         history_comparison_question=history_comparison_question,
+                        partition_split_question=partition_split_question,
                         node_question=node_question,
                     ))
                     + "\n\nGathered evidence:\n"
@@ -773,6 +1146,7 @@ async def _audit_answer_candidate(
     internal_tool_request: bool,
     counter_question: bool,
     history_comparison_question: bool,
+    partition_split_question: bool,
     node_question: bool,
     transcript_events: list[dict[str, Any]] | None = None,
 ) -> AuditVerdict:
@@ -792,8 +1166,15 @@ async def _audit_answer_candidate(
                     '"rewrite_needed":false,"repair_action":"accept"|"rewrite_once"|"gather_missing_evidence_once",'
                     '"critique":"short guidance"}. '
                     "Use gather_missing_evidence_once only when the answer skipped an obviously better available tool or "
-                    "missing evidence bundle. Use rewrite_once when the existing tools were sufficient but the answer needs "
-                    "to be rewritten to answer directly, stay grounded, or remove extraneous content."
+                    "missing evidence bundle. If the answer says it wants to call a specific available tool or asks for more data that an available tool could gather immediately, choose gather_missing_evidence_once rather than rewrite_once. Use rewrite_once when the existing tools were sufficient but the answer needs "
+                    "to be rewritten to answer directly, stay grounded, or remove extraneous content. Treat the policy bundle "
+                    "as mandatory fail criteria. When in doubt, fail rather than accept; false accepts are worse than one extra rewrite. If the answer names an internal tool or backend function for the user to call, "
+                    "exposes raw function-call JSON, says it wants to call an internal tool instead of doing so, "
+                    "fails to state the strongest supported direct conclusion, substitutes tool-plan or further-investigation language for a direct conclusion when the evidence already supports one, omits concrete evidence anchors from the gathered tool results, "
+                    "asks the user for more context, a node choice, or an EUI64 that the assistant should have gathered itself, "
+                    "claims no issue, no change, or no current evidence without explicit supporting anchors in the gathered evidence, "
+                    "answers a history-comparison or RF-causation question with a definitive yes or no despite missing anchors, "
+                    "or otherwise overstates certainty beyond the gathered evidence, do not accept it."
                 ),
             },
             {
@@ -812,6 +1193,7 @@ async def _audit_answer_candidate(
                         internal_tool_request=internal_tool_request,
                         counter_question=counter_question,
                         history_comparison_question=history_comparison_question,
+                        partition_split_question=partition_split_question,
                         node_question=node_question,
                     ))
                     + "\n\nAvailable tool catalog:\n"
@@ -845,8 +1227,8 @@ async def _audit_answer_candidate(
 
 def _force_answer_retry_message() -> str:
     return (
-        "Answer now from the evidence already gathered. Do not call more tools. If the available evidence is still "
-        "insufficient, say that explicitly and name the missing evidence instead of guessing."
+        "Answer now from the evidence already gathered. Start with the strongest supported direct answer to the user's question. "
+        "Do not call more tools. Do not replace the direct answer with tool-plan language or 'investigate further' wording when the current evidence already supports a best conclusion. In the next sentence after your direct answer, cite at least one concrete evidence anchor from the gathered tool results. Do not ask the user for more context, a node selection, or an EUI64 unless the user uniquely has information no tool can gather. If the available evidence is still insufficient, say that explicitly and name the missing evidence instead of guessing."
     )
 
 
@@ -1113,7 +1495,7 @@ async def _gather_backend_node_evidence(message: str, tool_trace: list[dict[str,
     }
 
 
-async def _dispatch_chat_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+async def _dispatch_chat_tool(name: str, arguments: dict[str, Any], *, allow_excluded: bool = False) -> dict[str, Any]:
     from ..api import mcp_tools
 
     if name == _WEB_SEARCH_TOOL_NAME:
@@ -1121,9 +1503,106 @@ async def _dispatch_chat_tool(name: str, arguments: dict[str, Any]) -> dict[str,
             str(arguments.get("query") or ""),
             max_results=int(arguments.get("max_results", 5)),
         )
-    if name not in mcp_tools._READ_TOOLS or name in _CHAT_TOOL_EXCLUDE:
+    if name not in mcp_tools._READ_TOOLS or (name in _CHAT_TOOL_EXCLUDE and not allow_excluded):
         return {"error": f"tool not allowed for chat: {name}"}
     return await mcp_tools._dispatch_and_wrap(name, arguments)
+
+
+async def _prefetch_turn_evidence(
+    *,
+    message: str,
+    tool_trace: list[dict[str, Any]],
+    transcript_events: list[dict[str, Any]],
+) -> str | None:
+    if not _looks_like_current_state_question(message):
+        return None
+
+    evidence_plan: list[tuple[str, dict[str, Any]]] = [
+        ("get_health_snapshot", {}),
+        ("get_mesh_state", {}),
+    ]
+    guidance = (
+        "Use the prefetched health snapshot and current mesh state as the baseline current-state evidence for this turn. "
+        "Answer directly from that evidence before asking for anything else."
+    )
+
+    if _looks_like_network_risk_question(message):
+        guidance = (
+            "Use the prefetched health snapshot and current mesh state to identify the most important current risks. "
+            "Answer directly from that evidence before asking for anything else."
+        )
+    elif _looks_like_network_health_question(message):
+        guidance = (
+            "Use the prefetched health snapshot and current mesh state to answer the current health or outage question directly. "
+            "Ground the answer in the observed health summary, node availability, and current mesh shape before asking for anything else."
+        )
+    elif _looks_like_partition_split_question(message):
+        guidance = (
+            "Use the prefetched health snapshot and current mesh state to explain whether there are multiple current partitions or only a single current Thread network. "
+            "Do not claim a live split unless the current mesh evidence supports it."
+        )
+
+    gathered: list[dict[str, Any]] = []
+    partition_count: int | None = None
+    for name, arguments in evidence_plan:
+        result = await _dispatch_chat_tool(name, arguments, allow_excluded=True)
+        tool_trace.append(
+            {
+                "id": f"prefetch-{uuid.uuid4()}",
+                "type": "function",
+                "name": name,
+                "arguments": arguments,
+                "result": result,
+            }
+        )
+        transcript_events.append(
+            {
+                "kind": "tool_result",
+                "source": "prefetch",
+                "name": name,
+                "arguments": _json_copy(arguments),
+                "result": _json_copy(result),
+            }
+        )
+        gathered.append(
+            {
+                "tool": name,
+                "arguments": arguments,
+                "result": _tool_result_for_prompt(name, arguments, result),
+            }
+        )
+        if name == "get_mesh_state":
+            data = _tool_result_data(result)
+            nodes = data.get("nodes") if isinstance(data, dict) and isinstance(data.get("nodes"), list) else []
+            partitions = {
+                row.get("partition_id")
+                for row in nodes
+                if isinstance(row, dict) and row.get("partition_id") is not None
+            }
+            if partitions:
+                partition_count = len(partitions)
+
+    if _looks_like_partition_split_question(message):
+        if partition_count is not None and partition_count <= 1:
+            guidance = (
+                "The prefetched current mesh state shows one active partition, so do not claim that there are two current Thread networks. "
+                "Explain that a live split is not confirmed by current evidence and that stale or historical state may explain the display."
+            )
+        elif partition_count is not None and partition_count > 1:
+            guidance = (
+                "The prefetched current mesh state shows multiple active partitions. Explain that this current partition split is why two Thread networks are showing up."
+            )
+        else:
+            guidance = (
+                "Use the prefetched mesh-state evidence to explain whether there are multiple current partitions or only stale partition identifiers. "
+                "If the current evidence is ambiguous, say a live split is not confirmed."
+            )
+
+    return (
+        "Backend evidence already gathered for this turn:\n"
+        f"{_serialize_for_prompt(gathered, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)}\n\n"
+        f"{guidance}"
+    )
 
 
 async def _post_chat_completions(target: DirectChatTarget, body: dict[str, Any]) -> dict[str, Any]:
@@ -1164,6 +1643,37 @@ async def direct_chat_turn(
     history_comparison_question = _looks_like_history_comparison_question(message)
     counter_question = _looks_like_counter_or_rf_question(message)
     internal_tool_request = _looks_like_internal_tool_request(message)
+    partition_split_question = _looks_like_partition_split_question(message)
+
+    if node_question:
+        node_evidence = await _gather_backend_node_evidence(message, tool_trace)
+        if node_evidence:
+            node_evidence_message = (
+                "Backend node evidence already gathered for this turn:\n"
+                f"{_serialize_for_prompt(node_evidence, max_chars=_MAX_EVIDENCE_MESSAGE_CHARS)}\n\n"
+                "Use this node-specific evidence to answer directly from the observed status, recent history, and current mesh view before asking for anything else."
+            )
+            messages.append({"role": "system", "content": node_evidence_message})
+            transcript_events.append(
+                {
+                    "kind": "system_prefetch",
+                    "content": node_evidence_message,
+                }
+            )
+
+    prefetched_evidence_message = await _prefetch_turn_evidence(
+        message=message,
+        tool_trace=tool_trace,
+        transcript_events=transcript_events,
+    )
+    if prefetched_evidence_message:
+        messages.append({"role": "system", "content": prefetched_evidence_message})
+        transcript_events.append(
+            {
+                "kind": "system_prefetch",
+                "content": prefetched_evidence_message,
+            }
+        )
 
     for _ in range(_MAX_TOOL_ROUNDS + 1):
         body = {
@@ -1207,6 +1717,7 @@ async def direct_chat_turn(
                 internal_tool_request=internal_tool_request,
                 counter_question=counter_question,
                 history_comparison_question=history_comparison_question,
+                partition_split_question=partition_split_question,
                 node_question=node_question,
                 transcript_events=transcript_events,
             )
@@ -1284,7 +1795,7 @@ async def direct_chat_turn(
                             "Do not call get_topology_history_entry with empty arguments as a fallback; that cannot "
                             "recover missing history. Instead, explain that topology-history data is unavailable and "
                             "fall back to current-state or event-based tools such as get_mesh_state, query_history, "
-                            "analyze_node, or start_triage."
+                            "or analyze_node."
                         ),
                     }
                 )

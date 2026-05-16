@@ -10,11 +10,15 @@ param(
 
     [string]$ConversationPrefix = "chat-smoke",
 
+    [string]$AiEvalScriptPath,
+
     [switch]$DryRun,
 
     [switch]$SkipStats,
 
-    [switch]$SkipTranscript
+    [switch]$SkipTranscript,
+
+    [switch]$SkipAiEval
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,9 +27,15 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $MatrixPath) {
     $MatrixPath = Join-Path $RepoRoot 'samples/chat/live_smoke_matrix.json'
 }
+if (-not $AiEvalScriptPath) {
+    $AiEvalScriptPath = Join-Path $RepoRoot 'scripts/chat_smoke_evaluator.py'
+}
 
 if (-not (Test-Path $MatrixPath)) {
     throw "Matrix file not found: $MatrixPath"
+}
+if (-not $DryRun -and -not $SkipAiEval -and -not (Test-Path $AiEvalScriptPath)) {
+    throw "AI evaluator script not found: $AiEvalScriptPath"
 }
 
 function Merge-Hashtable {
@@ -230,6 +240,60 @@ function Test-ContainsNone {
     return $true
 }
 
+function Invoke-AiSmokeEvaluation {
+    param(
+        [string]$ScriptPath,
+        [hashtable]$CaseDefinition,
+        [string]$ConversationId,
+        [string]$FinalAnswer,
+        [string[]]$ToolNames,
+        [object[]]$ToolCalls,
+        [string[]]$TranscriptEventKinds,
+        [string[]]$InitialAnswers,
+        [string]$ReviewerPrompt
+    )
+
+    $caseName = if ($CaseDefinition.ContainsKey('name')) { [string]$CaseDefinition['name'] } else { '' }
+    $message = if ($CaseDefinition.ContainsKey('message')) { [string]$CaseDefinition['message'] } else { '' }
+    $aiEval = $null
+    if ($CaseDefinition.ContainsKey('ai_eval')) {
+        $aiEval = ConvertTo-Hashtable $CaseDefinition['ai_eval']
+    }
+    if (-not $aiEval) {
+        throw "Case '$caseName' is missing ai_eval rubric"
+    }
+
+    $payload = @{
+        case_name = $caseName
+        conversation_id = $ConversationId
+        user_message = $message
+        final_answer = $FinalAnswer
+        initial_answer = $(if ($InitialAnswers.Count) { [string]$InitialAnswers[0] } else { '' })
+        tool_names = @($ToolNames)
+        tool_calls = @($ToolCalls)
+        transcript_event_kinds = @($TranscriptEventKinds)
+        reviewer_prompt = $ReviewerPrompt
+        ai_eval = $aiEval
+    }
+
+    $tempFile = Join-Path ([System.IO.Path]::GetTempPath()) ("thread-chat-smoke-eval-" + [guid]::NewGuid().ToString() + ".json")
+    try {
+        $payload | ConvertTo-Json -Depth 100 | Set-Content -Path $tempFile -Encoding UTF8
+        $output = & python $ScriptPath --input-file $tempFile 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($output -is [System.Array]) {
+            $output = ($output -join [Environment]::NewLine)
+        }
+        if ($exitCode -ne 0) {
+            return @{ error = [string]$output }
+        }
+        return ConvertTo-Hashtable (ConvertFrom-Json -InputObject ([string]$output))
+    }
+    finally {
+        Remove-Item -LiteralPath $tempFile -ErrorAction SilentlyContinue
+    }
+}
+
 $matrix = Get-Content -Raw -Path $MatrixPath | ConvertFrom-Json
 $defaults = ConvertTo-Hashtable $matrix.defaults
 $cases = @($matrix.cases)
@@ -268,6 +332,7 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
         throw "Case '$caseName' is missing message"
     }
 
+    $caseConfig = Merge-Hashtable -Base $defaults -Override $case
     $payload = Merge-Hashtable -Base $defaults -Override $case
     $payload.Remove('name')
     $payload.Remove('expect_all_contains')
@@ -281,6 +346,7 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
     $payload.Remove('forbid_initial_contains')
     $payload.Remove('expect_reviewer_any_contains')
     $payload.Remove('forbid_reviewer_contains')
+    $payload.Remove('ai_eval')
     $payload['message'] = $message
     $payload['streaming'] = $false
     if ($AgentId) {
@@ -314,6 +380,7 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
     $transcriptEventKinds = @()
     $initialAnswers = @()
     $reviewerText = ''
+    $aiEvaluation = $null
 
     $failures = @()
     if (-not $SkipTranscript) {
@@ -335,25 +402,16 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
     if (-not $responseText.Trim()) {
         $failures += 'empty response text'
     }
-    if ($case.expect_all_contains -and -not (Test-ContainsAll -Text $responseText -Needles $case.expect_all_contains)) {
-        $failures += 'missing one or more required phrases'
-    }
-    if ($case.expect_any_contains -and -not (Test-ContainsAny -Text $responseText -Needles $case.expect_any_contains)) {
-        $failures += 'missing any expected phrase'
-    }
-    if ($case.forbid_contains -and -not (Test-ContainsNone -Text $responseText -Needles $case.forbid_contains)) {
-        $failures += 'response contained a forbidden phrase'
-    }
-    if ($case.require_tool_names) {
-        foreach ($requiredTool in @($case.require_tool_names)) {
+    if ($caseConfig.require_tool_names) {
+        foreach ($requiredTool in @($caseConfig.require_tool_names)) {
             if ($toolNames -notcontains [string]$requiredTool) {
                 $failures += "missing required tool call: $requiredTool"
             }
         }
     }
-    if ($case.require_any_tool_names) {
+    if ($caseConfig.require_any_tool_names) {
         $matched = $false
-        foreach ($requiredTool in @($case.require_any_tool_names)) {
+        foreach ($requiredTool in @($caseConfig.require_any_tool_names)) {
             if ($toolNames -contains [string]$requiredTool) {
                 $matched = $true
                 break
@@ -363,8 +421,8 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
             $failures += "missing any accepted tool call"
         }
     }
-    if ($case.forbid_tool_names) {
-        foreach ($forbiddenTool in @($case.forbid_tool_names)) {
+    if ($caseConfig.forbid_tool_names) {
+        foreach ($forbiddenTool in @($caseConfig.forbid_tool_names)) {
             if ($toolNames -contains [string]$forbiddenTool) {
                 $failures += "forbidden tool call observed: $forbiddenTool"
             }
@@ -374,25 +432,36 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
         if (-not $transcriptTurn) {
             $failures += 'missing persisted transcript turn'
         }
-        if ($case.require_transcript_event_kinds) {
-            foreach ($requiredEventKind in @($case.require_transcript_event_kinds)) {
+        if ($caseConfig.require_transcript_event_kinds) {
+            foreach ($requiredEventKind in @($caseConfig.require_transcript_event_kinds)) {
                 if ($transcriptEventKinds -notcontains [string]$requiredEventKind) {
                     $failures += "missing required transcript event: $requiredEventKind"
                 }
             }
         }
-        $initialAnswerText = if ($initialAnswers.Count) { [string]$initialAnswers[0] } else { '' }
-        if ($case.expect_initial_any_contains -and -not (Test-ContainsAny -Text $initialAnswerText -Needles $case.expect_initial_any_contains)) {
-            $failures += 'initial answer missing any expected phrase'
+    }
+    if (-not $SkipAiEval) {
+        try {
+            $aiEvaluation = Invoke-AiSmokeEvaluation `
+                -ScriptPath $AiEvalScriptPath `
+                -CaseDefinition $caseConfig `
+                -ConversationId ([string]$payload['conversation_id']) `
+                -FinalAnswer $responseText `
+                -ToolNames @($toolNames) `
+                -ToolCalls @($response.tool_calls) `
+                -TranscriptEventKinds @($transcriptEventKinds) `
+                -InitialAnswers @($initialAnswers) `
+                -ReviewerPrompt $reviewerText
         }
-        if ($case.forbid_initial_contains -and -not (Test-ContainsNone -Text $initialAnswerText -Needles $case.forbid_initial_contains)) {
-            $failures += 'initial answer contained a forbidden phrase'
+        catch {
+            $failures += "AI evaluation failed: $($_.Exception.Message)"
         }
-        if ($case.expect_reviewer_any_contains -and -not (Test-ContainsAny -Text $reviewerText -Needles $case.expect_reviewer_any_contains)) {
-            $failures += 'reviewer prompt missing any expected phrase'
+        if ($aiEvaluation -and $aiEvaluation.error) {
+            $failures += "AI evaluation failed: $($aiEvaluation.error)"
         }
-        if ($case.forbid_reviewer_contains -and -not (Test-ContainsNone -Text $reviewerText -Needles $case.forbid_reviewer_contains)) {
-            $failures += 'reviewer prompt contained a forbidden phrase'
+        elseif ($aiEvaluation -and $aiEvaluation.verdict -ne 'pass') {
+            $summary = if ($aiEvaluation.summary) { [string]$aiEvaluation.summary } else { 'reviewer model marked the case as failed' }
+            $failures += "AI evaluation failed: $summary"
         }
     }
 
@@ -404,6 +473,9 @@ for ($index = 0; $index -lt $cases.Count; $index += 1) {
         InitialAnswer = $(if ($initialAnswers.Count) { [string]$initialAnswers[0] } else { '' })
         FinalAnswer = $responseText
         ReviewerPrompt = $reviewerText
+        AiVerdict = $(if ($aiEvaluation -and $aiEvaluation.verdict) { [string]$aiEvaluation.verdict } else { '' })
+        AiConfidence = $(if ($aiEvaluation -and $aiEvaluation.ContainsKey('confidence')) { [string]$aiEvaluation.confidence } else { '' })
+        AiSummary = $(if ($aiEvaluation -and $aiEvaluation.summary) { [string]$aiEvaluation.summary } else { '' })
         Response = $responseText
         Failure = ($failures -join '; ')
     }

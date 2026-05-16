@@ -13,12 +13,12 @@
     {
       "id": "partition-reason",
       "category": "topology",
-      "prompt": "Why are there two Thread networks showing up right now?"
+      "prompt": "Do you see evidence of a live partition split or two active Thread networks right now? If not, say that clearly."
     },
     {
       "id": "chokepoints",
       "category": "topology",
-      "prompt": "What are the chokepoints in my Thread network right now?"
+      "prompt": "Do you see any chokepoints in my Thread network right now? If not, say that clearly."
     },
     {
       "id": "weak-links",
@@ -109,6 +109,56 @@
       "id": "otbr-health",
       "category": "infrastructure",
       "prompt": "Does the current evidence point to a border-router problem or a mesh problem?"
+    },
+    {
+      "id": "data-freshness",
+      "category": "freshness",
+      "prompt": "Is my Thread data fresh enough to trust right now, or is the pipeline stale?"
+    },
+    {
+      "id": "mesh-outage-vs-device-outage",
+      "category": "outage",
+      "prompt": "Does this look like a full mesh outage, a border-router outage, or just a few devices dropping off?"
+    },
+    {
+      "id": "parent-flapping-hotspot",
+      "category": "stability",
+      "prompt": "Which node shows the strongest signs of parent flapping or attachment instability right now?"
+    },
+    {
+      "id": "retry-storm-hotspot",
+      "category": "rf",
+      "prompt": "Do any nodes look like they are in a retry storm right now, and which one looks worst?"
+    },
+    {
+      "id": "stale-routing-entries",
+      "category": "routing",
+      "prompt": "Is there evidence of stale routing entries or half-dead paths in the current mesh state?"
+    },
+    {
+      "id": "phantom-router",
+      "category": "topology",
+      "prompt": "Do I have evidence of a phantom router or ghost node in the mesh right now?"
+    },
+    {
+      "id": "leader-churn",
+      "category": "history",
+      "prompt": "Has the Thread leader or router-role assignment been churning recently?"
+    },
+    {
+      "id": "discovery-vs-mesh",
+      "category": "discovery",
+      "prompt": "Does this look more like an mDNS or SRP discovery problem than a Thread mesh problem?"
+    },
+    {
+      "id": "duplicate-ghost",
+      "category": "identity",
+      "prompt": "Does any duplicate device identity look like a stale re-commissioned ghost instead of a real second device?"
+    },
+    {
+      "id": "route-desync",
+      "category": "routing",
+      "prompt": "Could stale route-table state explain what looks like a partition or a bad path to the border router?"
     }
   ]
 }
