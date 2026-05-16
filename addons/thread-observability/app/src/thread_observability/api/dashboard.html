@@ -786,7 +786,7 @@ function escapeHtml(s) {
 const chatMarkdownRenderer = (window.markdownit ? window.markdownit({
   html: false,
   linkify: true,
-  breaks: false,
+  breaks: true,
 }) : null);
 
 const CHAT_MD_ALLOWED_TAGS = [
