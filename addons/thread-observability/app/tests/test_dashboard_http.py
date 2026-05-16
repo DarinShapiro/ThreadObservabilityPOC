@@ -58,6 +58,11 @@ def test_dashboard_renders_assistant_markdown_safely() -> None:
     assert "dompurify" in html.lower()
     assert "renderAssistantMarkdown" in html
     assert "DOMPurify.sanitize" in html
+    assert "breaks: true" in html
+    assert "'table'" in html
+    assert "'pre'" in html
+    assert "'code'" in html
+    assert "'ul'" in html
 
 
 def test_dashboard_uses_home_assistant_theme_tokens() -> None:
