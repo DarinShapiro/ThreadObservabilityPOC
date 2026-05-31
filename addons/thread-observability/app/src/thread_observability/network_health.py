@@ -35,6 +35,13 @@ def _node_age_seconds(last_seen: str | None, *, now: datetime) -> float | None:
     return max(0.0, (now - parsed).total_seconds())
 
 
+def _data_freshness_seconds(as_of: str | None, *, now: datetime) -> int:
+    parsed = parse_iso_datetime(as_of)
+    if parsed is None:
+        return 0
+    return max(0, int((now - parsed).total_seconds()))
+
+
 def _counter_deltas(
     store: SQLiteStore,
     *,
@@ -189,7 +196,7 @@ def _placement_candidates(
             affected_nodes_norm=affected_nodes_norm,
         )
         reason_codes: list[str] = []
-        if redundancy_delta >= 0.25 or kind != "choke_point":
+        if redundancy_delta >= 0.25 or path_diversity_delta >= 0.5:
             reason_codes.append("ADD_ROUTER_FOR_ALTERNATE_PATH")
         if bottleneck_reduction >= 0.5:
             reason_codes.append("RELIEVE_BOTTLENECK_ROUTER")
@@ -450,7 +457,7 @@ def build_network_health(*, store: SQLiteStore | None = None) -> dict[str, Any]:
             "router_redundancy_pct": round(float(router_redundancy_hits) / float(router_count), 4),
             "path_diversity_pct": round(float(router_path_diversity_hits) / float(router_count), 4),
             "distinct_partitions": len(snapshot.get("partitions") or []),
-            "data_freshness_seconds": 0,
+            "data_freshness_seconds": _data_freshness_seconds(snapshot.get("computed_at"), now=now),
         },
         "component_scores": network_result["components"],
         "reason_codes": network_result["reason_codes"],

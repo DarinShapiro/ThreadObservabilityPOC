@@ -1,10 +1,11 @@
 # Changelog
 
-## 0.11.59 — Deterministic network health surfaces and graph follow-up
+## 0.11.60 — Deterministic network health surfaces and dashboard workspace polish
 
 This release packages the deterministic network-health scoring work, exposes it
-over the HTTP and MCP surfaces, and finishes the dashboard follow-up needed to
-make those findings actionable in the Graph tab.
+over the HTTP and MCP surfaces, corrects two validated builder issues, and
+finishes the dashboard follow-up needed to make those findings actionable in
+the Network and Graph workspaces.
 
 **Fixes:**
 - adds backend-owned network-health scoring, graph-derived findings, and router
@@ -13,9 +14,14 @@ make those findings actionable in the Graph tab.
 - exposes the new health and placement payloads through the core HTTP API, MCP
   read tools, and direct-chat prompt compaction so the same facts are available
   to the dashboard and model-visible tooling
-- adds dashboard health panels, graph health overlays, topology-history diff
-  compatibility fixes, and placement focus behavior that links graph selection
-  to the best matching placement candidate in the rail
+- fixes `summary.data_freshness_seconds` to reflect the retained snapshot
+  timestamp and tightens alternate-path placement reasoning so intermediary
+  candidates are not over-labeled when there is no material redundancy gap
+- reorganizes the dashboard into clearer Network subtabs and a stronger Graph
+  workspace, with health/AI/device hierarchy improvements, graph-side insight
+  panels, visual polish, topology-history diff compatibility fixes, and
+  placement focus behavior that links graph selection to the best matching
+  placement candidate in the rail
 - expands focused regression coverage for scoring, builder output, HTTP/MCP
   envelopes, dashboard wiring, and direct-chat/tool-prompt integration
 

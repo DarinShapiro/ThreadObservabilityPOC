@@ -41,8 +41,19 @@
     --graph-highlight-health:#fb7185;
   }
   * { box-sizing: border-box; }
-  html, body { background: var(--bg); color: var(--fg); margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-  header { padding: 14px 20px; border-bottom: 1px solid var(--border); display:flex; align-items:center; gap:16px; }
+  html, body {
+    background:
+      radial-gradient(circle at top left, rgba(14,165,233,0.09), transparent 26%),
+      radial-gradient(circle at top right, rgba(248,113,113,0.06), transparent 22%),
+      linear-gradient(180deg, rgba(11,18,32,1), rgba(8,13,24,1));
+    color: var(--fg); margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid rgba(31,42,68,0.85); display:flex; align-items:center; gap:16px;
+    background: linear-gradient(180deg, rgba(17,26,46,0.92), rgba(11,18,32,0.86));
+    backdrop-filter: blur(14px);
+    position: sticky; top: 0; z-index: 20;
+  }
   header h1 { font-size: 18px; margin:0; }
   header .meta { color: var(--muted); font-size: 12px; }
   header .spacer { flex:1; }
@@ -57,15 +68,42 @@
     outline-offset: 1px;
   }
 
-  nav.tabs { display:flex; gap:2px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--panel2); }
+  nav.tabs {
+    display:flex; gap:4px; padding: 0 20px; border-bottom: 1px solid rgba(31,42,68,0.82);
+    background: linear-gradient(180deg, rgba(15,23,42,0.96), rgba(12,18,33,0.94));
+    position: sticky; top: 53px; z-index: 19; backdrop-filter: blur(14px);
+  }
   nav.tabs button {
     background: transparent; color: var(--muted); border:0; padding: 10px 16px; cursor:pointer;
-    font-size: 13px; font-weight: 600; border-bottom: 2px solid transparent;
+    font-size: 13px; font-weight: 700; border-bottom: 2px solid transparent;
   }
   nav.tabs button:hover { color: var(--fg); }
-  nav.tabs button.active { color: var(--fg); border-bottom-color: var(--accent); }
+  nav.tabs button.active {
+    color: var(--fg); border-bottom-color: var(--accent);
+    background: linear-gradient(180deg, rgba(96,165,250,0.08), rgba(96,165,250,0.02));
+  }
 
-  main { padding: 16px 20px 40px; }
+  .network-shell { display:flex; flex-direction:column; gap:16px; }
+  .network-subtabs {
+    display:flex; gap:8px; flex-wrap:wrap; padding:6px; width:max-content; max-width:100%;
+    border:1px solid var(--border); border-radius:14px;
+    background: linear-gradient(135deg, rgba(8,47,73,0.26), rgba(15,23,42,0.98));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+  .network-subtabs button {
+    background: transparent; color: var(--muted); border:1px solid transparent; border-radius:10px;
+    padding: 9px 14px; cursor:pointer; font-size:12px; font-weight:700; letter-spacing:0.03em;
+    text-transform: uppercase;
+  }
+  .network-subtabs button:hover { color: var(--fg); border-color: rgba(96,165,250,0.25); }
+  .network-subtabs button.active {
+    color: var(--fg); background: rgba(17,26,46,0.95); border-color: rgba(96,165,250,0.45);
+    box-shadow: 0 10px 26px rgba(2,6,23,0.28), inset 0 0 0 1px rgba(147,197,253,0.08);
+  }
+  .network-subtab-panel { display:none; }
+  .network-subtab-panel.active { display:block; }
+
+  main { padding: 18px 20px 44px; }
   .tab-panel { display:none; }
   .tab-panel.active { display:block; }
 
@@ -73,7 +111,91 @@
   .network-layout { display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:16px; align-items:start; }
   .network-main { min-width:0; }
   .network-rail { position: sticky; top: 16px; display:flex; flex-direction:column; gap:14px; }
-  .card { background: var(--panel); border:1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .network-ai-layout { display:grid; grid-template-columns: minmax(0, 1fr) 360px; gap:16px; align-items:start; }
+  .network-ai-main { min-width:0; }
+  .network-ai-rail { position: sticky; top: 16px; display:flex; flex-direction:column; gap:14px; }
+  .section-label {
+    color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; margin-bottom: 8px;
+  }
+  .section-lead {
+    display:flex; align-items:flex-start; justify-content:space-between; gap:14px; flex-wrap:wrap;
+    margin-bottom: 12px;
+  }
+  .section-lead h2 {
+    margin:0; font-size: 22px; color: var(--fg); letter-spacing: -0.02em; text-transform:none;
+  }
+  .section-copy { color: var(--muted); font-size: 13px; line-height: 1.55; max-width: 720px; }
+  .overview-grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .overview-metric {
+    border:1px solid var(--border); border-radius:12px; padding:12px; background:var(--panel2);
+    min-height: 112px; display:flex; flex-direction:column; gap:8px;
+  }
+  .overview-metric.highlight {
+    background: linear-gradient(135deg, rgba(8,47,73,0.58), rgba(15,23,42,0.96));
+    border-color: rgba(96,165,250,0.32);
+  }
+  .overview-kicker { color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+  .overview-value { font-size: 24px; font-weight: 700; line-height: 1.1; }
+  .overview-copy { color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .overview-meta { display:flex; gap:8px; flex-wrap:wrap; }
+  .overview-meta .pill { text-transform:none; }
+  .section-stack { display:flex; flex-direction:column; gap:14px; }
+  .subsection-card {
+    background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(17,26,46,0.96));
+    border:1px solid var(--border); border-radius: 12px; padding: 14px;
+  }
+  .subsection-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .subsection-head h3 { margin:0; font-size: 15px; }
+  .subsection-head .rail-sub { max-width: 540px; }
+  .ai-hero {
+    border:1px solid rgba(96,165,250,0.28); border-radius: 14px; padding: 16px;
+    background: radial-gradient(circle at top left, rgba(14,165,233,0.16), transparent 40%),
+      linear-gradient(135deg, rgba(8,47,73,0.55), rgba(15,23,42,0.96));
+    margin-bottom: 14px;
+  }
+  .ai-hero h2 { margin:0; font-size: 22px; color: var(--fg); text-transform:none; letter-spacing:-0.02em; }
+  .ai-hero-copy { color: var(--muted); font-size: 13px; line-height: 1.6; margin-top: 8px; max-width: 760px; }
+  .ai-hero-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top: 14px; }
+  .ai-context-strip { display:flex; gap:8px; flex-wrap:wrap; margin-top: 12px; }
+  .ai-context-pill {
+    border:1px solid rgba(148,163,184,0.22); border-radius:999px; padding:6px 10px;
+    background: rgba(15,23,42,0.9); color: var(--fg); font-size:12px;
+  }
+  .devices-summary {
+    margin: 6px 0 12px; display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  .devices-summary-card {
+    border:1px solid var(--border); border-radius:10px; background:var(--panel2); padding:10px 12px;
+  }
+  .devices-summary-label { color: var(--muted); font-size:10px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; }
+  .devices-summary-value { font-size:20px; font-weight:700; margin-top:4px; }
+  .devices-summary-copy { color: var(--muted); font-size:12px; margin-top:4px; line-height:1.45; }
+  .node-signal { display:flex; flex-direction:column; gap:4px; }
+  .node-signal .pill { width:max-content; text-transform:none; }
+  .node-signal-copy { color: var(--muted); font-size:11px; line-height:1.35; }
+  .health-hero-panel {
+    border:1px solid rgba(96,165,250,0.22); border-radius:12px; padding:12px;
+    background: linear-gradient(135deg, rgba(8,47,73,0.34), rgba(15,23,42,0.96));
+  }
+  .health-hero-top { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+  .health-hero-meta { color: var(--muted); font-size:12px; }
+  .health-meter-list { display:grid; gap:8px; margin-top:12px; }
+  .health-meter { display:grid; grid-template-columns: 120px minmax(0, 1fr) 56px; gap:10px; align-items:center; }
+  .health-meter-label { color: var(--muted); font-size:12px; }
+  .health-meter-track { height:8px; border-radius:999px; background:#0b1220; overflow:hidden; border:1px solid rgba(148,163,184,0.14); }
+  .health-meter-fill { height:100%; border-radius:999px; background: linear-gradient(90deg, #38bdf8, #60a5fa); }
+  .health-meter-value { font-size:12px; color: var(--fg); text-align:right; }
+  .reason-chip-list { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .reason-chip {
+    border:1px solid rgba(148,163,184,0.22); border-radius:999px; background:rgba(15,23,42,0.9);
+    color:var(--fg); padding:4px 9px; font-size:11px;
+  }
+  .card {
+    background: linear-gradient(180deg, rgba(17,26,46,0.96), rgba(13,19,34,0.98));
+    border:1px solid rgba(31,42,68,0.92); border-radius: 12px; padding: 14px;
+    box-shadow: 0 14px 34px rgba(2,6,23,0.22), inset 0 1px 0 rgba(255,255,255,0.02);
+  }
   .card h2 { font-size: 13px; margin:0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
   .card .big { font-size: 28px; font-weight: 700; }
   .card .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
@@ -229,7 +351,6 @@
     padding:6px 10px; font-size:12px; cursor:pointer;
   }
   .suggestion-chip:hover { background:var(--panel); }
-  .chat-panel { margin-top:16px; }
   .history-list, .finding-list { display:flex; flex-direction:column; gap:8px; }
   .history-item, .finding-item {
     padding:10px 12px; border:1px solid var(--border); border-radius:10px; background: var(--panel2);
@@ -265,6 +386,8 @@
   @media (max-width: 1080px) {
     .network-layout { grid-template-columns: 1fr; }
     .network-rail { position: static; }
+    .network-ai-layout { grid-template-columns: 1fr; }
+    .network-ai-rail { position: static; }
   }
 
   @media (max-width: 720px) {
@@ -350,6 +473,19 @@
   .graph-toolbar {
     display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px;
   }
+  .graph-hero {
+    border:1px solid rgba(96,165,250,0.24); border-radius:14px; padding:16px; margin-bottom:14px;
+    background: radial-gradient(circle at top left, rgba(56,189,248,0.15), transparent 38%),
+      linear-gradient(135deg, rgba(8,47,73,0.54), rgba(15,23,42,0.96));
+  }
+  .graph-hero-head { display:flex; gap:16px; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; }
+  .graph-hero-head h2 { margin:0; font-size:22px; text-transform:none; letter-spacing:-0.02em; color:var(--fg); }
+  .graph-hero-copy { color:var(--muted); font-size:13px; line-height:1.6; max-width:720px; margin-top:8px; }
+  .graph-summary-strip { display:flex; gap:8px; flex-wrap:wrap; margin:12px 0 0; }
+  .graph-summary-pill {
+    border:1px solid rgba(148,163,184,0.2); border-radius:999px; padding:6px 10px;
+    background: rgba(15,23,42,0.9); color:var(--fg); font-size:12px;
+  }
   .graph-controls {
     display:flex; gap:8px; align-items:center; flex-wrap:wrap;
   }
@@ -362,6 +498,15 @@
     display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px;
   }
   .graph-status-copy { color:var(--muted); font-size:12px; }
+  .graph-insight-grid { display:grid; gap:14px; margin-top:14px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+  .graph-sidecard {
+    min-height: 168px;
+    background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(10,15,27,0.98));
+    border:1px solid rgba(31,42,68,0.94); border-radius:12px; padding:14px;
+  }
+  .graph-sidecard h2 { margin-bottom:8px; }
+  .graph-sidecard .item-title { font-size:15px; }
+  .graph-sidecard .rail-sub { line-height:1.55; }
 
   /* Sortable headers */
   table th[data-sort] { cursor:pointer; user-select:none; }
@@ -452,50 +597,105 @@
 
 <main>
   <section id="tab-network" class="tab-panel active">
-    <div class="network-layout">
-      <div class="network-main">
-        <div class="card full" id="headline-card">
-          <div id="headline-body" class="muted">computing…</div>
-          <div id="headline-warnings" class="warnings-row"></div>
-          <div id="assessment-banner" class="assessment-banner hidden">
-            <div class="assessment-banner-head">
-              <div style="font-size:18px; line-height:1;">💬</div>
-              <div style="flex:1; min-width:0;">
-                <div id="assessment-banner-title" class="assessment-banner-title">No active background finding.</div>
-                <div id="assessment-banner-meta" class="assessment-banner-meta"></div>
+    <div class="network-shell">
+      <div class="network-subtabs" role="tablist" aria-label="Network views">
+        <button type="button" data-network-subtab="health" class="active">Health</button>
+        <button type="button" data-network-subtab="devices">Devices</button>
+        <button type="button" data-network-subtab="ai">AI</button>
+      </div>
+
+      <section id="network-subtab-health" class="network-subtab-panel active">
+        <div class="card full" id="health-command-deck">
+          <div class="section-label">Health View</div>
+          <div class="section-lead">
+            <div>
+              <h2>Mesh health, risk, and next action</h2>
+              <div class="section-copy">Start here for the current state of the mesh. This view is organized for triage first: what is degraded, what is driving it, and where the next operator move is most likely to help.</div>
+            </div>
+          </div>
+          <div id="health-overview-grid" class="overview-grid"><div class="overview-metric"><div class="overview-copy">Loading mesh summary…</div></div></div>
+        </div>
+
+        <div class="network-layout">
+          <div class="network-main">
+            <div class="card full" id="headline-card">
+              <div id="headline-body" class="muted">computing…</div>
+              <div id="headline-warnings" class="warnings-row"></div>
+              <div id="assessment-banner" class="assessment-banner hidden">
+                <div class="assessment-banner-head">
+                  <div style="font-size:18px; line-height:1;">💬</div>
+                  <div style="flex:1; min-width:0;">
+                    <div id="assessment-banner-title" class="assessment-banner-title">No active background finding.</div>
+                    <div id="assessment-banner-meta" class="assessment-banner-meta"></div>
+                  </div>
+                  <span id="assessment-banner-count" class="pill warn" style="display:none;"></span>
+                </div>
+                <div id="assessment-banner-copy" class="assessment-banner-copy"></div>
+                <div id="assessment-banner-facts" class="warnings-row assessment-banner-facts"></div>
+                <div id="assessment-actions" class="assessment-actions">
+                  <button id="assessment-investigate-btn" class="action-btn primary">Investigate with me</button>
+                  <button id="assessment-evidence-btn" class="action-btn">Show me what you saw</button>
+                  <button id="assessment-banner-refresh-btn" class="action-btn">Run fresh check</button>
+                  <button id="assessment-hide-btn" class="action-btn warn">Not now</button>
+                  <button id="assessment-dismiss-btn" class="action-btn bad">Dismiss for 24h</button>
+                </div>
               </div>
-              <span id="assessment-banner-count" class="pill warn" style="display:none;"></span>
             </div>
-            <div id="assessment-banner-copy" class="assessment-banner-copy"></div>
-            <div id="assessment-banner-facts" class="warnings-row assessment-banner-facts"></div>
-            <div id="assessment-actions" class="assessment-actions">
-              <button id="assessment-investigate-btn" class="action-btn primary">Investigate with me</button>
-              <button id="assessment-evidence-btn" class="action-btn">Show me what you saw</button>
-              <button id="assessment-banner-refresh-btn" class="action-btn">Run fresh check</button>
-              <button id="assessment-hide-btn" class="action-btn warn">Not now</button>
-              <button id="assessment-dismiss-btn" class="action-btn bad">Dismiss for 24h</button>
+
+            <div class="section-stack">
+              <div class="subsection-card">
+                <div class="subsection-head">
+                  <div>
+                    <h3>Problem areas</h3>
+                    <div class="rail-sub">The most actionable degradations first, based on weak links, retries, stale parent links, and server-side issue detection.</div>
+                  </div>
+                </div>
+                <div class="card full" id="hotspots-card" style="padding:0; border:0; background:transparent;">
+                  <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
+                  <div id="hotspots-body"><div class="empty">no data</div></div>
+                </div>
+              </div>
+
+              <div class="subsection-card">
+                <div class="subsection-head">
+                  <div>
+                    <h3>Open issues</h3>
+                    <div class="rail-sub">Server-reported issue inventory, separated from the live mesh health score so placeholder or paused detection is still obvious.</div>
+                  </div>
+                  <span id="issues-sev-pills"></span>
+                </div>
+                <div class="card full" id="issues-card" style="padding:0; border:0; background:transparent;">
+                  <div id="issues-body"><div class="empty">No issues.</div></div>
+                </div>
+              </div>
+
+              <div class="subsection-card">
+                <div class="subsection-head">
+                  <div>
+                    <h3>Partitions and topology shape</h3>
+                    <div class="rail-sub">How the mesh is split right now, which partition is selected, and which nodes belong to each Thread network segment.</div>
+                  </div>
+                </div>
+                <div id="partitions-body"><div class="empty">no data</div></div>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div class="card full" id="hotspots-card">
-          <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
-          <div id="hotspots-body"><div class="empty">no data</div></div>
+          <aside class="network-rail">
+            <div class="card" id="network-health-card">
+              <div class="rail-card-head">
+                <h2>Network Health</h2>
+                <span id="network-health-pill" class="pill muted">loading</span>
+              </div>
+              <div id="network-health-body" class="stack muted">loading…</div>
+              <div id="network-health-findings" class="health-findings-list"></div>
+              <div id="network-health-placement" class="placement-list"></div>
+            </div>
+          </aside>
         </div>
+      </section>
 
-        <div class="card full" id="issues-card">
-          <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-            <h2 style="margin:0; flex:1;">Active Issues</h2>
-            <span id="issues-sev-pills"></span>
-          </div>
-          <div id="issues-body"><div class="empty">No issues.</div></div>
-        </div>
-
-        <div class="card full">
-          <h2>Partitions</h2>
-          <div id="partitions-body"><div class="empty">no data</div></div>
-        </div>
-
+      <section id="network-subtab-devices" class="network-subtab-panel">
         <div class="card full">
           <div class="toolbar" style="flex-wrap:wrap;">
             <h2 style="margin:0; flex:1;">Thread Nodes</h2>
@@ -506,6 +706,7 @@
             <label><input type="checkbox" id="show-phantoms"> show phantoms</label>
           </div>
           <div id="nodes-filter-summary" class="filter-summary" hidden></div>
+          <div id="devices-summary" class="devices-summary"><div class="devices-summary-card"><div class="devices-summary-copy">Loading device summary…</div></div></div>
           <div style="overflow-x:auto;">
             <table id="nodes-table">
               <thead>
@@ -513,6 +714,7 @@
                   <th data-sort="name">Name</th>
                   <th data-sort="area">Area</th>
                   <th data-sort="role">Role</th>
+                  <th data-sort="health">Health</th>
                   <th data-sort="rssi" title="Received Signal Strength Indicator — strongest available neighbor link for this node; higher (less negative) dBm is stronger">RSSI</th>
                   <th data-sort="lqi" title="Matter LinkQuality — strongest available neighbor link for this node; 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
                   <th data-sort="tx_retry_1h" title="Δ tx_retry_count over the last 1 hour. The table distinguishes real zero retries during observed traffic from windows with no traffic or too few samples.">TX retry 1h</th>
@@ -550,46 +752,90 @@
             derived from its RouteTable.</span>
           </div>
         </div>
-      </div>
+      </section>
 
-      <aside class="network-rail">
-        <div class="card" id="assessment-rail-card">
-          <div class="card" id="network-health-card">
-            <div class="rail-card-head">
-              <h2>Network Health</h2>
-              <span id="network-health-pill" class="pill muted">loading</span>
+      <section id="network-subtab-ai" class="network-subtab-panel">
+        <div class="network-ai-layout">
+          <div class="network-ai-main">
+            <div class="ai-hero">
+              <div class="section-label">AI Workspace</div>
+              <h2>Ask, investigate, and turn findings into action</h2>
+              <div class="ai-hero-copy">This view keeps the operator loop in one place: start from a suggested investigation, pull in the current dashboard context automatically, and keep the live assessment evidence beside the conversation while you work.</div>
+              <div class="ai-hero-actions">
+                <button type="button" id="ai-quick-health" class="action-btn">Summarize mesh health</button>
+                <button type="button" id="ai-quick-partitions" class="action-btn">Explain partition risk</button>
+                <button type="button" id="ai-quick-node" class="action-btn">Analyze selected node</button>
+                <button type="button" id="ai-quick-evidence" class="action-btn primary">Review latest finding</button>
+              </div>
+              <div id="ai-context-strip" class="ai-context-strip"></div>
             </div>
-            <div id="network-health-body" class="stack muted">loading…</div>
-            <div id="network-health-findings" class="health-findings-list"></div>
-            <div id="network-health-placement" class="placement-list"></div>
+
+            <div class="card" id="chat-card">
+              <div class="rail-card-head">
+                <h2>Chat</h2>
+                <button id="chat-reset-btn" class="action-btn">New conversation</button>
+              </div>
+              <div class="rail-sub">Dashboard + active-tab context are sent on each turn. Tool calls stay visible.</div>
+              <div class="stack" style="margin-top:10px;">
+                <div>
+                  <label class="rail-sub" for="chat-agent-select">Agent</label><br>
+                  <select id="chat-agent-select" class="chat-select"><option value="">Home Assistant default</option></select>
+                </div>
+                <div id="chat-suggestions" class="suggestion-list"></div>
+                <div id="chat-messages" class="chat-messages"><div class="empty">No conversation yet. Ask about a node, partition split, or recent finding.</div></div>
+                <div class="chat-composer">
+                  <textarea id="chat-input" placeholder="Ask about this mesh…"></textarea>
+                  <div class="chat-controls">
+                    <div class="chat-controls-left">
+                      <button id="chat-node-btn" class="action-btn">Ask about selected node</button>
+                    </div>
+                    <div class="chat-controls-right">
+                      <button id="chat-send-btn" class="action-btn primary">Send</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-        <div class="card" id="assessment-rail-card">
-          <div class="rail-card-head">
-            <h2>Adaptive Monitoring</h2>
-            <button id="assessment-run-now-btn" class="action-btn">Force a check now</button>
-          </div>
-          <div id="assessment-state-body" class="stack muted">loading…</div>
-          <div class="load-more-row">
-            <button id="assessment-load-more-btn" class="action-btn">Load older</button>
-          </div>
-          <div id="assessment-history-body" class="history-list" style="margin-top:10px;"></div>
+          <aside class="network-ai-rail">
+            <div class="card" id="assessment-rail-card">
+              <div class="rail-card-head">
+                <h2>Adaptive Monitoring</h2>
+                <button id="assessment-run-now-btn" class="action-btn">Force a check now</button>
+              </div>
+              <div id="assessment-state-body" class="stack muted">loading…</div>
+              <div class="load-more-row">
+                <button id="assessment-load-more-btn" class="action-btn">Load older</button>
+              </div>
+              <div id="assessment-history-body" class="history-list" style="margin-top:10px;"></div>
+            </div>
+
+            <div class="card" id="assessment-detail-card">
+              <div class="rail-card-head">
+                <h2>Evidence</h2>
+                <span id="assessment-detail-pill" class="pill muted">none selected</span>
+              </div>
+              <div id="assessment-detail-body" class="detail-box muted">Pick a background finding to inspect what the agent saw.</div>
+            </div>
+          </aside>
         </div>
-
-        <div class="card" id="assessment-detail-card">
-          <div class="rail-card-head">
-            <h2>Evidence</h2>
-            <span id="assessment-detail-pill" class="pill muted">none selected</span>
-          </div>
-          <div id="assessment-detail-body" class="detail-box muted">Pick a background finding to inspect what the agent saw.</div>
-        </div>
-
-      </aside>
+      </section>
     </div>
   </section>
 
   <section id="tab-graph" class="tab-panel">
     <div class="card full">
+      <div class="graph-hero">
+        <div class="section-label">Graph Workspace</div>
+        <div class="graph-hero-head">
+          <div>
+            <h2>Topology, forwarding paths, and structural risk</h2>
+            <div class="graph-hero-copy">Use the graph to inspect structure rather than rows: where partitions split, which links are weak or unstable, and how traffic reaches the border router. The side panels stay focused on the currently selected node, edge, or area.</div>
+          </div>
+        </div>
+        <div id="graph-summary-strip" class="graph-summary-strip"></div>
+      </div>
       <div class="graph-toolbar">
         <h2 style="margin:0; flex:1;">Network Graph</h2>
         <label for="graph-link-density" class="rail-sub">Link density</label>
@@ -624,16 +870,16 @@
         <div id="cy"></div>
         <div id="graph-hover-card" class="graph-hover-card" aria-hidden="true"></div>
       </div>
-      <div class="grid" style="margin-top:14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));">
-        <div class="card" id="graph-area-recommendations">
+      <div class="graph-insight-grid">
+        <div class="graph-sidecard" id="graph-area-recommendations">
           <h2>Area Recommendations</h2>
           <div class="muted">Select an area or node to compare local graph conditions.</div>
         </div>
-        <div class="card" id="graph-history-summary">
+        <div class="graph-sidecard" id="graph-history-summary">
           <h2>History Summary</h2>
           <div class="muted">Recent graph-change overlays will summarize here.</div>
         </div>
-        <div class="card" id="graph-inspector">
+        <div class="graph-sidecard" id="graph-inspector">
           <h2>Inspector</h2>
           <div class="muted">Select a node or edge to inspect graph evidence.</div>
         </div>
@@ -725,34 +971,6 @@
     </div>
   </section>
 
-  <section id="chat-panel" class="chat-panel">
-    <div class="card full" id="chat-card">
-      <div class="rail-card-head">
-        <h2>Chat</h2>
-        <button id="chat-reset-btn" class="action-btn">New conversation</button>
-      </div>
-      <div class="rail-sub">Dashboard + active-tab context are sent on each turn. Tool calls stay visible.</div>
-      <div class="stack" style="margin-top:10px;">
-        <div>
-          <label class="rail-sub" for="chat-agent-select">Agent</label><br>
-          <select id="chat-agent-select" class="chat-select"><option value="">Home Assistant default</option></select>
-        </div>
-        <div id="chat-suggestions" class="suggestion-list"></div>
-        <div id="chat-messages" class="chat-messages"><div class="empty">No conversation yet. Ask about a node, partition split, or recent finding.</div></div>
-        <div class="chat-composer">
-          <textarea id="chat-input" placeholder="Ask about this mesh…"></textarea>
-          <div class="chat-controls">
-            <div class="chat-controls-left">
-              <button id="chat-node-btn" class="action-btn">Ask about selected node</button>
-            </div>
-            <div class="chat-controls-right">
-              <button id="chat-send-btn" class="action-btn primary">Send</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
 </main>
 
 <div id="node-detail-backdrop" role="dialog" aria-modal="true" aria-labelledby="nd-title">
@@ -977,14 +1195,40 @@ function renderNodesFilterSummary() {
   host.append(pill, copy, clear);
 }
 
-document.querySelectorAll('nav.tabs button').forEach(btn => {
+function setMainTab(tabName) {
+  document.querySelectorAll('nav.tabs button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.tab === tabName);
+  });
+  document.querySelectorAll('.tab-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.id === 'tab-' + tabName);
+  });
+  renderChatSuggestions();
+  if (tabName === 'graph') renderGraph({ force: graphNeedsRefresh || !graphSnapshot });
+}
+
+function currentNetworkSubtab() {
+  const active = document.querySelector('.network-subtab-panel.active');
+  return active ? active.id.replace('network-subtab-', '') : null;
+}
+
+function setNetworkSubtab(subtabName) {
+  document.querySelectorAll('.network-subtabs button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.networkSubtab === subtabName);
+  });
+  document.querySelectorAll('.network-subtab-panel').forEach((panel) => {
+    panel.classList.toggle('active', panel.id === 'network-subtab-' + subtabName);
+  });
+  renderChatSuggestions();
+}
+
+document.querySelectorAll('nav.tabs button').forEach((btn) => {
+  btn.addEventListener('click', () => setMainTab(btn.dataset.tab));
+});
+
+document.querySelectorAll('.network-subtabs button').forEach((btn) => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    btn.classList.add('active');
-    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
-    renderChatSuggestions();
-    if (btn.dataset.tab === 'graph') renderGraph({ force: graphNeedsRefresh || !graphSnapshot });
+    setMainTab('network');
+    setNetworkSubtab(btn.dataset.networkSubtab);
   });
 });
 
@@ -1120,6 +1364,7 @@ function currentPageContext() {
   return {
     page: 'dashboard',
     active_tab: activeTab ? activeTab.id.replace('tab-', '') : null,
+    network_subtab: activeTab && activeTab.id === 'tab-network' ? currentNetworkSubtab() : null,
     viewport: window.innerWidth < 720 ? 'narrow' : 'wide',
     selected_node_eui64: selectedNodeEui,
     filters: {
@@ -1256,6 +1501,100 @@ function renderAssessmentRail() {
   }
   $('#assessment-load-more-btn').style.display = assessmentHistoryHasMore ? 'inline-block' : 'none';
   renderAssessmentDetail(finding);
+  renderAiWorkspaceSummary();
+}
+
+function renderHealthOverview() {
+  const host = $('#health-overview-grid');
+  if (!host) return;
+  const health = lastNetworkHealth || {};
+  const summary = health.summary || {};
+  const components = health.component_scores || {};
+  const topFinding = topAssessmentFinding();
+  const candidate = bestPlacementCandidateForIds(new Set(topFinding && topFinding.node_eui64 ? [String(topFinding.node_eui64)] : []))
+    || (placementCandidates()[0] || null);
+  const partCount = (lastStatus && lastStatus.partitions && lastStatus.partitions.partition_count) || (summary.distinct_partitions || 0);
+  const issueCount = ((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0;
+  const cards = [
+    {
+      cls: 'overview-metric highlight',
+      kicker: 'Overall health',
+      value: fmtScore01(typeof health.score === 'number' ? health.score : NaN),
+      copy: (health.band ? ('Band ' + health.band) : 'Waiting for network health')
+        + ' · confidence ' + fmtScore01(typeof health.confidence === 'number' ? health.confidence : NaN),
+      meta: [
+        health.band ? { text: health.band, cls: 'pill ' + healthBandClass(health.band) } : null,
+        summary.data_freshness_seconds != null ? { text: 'freshness ' + String(summary.data_freshness_seconds) + 's', cls: 'pill muted' } : null,
+      ].filter(Boolean),
+    },
+    {
+      cls: 'overview-metric',
+      kicker: 'Mesh shape',
+      value: String((summary.router_count || 0)) + ' routers',
+      copy: String(summary.end_device_count || 0) + ' end devices across ' + String(partCount || 0) + ' partition' + ((partCount || 0) === 1 ? '' : 's') + '.',
+      meta: [
+        { text: 'redundancy ' + fmtScore01(Number(components.router_redundancy)), cls: 'pill muted' },
+        { text: 'path diversity ' + fmtScore01(Number(components.path_diversity)), cls: 'pill muted' },
+      ],
+    },
+    {
+      cls: 'overview-metric',
+      kicker: 'Current focus',
+      value: topFinding ? (topFinding.headline || 'Background finding') : (issueCount ? (String(issueCount) + ' active issue' + (issueCount === 1 ? '' : 's')) : 'No urgent focus'),
+      copy: topFinding
+        ? ((topFinding.finding_type || 'assessment finding') + (topFinding.display_name || topFinding.node_eui64 ? (' · ' + (topFinding.display_name || topFinding.node_eui64)) : ''))
+        : 'No background finding is currently outranking the health view.',
+      meta: [
+        topFinding && topFinding.severity ? { text: topFinding.severity, cls: 'pill ' + (assessmentSeverityRank(topFinding.severity) <= 1 ? 'bad' : 'warn') } : null,
+        issueCount ? { text: String(issueCount) + ' issue' + (issueCount === 1 ? '' : 's'), cls: 'pill muted' } : null,
+      ].filter(Boolean),
+    },
+    {
+      cls: 'overview-metric',
+      kicker: 'Best next move',
+      value: candidate ? (candidate.location_label || 'Review placement candidate') : 'Observe current topology',
+      copy: candidate
+        ? ('Placement candidate with score delta ' + fmtScore01(Number(candidate.score_delta)) + '.')
+        : 'No additional router placement candidate is currently stronger than continued observation.',
+      meta: [
+        candidate ? { text: 'placement', cls: 'pill running' } : null,
+        candidate && Array.isArray(candidate.reason_codes) && candidate.reason_codes.length
+          ? { text: candidate.reason_codes[0], cls: 'pill muted' }
+          : null,
+      ].filter(Boolean),
+    },
+  ];
+  host.innerHTML = '';
+  cards.forEach((card) => {
+    const node = el('div', { class: card.cls },
+      el('div', { class: 'overview-kicker' }, card.kicker),
+      el('div', { class: 'overview-value' }, card.value),
+      el('div', { class: 'overview-copy' }, card.copy),
+    );
+    if (card.meta && card.meta.length) {
+      const meta = el('div', { class: 'overview-meta' });
+      card.meta.forEach((item) => meta.appendChild(el('span', { class: item.cls }, item.text)));
+      node.appendChild(meta);
+    }
+    host.appendChild(node);
+  });
+}
+
+function renderAiWorkspaceSummary() {
+  const host = $('#ai-context-strip');
+  if (!host) return;
+  const topFinding = topAssessmentFinding();
+  const health = lastNetworkHealth || {};
+  const items = [
+    health.band ? ('Mesh band: ' + health.band) : 'Mesh band unavailable',
+    selectedNodeEui ? ('Selected node: ' + selectedNodeEui) : 'No node selected',
+    topFinding ? ('Latest finding: ' + (topFinding.headline || topFinding.finding_type || 'background finding')) : 'No active background finding',
+    (lastStatus && lastStatus.partitions && lastStatus.partitions.partition_count > 1)
+      ? ('Partitions: ' + lastStatus.partitions.partition_count)
+      : 'Single partition view',
+  ];
+  host.innerHTML = '';
+  items.forEach((text) => host.appendChild(el('span', { class: 'ai-context-pill' }, text)));
 }
 
 function renderAssessmentDetail(finding) {
@@ -1397,6 +1736,7 @@ function renderChatSuggestions() {
     chip.addEventListener('click', () => primeChatPrompt(prompt));
     host.appendChild(chip);
   });
+  renderAiWorkspaceSummary();
 }
 
 function renderChatMessages() {
@@ -1471,6 +1811,8 @@ async function refreshChatAgents() {
 }
 
 function primeChatPrompt(text) {
+  setMainTab('network');
+  setNetworkSubtab('ai');
   $('#chat-input').value = text || '';
   $('#chat-card').scrollIntoView({ behavior: 'smooth', block: 'center' });
   $('#chat-input').focus();
@@ -1776,6 +2118,23 @@ function fmtScore01(value) {
   return Math.round(value * 100) + '%';
 }
 
+function nodeSignalSummary(node) {
+  if (!node) return { label: 'unknown', cls: 'muted', detail: 'No node data available.', rank: 99 };
+  if (node.status === 'offline') return { label: 'offline', cls: 'bad', detail: 'Node is not currently reachable.', rank: 0 };
+  if (node.status === 'phantom') return { label: 'phantom', cls: 'warn', detail: 'Stale mesh reference still present.', rank: 1 };
+  const retry1h = deltaForNode(node.eui64, '1h', 'tx_retry_count');
+  const parent24h = deltaForNode(node.eui64, '24h', 'parent_change_count');
+  const link = strongestAvailableLink(node);
+  const rssi = link ? link.rssi : null;
+  const lqi = link ? link.lqi : null;
+  if (typeof retry1h === 'number' && retry1h >= 20) return { label: 'retry storm', cls: 'bad', detail: '+' + retry1h + ' transmit retries in 1h.', rank: 2 };
+  if (typeof parent24h === 'number' && parent24h >= 3) return { label: 'unstable parent', cls: 'bad', detail: '+' + parent24h + ' parent changes in 24h.', rank: 3 };
+  if ((typeof rssi === 'number' && rssi < -85) || (typeof lqi === 'number' && lqi <= 1)) return { label: 'poor link', cls: 'bad', detail: 'Strongest available path is weak.', rank: 4 };
+  if ((typeof retry1h === 'number' && retry1h > 0) || (typeof rssi === 'number' && rssi < -70) || (typeof lqi === 'number' && lqi <= 2)) return { label: 'watch', cls: 'warn', detail: 'Mesh is usable but showing early degradation.', rank: 5 };
+  if (node.status === 'sleeping') return { label: 'sleeping', cls: 'running', detail: 'Sleepy device currently behaving normally.', rank: 6 };
+  return { label: 'stable', cls: 'good', detail: 'No major risk signal from current evidence.', rank: 7 };
+}
+
 function placementCandidates() {
   return lastPlacementCandidates && Array.isArray(lastPlacementCandidates.candidates)
     ? lastPlacementCandidates.candidates
@@ -1801,6 +2160,47 @@ function bestPlacementCandidateForIds(ids) {
     }
   }
   return best ? best.candidate : null;
+}
+
+function renderDevicesSummary(nodes) {
+  const host = $('#devices-summary');
+  if (!host) return;
+  const filtered = applyNodeFilters(nodes || []);
+  const signalCounts = { bad: 0, warn: 0, good: 0, running: 0, muted: 0 };
+  filtered.forEach((node) => {
+    const signal = nodeSignalSummary(node);
+    signalCounts[signal.cls] = (signalCounts[signal.cls] || 0) + 1;
+  });
+  const sortLabel = nodesSort.key ? (nodesSort.key.replaceAll('_', ' ') + ' ' + nodesSort.dir) : 'worst first';
+  host.innerHTML = '';
+  [
+    {
+      label: 'Visible devices',
+      value: String(filtered.length),
+      copy: String((nodes || []).length - filtered.length) + ' hidden by current filters.',
+    },
+    {
+      label: 'Needs attention',
+      value: String((signalCounts.bad || 0) + (signalCounts.warn || 0)),
+      copy: String(signalCounts.bad || 0) + ' high-risk and ' + String(signalCounts.warn || 0) + ' watch-state nodes in view.',
+    },
+    {
+      label: 'Partition scope',
+      value: networkPartitionFilter ? partitionShortId(networkPartitionFilter) : 'all',
+      copy: networkPartitionFilter ? 'Table is pinned to one partition.' : 'Showing every visible partition.',
+    },
+    {
+      label: 'Sort mode',
+      value: sortLabel,
+      copy: 'Click any column header to compare a different signal.',
+    },
+  ].forEach((card) => {
+    host.appendChild(el('div', { class: 'devices-summary-card' },
+      el('div', { class: 'devices-summary-label' }, card.label),
+      el('div', { class: 'devices-summary-value' }, card.value),
+      el('div', { class: 'devices-summary-copy' }, card.copy),
+    ));
+  });
 }
 
 function focusPlacementCandidate(candidateId, opts = {}) {
@@ -1843,6 +2243,7 @@ function renderNetworkHealthPanel() {
     pill.textContent = 'unavailable';
     body.className = 'stack muted';
     body.textContent = health && health.error ? ('error: ' + health.error) : 'No network-health snapshot yet.';
+    renderHealthOverview();
     return;
   }
   const band = String(health.band || 'unknown_stale');
@@ -1852,27 +2253,40 @@ function renderNetworkHealthPanel() {
   const components = health.component_scores || {};
   body.className = 'stack';
   body.innerHTML = '';
-  body.appendChild(el('div', { class: 'health-score-row' },
-    el('div', { class: 'big' }, fmtScore01(health.score)),
-    el('div', { class: 'health-score-copy' },
-      'confidence ' + fmtScore01(health.confidence) + ' · as of ' + fmtAge(health.as_of)
+  const hero = el('div', { class: 'health-hero-panel' });
+  hero.appendChild(el('div', { class: 'health-hero-top' },
+    el('div', {},
+      el('div', { class: 'big' }, fmtScore01(health.score)),
+      el('div', { class: 'health-hero-meta' }, 'confidence ' + fmtScore01(health.confidence) + ' · as of ' + fmtAge(health.as_of))
+    ),
+    el('div', { class: 'health-hero-meta' },
+      (summary.router_count || 0) + ' routers · '
+      + (summary.end_device_count || 0) + ' end devices · '
+      + (summary.distinct_partitions || 0) + ' partition' + ((summary.distinct_partitions || 0) === 1 ? '' : 's')
     )
   ));
-  body.appendChild(el('div', { class: 'rail-sub' },
-    (summary.router_count || 0) + ' routers · '
-    + (summary.end_device_count || 0) + ' end devices · '
-    + (summary.distinct_partitions || 0) + ' partition' + ((summary.distinct_partitions || 0) === 1 ? '' : 's')
-  ));
-  const componentWrap = el('div', { class: 'health-components' });
+  const meterList = el('div', { class: 'health-meter-list' });
   [
     ['redundancy', components.router_redundancy],
     ['path diversity', components.path_diversity],
     ['link quality', components.link_quality],
     ['stability', components.stability],
   ].forEach(([label, value]) => {
-    componentWrap.appendChild(el('span', { class: 'pill muted' }, label + ' ' + fmtScore01(Number(value))));
+    const numeric = Number(value);
+    meterList.appendChild(el('div', { class: 'health-meter' },
+      el('div', { class: 'health-meter-label' }, label),
+      el('div', { class: 'health-meter-track' }, el('div', { class: 'health-meter-fill', style: 'width:' + Math.max(0, Math.min(100, numeric * 100)) + '%' })),
+      el('div', { class: 'health-meter-value' }, fmtScore01(numeric)),
+    ));
   });
-  body.appendChild(componentWrap);
+  hero.appendChild(meterList);
+  const reasonCodes = Array.isArray(health.reason_codes) ? health.reason_codes : [];
+  if (reasonCodes.length) {
+    const reasonWrap = el('div', { class: 'reason-chip-list' });
+    reasonCodes.slice(0, 4).forEach((code) => reasonWrap.appendChild(el('span', { class: 'reason-chip' }, code)));
+    hero.appendChild(reasonWrap);
+  }
+  body.appendChild(hero);
 
   const findings = Array.isArray(health.findings) ? health.findings : [];
   if (!findings.length) {
@@ -1921,6 +2335,7 @@ function renderNetworkHealthPanel() {
       placementHost.appendChild(card);
     });
   }
+  renderHealthOverview();
 }
 
 function networkHealthOverlayIds() {
@@ -1994,6 +2409,8 @@ function renderGraphRiskStrip() {
 
 function scrollToNode(eui) {
   if (!eui) return;
+  setMainTab('network');
+  setNetworkSubtab('devices');
   const tbody = $('#nodes-table tbody');
   if (!tbody) return;
   // Clear existing flashes.
@@ -2122,6 +2539,8 @@ function renderPartitionsCard(s) {
       renderPartitionsCard(s);
       renderNodesFilterSummary();
       rerenderNodes();
+      setMainTab('network');
+      setNetworkSubtab('devices');
       document.getElementById('nodes-table').scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
     list.appendChild(btn);
@@ -2160,6 +2579,7 @@ function renderNetwork(s) {
   renderPartitionsCard(s);
   renderNodesFilterSummary();
   renderNodesTable(nodes);
+  renderAiWorkspaceSummary();
 }
 
 function applyNodeFilters(nodes) {
@@ -2204,6 +2624,7 @@ function sortNodesForTable(nodes) {
       case 'name': va = (a.display_name||a.friendly_name||'').toLowerCase(); vb = (b.display_name||b.friendly_name||'').toLowerCase(); break;
       case 'area': va = (a.area_name||'').toLowerCase(); vb = (b.area_name||'').toLowerCase(); break;
       case 'role': va = (a.routing_role||'') + (a.device_kind||''); vb = (b.routing_role||'') + (b.device_kind||''); break;
+      case 'health': va = nodeSignalSummary(a).rank; vb = nodeSignalSummary(b).rank; break;
       case 'rssi': va = (strongestAvailableLink(a) || {}).rssi; vb = (strongestAvailableLink(b) || {}).rssi; break;
       case 'lqi':  va = (strongestAvailableLink(a) || {}).lqi;  vb = (strongestAvailableLink(b) || {}).lqi; break;
       case 'tx_retry_1h':       va = deltaForNode(a.eui64, '1h', 'tx_retry_count');       vb = deltaForNode(b.eui64, '1h', 'tx_retry_count'); break;
@@ -2229,6 +2650,7 @@ function renderNodesTable(nodes) {
   tbody.innerHTML = '';
   const filtered = applyNodeFilters(nodes);
   const sorted = sortNodesForTable(filtered);
+  renderDevicesSummary(nodes);
 
   // Reflect current sort in headers.
   document.querySelectorAll('#nodes-table th[data-sort]').forEach(th => {
@@ -2302,6 +2724,13 @@ function renderNodesTable(nodes) {
       else roleHtml += renderNextHop(n);
     }
     roleCell.innerHTML = roleHtml;
+    const signal = nodeSignalSummary(n);
+    const signalCell = el('td', { html:
+      '<div class="node-signal">'
+      + '<span class="pill ' + signal.cls + '">' + escapeHtml(signal.label) + '</span>'
+      + '<div class="node-signal-copy">' + escapeHtml(signal.detail) + '</div>'
+      + '</div>'
+    });
 
     // RSSI cell + "heard by <name>" sub-caption naming the strongest
     // reporting router. For SED/FED that's effectively the parent; for
@@ -2361,7 +2790,7 @@ function renderNodesTable(nodes) {
     const euiCell = el('td', {html: n.eui64
       ? '<code title="' + escapeHtml(euiTip) + '">' + n.eui64.slice(-6).toUpperCase() + '</code>'
       : '<span class="muted">—</span>'});
-    tr.append(nameCell, areaCell, roleCell, rssiCell, lqiCell, retryCell, parentCell, statusCell, seenCell, euiCell);
+    tr.append(nameCell, areaCell, roleCell, signalCell, rssiCell, lqiCell, retryCell, parentCell, statusCell, seenCell, euiCell);
     if (n.eui64) {
       tr.addEventListener('click', (ev) => {
         // Ignore clicks on inner interactive elements (links, code w/ tooltip selections).
@@ -2374,7 +2803,7 @@ function renderNodesTable(nodes) {
   }
   if (!sorted.length) {
     const tr = el('tr');
-    tr.appendChild(el('td', {colspan: 10, class: 'empty', style:'text-align:center;'}, 'no nodes match current filters'));
+    tr.appendChild(el('td', {colspan: 11, class: 'empty', style:'text-align:center;'}, 'no nodes match current filters'));
     tbody.appendChild(tr);
   }
 }
@@ -2729,7 +3158,7 @@ function renderGraphAreaRecommendations() {
     + '<div class="rail-sub" style="margin-top:8px;">'
     + 'Use the area filter and <b>group by area</b> to compare room-sized submeshes. '
     + (duplicates ? (duplicates + ' device(s) in this scope share duplicate-hardware identity signals. ') : '')
-    + 'Turn on weak-link overlays to see where this area loses path quality first.'
+    + 'Turn on weak-link overlays to see where this area loses path quality first, then inspect the affected nodes here before changing placement.'
     + '</div>';
 }
 
@@ -2753,7 +3182,9 @@ function renderGraphHistorySummary() {
     if (added) detail += ' This node is newly present in the latest retained snapshot.';
     else if (changed) detail += ' This node changed between the latest retained snapshots.';
   }
-  host.innerHTML = '<h2>History Summary</h2><div class="rail-sub">' + escapeHtml(detail) + '</div>';
+  host.innerHTML = '<h2>History Summary</h2>'
+    + '<div class="item-title">Latest retained diff</div>'
+    + '<div class="rail-sub">' + escapeHtml(detail) + '</div>';
 }
 
 function renderGraphInspector() {
@@ -2779,6 +3210,7 @@ function renderGraphInspector() {
     ].filter((row) => row[1]);
     host.innerHTML = '<h2>Inspector</h2>'
       + '<div class="item-title">' + escapeHtml(nodeDisplayName(node)) + '</div>'
+      + '<div class="item-meta">Node selection</div>'
       + '<dl class="identity-grid" style="margin-top:10px;">'
       + rows.map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd>').join('')
       + '</dl>'
@@ -2808,6 +3240,7 @@ function renderGraphInspector() {
   });
   host.innerHTML = '<h2>Inspector</h2>'
     + '<div class="item-title">' + escapeHtml(nodeDisplayName(source)) + ' → ' + escapeHtml(nodeDisplayName(target)) + '</div>'
+    + '<div class="item-meta">Edge selection</div>'
     + '<dl class="identity-grid" style="margin-top:10px;">'
     + '<dt>Type</dt><dd>' + escapeHtml(edge.data('edge_class') || 'other') + '</dd>'
     + '<dt>Signal</dt><dd>' + escapeHtml(edge.data('label') || '—') + '</dd>'
@@ -2818,6 +3251,31 @@ function renderGraphInspector() {
           + relatedFindings.map((finding) => escapeHtml(finding.title || finding.reason_code || 'finding')).join(' · ')
         + '</div>'
       : '');
+}
+
+function renderGraphWorkspaceSummary() {
+  const host = $('#graph-summary-strip');
+  if (!host) return;
+  const topo = graphSnapshot || {};
+  const summary = topo.summary || {};
+  const overlayCount = Array.isArray((graphHealthOverlay && graphHealthOverlay.findings) || null)
+    ? graphHealthOverlay.findings.length
+    : 0;
+  const selectedLabel = graphSelection
+    ? (graphSelection.type === 'node'
+        ? ('Selected node: ' + nodeDisplayName(graphNodeMeta(graphSelection.id) || { eui64: graphSelection.id }))
+        : 'Selected edge')
+    : 'No graph selection';
+  const items = [
+    summary.node_count != null ? ('Nodes: ' + summary.node_count) : 'Nodes unavailable',
+    summary.link_count != null ? ('Links: ' + summary.link_count) : 'Links unavailable',
+    selectedLabel,
+    ($('#graph-link-density') && $('#graph-link-density').value === 'strongest') ? 'Density: strongest only' : 'Density: all links',
+    overlayCount ? ('Health overlays: ' + overlayCount) : 'Health overlays ready',
+    graphHistoryDiff && graphHistoryDiff.summary ? 'History diff loaded' : 'No retained diff loaded',
+  ];
+  host.innerHTML = '';
+  items.forEach((text) => host.appendChild(el('span', { class: 'graph-summary-pill' }, text)));
 }
 
 function graphHoverHtmlForNode(node) {
@@ -2973,6 +3431,7 @@ function applyGraphPresentation() {
   renderGraphInspector();
   renderGraphAreaRecommendations();
   renderGraphHistorySummary();
+  renderGraphWorkspaceSummary();
 }
 
 async function renderGraph(options = {}) {
@@ -3588,6 +4047,29 @@ $('#chat-reset-btn').addEventListener('click', () => {
   chatState.conversationId = null;
   chatState.messages = [];
   renderChatMessages();
+});
+$('#ai-quick-health').addEventListener('click', () => {
+  primeChatPrompt('Give me a concise summary of the current Thread mesh health and the top driver of risk.');
+});
+$('#ai-quick-partitions').addEventListener('click', () => {
+  primeChatPrompt('Explain whether this mesh is partitioned right now and what evidence supports that conclusion.');
+});
+$('#ai-quick-node').addEventListener('click', () => {
+  if (!selectedNodeEui) {
+    primeChatPrompt('Which node should I investigate first based on the current evidence?');
+    return;
+  }
+  primeChatPrompt('Tell me what is going on with node ' + selectedNodeEui + '.');
+});
+$('#ai-quick-evidence').addEventListener('click', () => {
+  const finding = topAssessmentFinding();
+  if (!finding) {
+    primeChatPrompt('What is the most important thing I should investigate in this mesh right now?');
+    return;
+  }
+  showAssessmentFinding(finding);
+  noteBackgroundCheck(finding);
+  primeChatPrompt(finding.suggested_starter_prompt || ('Help me investigate: ' + (finding.headline || 'this finding')));
 });
 $('#chat-send-btn').addEventListener('click', () => sendChatTurn());
 $('#chat-input').addEventListener('keydown', (e) => {

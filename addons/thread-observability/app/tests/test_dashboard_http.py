@@ -22,7 +22,21 @@ def test_dashboard_serves_assessment_and_chat_shell() -> None:
     assert 'id="chat-card"' in html
     assert 'id="chat-agent-select"' in html
     assert 'id="chat-send-btn"' in html
+    assert 'data-network-subtab="health"' in html
+    assert 'data-network-subtab="devices"' in html
+    assert 'data-network-subtab="ai"' in html
+    assert 'id="network-subtab-health"' in html
+    assert 'id="network-subtab-devices"' in html
+    assert 'id="network-subtab-ai"' in html
+    assert 'id="health-overview-grid"' in html
+    assert 'id="devices-summary"' in html
+    assert 'id="ai-context-strip"' in html
+    assert 'id="ai-quick-health"' in html
+    assert 'id="ai-quick-partitions"' in html
+    assert 'id="ai-quick-node"' in html
+    assert 'id="ai-quick-evidence"' in html
     assert 'id="graph-risk-strip"' in html
+    assert 'id="graph-summary-strip"' in html
     assert 'id="graph-link-density"' in html
     assert 'id="graph-area-filter"' in html
     assert 'id="graph-area-recommendations"' in html
@@ -37,7 +51,8 @@ def test_dashboard_serves_assessment_and_chat_shell() -> None:
     assert "selected OTBR path" in html
     assert 'chat-copy-btn' in html
     assert html.count('id="chat-card"') == 1
-    assert html.index('id="tab-diagnostics"') < html.index('id="chat-card"')
+    assert html.index('id="tab-network"') < html.index('id="chat-card"')
+    assert html.index('id="chat-card"') < html.index('id="tab-graph"')
 
 
 def test_dashboard_wires_expected_dashboard_endpoints() -> None:
@@ -77,10 +92,18 @@ def test_dashboard_nodes_table_uses_strongest_available_links_and_router_parent_
     assert "Only one counter sample in this window" in html
     assert 'id="network-health-card"' in html
     assert "renderNetworkHealthPanel" in html
+    assert "renderHealthOverview" in html
+    assert "renderAiWorkspaceSummary" in html
+    assert "renderDevicesSummary" in html
+    assert "nodeSignalSummary" in html
     assert "renderGraphRiskStrip" in html
+    assert "renderGraphWorkspaceSummary" in html
     assert "networkHealthOverlayIds" in html
     assert "focusPlacementCandidateForGraphSelection" in html
     assert "data-candidate-id" in html
+    assert "setNetworkSubtab('devices')" in html
+    assert 'data-sort="health"' in html
+    assert "reason-chip-list" in html
     assert "snapshots[1].snapshot_id != null ? snapshots[1].snapshot_id : snapshots[1].id" in html
     assert "snapshots[0].snapshot_id != null ? snapshots[0].snapshot_id : snapshots[0].id" in html
 
