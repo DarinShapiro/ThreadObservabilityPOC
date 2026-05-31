@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.11.65 — Make core startup non-blocking for ingress readiness
+
+This patch stops the core API from blocking FastAPI readiness on boot-time
+SQLite cleanup and pipeline bootstrap work, which was long enough on real HA
+data to surface transient 502s after an update.
+
+**Fixes:**
+- moves `reset_db_on_start`, self-start observer-event recording, and pipeline
+  bootstrap work into a background startup task after FastAPI reaches
+  `Application startup complete`
+- keeps ingress readiness fast while preserving the existing reset-on-boot and
+  pipeline scheduling behavior
+- removes the leftover inline partition/status strip from the main Health view
+  so the panel no longer repeats the same warning state already shown by the
+  overview cards and current-focus content
+
 ## 0.11.64 — Add new Home Assistant add-on logo assets
 
 This patch adds the new logo artwork for the Home Assistant add-on so the

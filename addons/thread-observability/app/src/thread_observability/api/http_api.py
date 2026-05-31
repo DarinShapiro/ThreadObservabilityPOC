@@ -578,6 +578,32 @@ async def _periodic(name: str, interval: int, coro_factory) -> None:
             raise
 
 
+async def _bootstrap_pipeline(*, cfg: ThreadObsConfig, pipeline_interval: int) -> None:
+    """Perform blocking startup preparation, then run the pipeline loop.
+
+    This keeps FastAPI readiness from waiting on SQLite cleanup and VACUUM
+    while preserving the existing "reset on boot, then start the scheduler"
+    behavior.
+    """
+    if getattr(cfg, "reset_db_on_start", True):
+        try:
+            deleted = await asyncio.to_thread(get_store().reset_data)
+            log.info("reset_db_on_start: wiped %d rows from cache tables", deleted)
+        except Exception:  # noqa: BLE001
+            log.exception("reset_db_on_start: failed to truncate cache tables")
+    else:
+        log.info("reset_db_on_start=false: preserving previous DB contents")
+
+    try:
+        from ..pipeline.observer_events import record_self_start  # local import
+        await asyncio.to_thread(record_self_start, get_store(), version=ADDON_VERSION)
+    except Exception:  # noqa: BLE001
+        log.exception("observer_events: failed to record self-start")
+
+    log.info("pipeline scheduler started: interval=%ss (single atomic tick)", pipeline_interval)
+    await pipeline_runner.run_forever(interval_seconds=pipeline_interval)
+
+
 @contextlib.asynccontextmanager
 async def _lifespan(app: FastAPI):
     """Start/stop the background pipeline alongside the FastAPI app.
@@ -591,37 +617,12 @@ async def _lifespan(app: FastAPI):
     cfg = get_config()
     pipeline_interval = int(getattr(cfg.scheduler, "pipeline_interval_seconds", 30))
 
-    # The SQLite store is a live cache of what the Thread fabric currently
-    # reports. Anything that survives across a restart but does not come back
-    # in the next poll cycle is, by definition, stale. Wiping on boot makes
-    # the DB authoritative-by-construction.
-    if getattr(cfg, "reset_db_on_start", True):
-        try:
-            deleted = get_store().reset_data()
-            log.info("reset_db_on_start: wiped %d rows from cache tables", deleted)
-        except Exception:  # noqa: BLE001
-            log.exception("reset_db_on_start: failed to truncate cache tables")
-    else:
-        log.info("reset_db_on_start=false: preserving previous DB contents")
-
-    # v0.9.44 — record our own cold start as an ``addon:self`` observer
-    # event. The reasoner uses this to suppress / downgrade ``offline_node``
-    # and similar issues that fire in the seconds right after boot, where
-    # the cache has no last_seen for anyone yet. Best-effort: a failed
-    # write must not block startup.
-    try:
-        from ..pipeline.observer_events import record_self_start  # local import
-        record_self_start(get_store(), version=ADDON_VERSION)
-    except Exception:  # noqa: BLE001
-        log.exception("observer_events: failed to record self-start")
-
     tasks = [
         asyncio.create_task(
-            pipeline_runner.run_forever(interval_seconds=pipeline_interval),
+            _bootstrap_pipeline(cfg=cfg, pipeline_interval=pipeline_interval),
             name="pipeline-runner",
         ),
     ]
-    log.info("pipeline scheduler started: interval=%ss (single atomic tick)", pipeline_interval)
     try:
         yield
     finally:

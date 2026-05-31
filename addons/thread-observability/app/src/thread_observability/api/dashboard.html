@@ -2279,65 +2279,8 @@ function renderNetworkHealthPanel() {
   pill.textContent = band;
   const summary = health.summary || {};
   const components = health.component_scores || {};
-  const status = String((lastStatus && lastStatus.health && lastStatus.health.status) || 'unknown');
-  const counts = (lastStatus && lastStatus.node_counts) || {};
-  const online = Number(counts.online || 0);
-  const sleeping = Number(counts.sleeping || 0);
-  const offline = Number(counts.offline || 0);
-  const total = Number(counts.total || (online + sleeping + offline));
-  const issuesCount = Number(((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0);
-  const distinctNets = Number(summary.distinct_thread_networks || 0);
-  const dupGroups = Number(summary.duplicate_physical_device_groups || 0);
-  const dupRows = Number(summary.duplicate_physical_device_rows || 0);
-  const topFinding = topAssessmentFinding();
   body.className = 'stack';
   body.innerHTML = '';
-  const summaryLine = el('div', { class: 'rail-sub' }, [
-    status,
-    online + ' online / ' + sleeping + ' sleeping / ' + offline + ' offline of ' + total,
-    issuesCount + ' active issue' + (issuesCount === 1 ? '' : 's'),
-    (summary.distinct_partitions || 0) + ' partition' + ((summary.distinct_partitions || 0) === 1 ? '' : 's'),
-    distinctNets > 1 ? (distinctNets + ' distinct Thread networks') : null,
-  ].filter(Boolean).join(' · '));
-  body.appendChild(summaryLine);
-  const warningRow = el('div', { class: 'warnings-row' });
-  if (distinctNets > 1) {
-    warningRow.appendChild(el('span', {
-      class: 'warn-chip bad',
-      title: 'Multiple Thread networks reported by registered devices. Likely split-brain or stale registrations.',
-    }, `SPLIT BRAIN: ${distinctNets} Thread networks`));
-  }
-  if ((summary.distinct_partitions || 0) > 1) {
-    warningRow.appendChild(el('span', {
-      class: 'warn-chip bad',
-      title: 'More than one partition observed. Usually means the mesh has split.',
-    }, `${summary.distinct_partitions || 0} partitions observed`));
-  }
-  if (dupGroups > 0) {
-    warningRow.appendChild(el('span', {
-      class: 'warn-chip warn',
-      title: 'Same physical device commissioned under multiple EUI64s.',
-    }, `Duplicate hardware: ${dupGroups} group${dupGroups === 1 ? '' : 's'} (${dupRows} rows)`));
-  }
-  if (Number(summary.stale_nodes || 0) > 0) {
-    warningRow.appendChild(el('span', {
-      class: 'warn-chip warn',
-      title: 'Nodes not seen in their parent router\'s neighbor table recently.',
-    }, `${summary.stale_nodes} stale node${summary.stale_nodes === 1 ? '' : 's'}`));
-  }
-  if (topFinding) {
-    const findingChip = el('button', {
-      class: 'warn-chip ' + (assessmentSeverityRank(topFinding.severity || topFinding.verdict) <= 1 ? 'bad' : 'warn'),
-      type: 'button',
-      title: 'Background Diagnostics surfaced a finding worth reviewing. Click to jump to the evidence banner.',
-    }, 'Adaptive Monitoring: ' + (topFinding.headline || 'review recommended'));
-    findingChip.addEventListener('click', () => {
-      showAssessmentFinding(topFinding);
-      $('#assessment-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-    warningRow.appendChild(findingChip);
-  }
-  if (warningRow.childNodes.length) body.appendChild(warningRow);
   const hero = el('div', { class: 'health-hero-panel' });
   hero.appendChild(el('div', { class: 'health-hero-top' },
     el('div', {},
