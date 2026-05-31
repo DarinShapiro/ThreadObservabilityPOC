@@ -38,6 +38,7 @@ from ..services import chat_memory
 from ..services import direct_chat
 from . import signal_series as signal_series_mod
 from . import link_signal_history as link_signal_history_mod
+from ..network_health import build_network_health
 from ..storage import influx_store as ts_store
 from ..storage.sqlite_store import get_store
 
@@ -140,6 +141,31 @@ def _get_runtime_chat_config() -> ThreadObsConfig:
         except Exception:  # noqa: BLE001
             log.exception("failed to reload chat config from %s; using cached config", options_path)
     return cfg
+
+
+def _network_health_response(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "computed_at": payload.get("computed_at"),
+        "as_of": payload.get("as_of"),
+        "score": payload.get("score"),
+        "band": payload.get("band"),
+        "confidence": payload.get("confidence"),
+        "summary": payload.get("summary") or {},
+        "component_scores": payload.get("component_scores") or {},
+        "reason_codes": payload.get("reason_codes") or [],
+        "nodes": payload.get("nodes") or [],
+        "edges": payload.get("edges") or [],
+        "findings": payload.get("findings") or [],
+    }
+
+
+def _placement_candidates_response(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "computed_at": payload.get("computed_at"),
+        "as_of": payload.get("as_of"),
+        "confidence": payload.get("confidence"),
+        "candidates": payload.get("placement_candidates") or [],
+    }
 
 
 def _build_diagnostics_summary(
@@ -437,7 +463,14 @@ def _read_addon_version() -> str:
 ADDON_VERSION = _read_addon_version()
 LOG_PATH = Path("/data/thread-observability/addon.log")
 _CHAT_STARTER_PROMPTS_PATH = Path(__file__).parent / "chat_starter_prompts.json"
-_CHAT_KNOWN_THREAD_TOOLS = frozenset({"get_health_snapshot", "get_mesh_state", "list_active_issues", "start_triage"})
+_CHAT_KNOWN_THREAD_TOOLS = frozenset({
+    "get_health_snapshot",
+    "get_mesh_state",
+    "get_network_health",
+    "get_placement_candidates",
+    "list_active_issues",
+    "start_triage",
+})
 _HA_MCP_CLIENT_URL = "http://9e5048e8-thread-observability:8100/mcp/sse"
 _HA_INTEGRATIONS_URL = "/config/integrations/dashboard"
 
@@ -501,6 +534,30 @@ def _window_deltas(samples: list[dict[str, object]]) -> dict[str, object]:
         diff = b - a
         out[k] = None if diff < 0 else (int(diff) if diff == int(diff) else round(diff, 3))
     return out
+
+
+def _window_delta_payload(samples: list[dict[str, object]]) -> dict[str, object]:
+    deltas = _window_deltas(samples)
+    first_observed_at = samples[0].get("observed_at") if samples else None
+    last_observed_at = samples[-1].get("observed_at") if samples else None
+    tx_total_delta = deltas.get("tx_total_count")
+    tx_retry_delta = deltas.get("tx_retry_count")
+    tx_retry_rate = None
+    if isinstance(tx_total_delta, (int, float)) and tx_total_delta > 0 and isinstance(tx_retry_delta, (int, float)):
+        tx_retry_rate = round((float(tx_retry_delta) / float(tx_total_delta)) * 100.0, 2)
+    return {
+        **deltas,
+        "_meta": {
+            "sample_count": len(samples),
+            "first_observed_at": first_observed_at,
+            "last_observed_at": last_observed_at,
+            "has_window": len(samples) >= 2,
+            "tx_total_delta": tx_total_delta,
+            "tx_retry_delta": tx_retry_delta,
+            "tx_retry_rate_pct": tx_retry_rate,
+            "tx_activity_observed": isinstance(tx_total_delta, (int, float)) and tx_total_delta > 0,
+        },
+    }
 
 
 async def _periodic(name: str, interval: int, coro_factory) -> None:
@@ -919,6 +976,39 @@ def create_core_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             return {"partition_count": 0, "partitions": [], "error": str(exc)}
 
+    @app.get("/v1/network/health")
+    def network_health_snapshot() -> dict[str, object]:
+        try:
+            return _network_health_response(build_network_health(store=get_store()))
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "computed_at": _utc_now(),
+                "as_of": None,
+                "score": 0.0,
+                "band": "unknown_stale",
+                "confidence": 0.0,
+                "summary": {},
+                "component_scores": {},
+                "reason_codes": [],
+                "nodes": [],
+                "edges": [],
+                "findings": [],
+                "error": str(exc),
+            }
+
+    @app.get("/v1/network/placement-candidates")
+    def network_placement_candidates() -> dict[str, object]:
+        try:
+            return _placement_candidates_response(build_network_health(store=get_store()))
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "computed_at": _utc_now(),
+                "as_of": None,
+                "confidence": 0.0,
+                "candidates": [],
+                "error": str(exc),
+            }
+
     @app.get("/v1/routes/{eui64}")
     def routes_to_otbr(eui64: str) -> dict[str, object]:
         """Walk the multi-hop forwarding path from a node to the OTBR.
@@ -1055,8 +1145,8 @@ def create_core_app() -> FastAPI:
                 continue
             samples_1h = [r for r in samples if (r.get("observed_at") or "") >= since_1h]
             out[eui] = {
-                "1h": _window_deltas(samples_1h),
-                "24h": _window_deltas(samples),
+                "1h": _window_delta_payload(samples_1h),
+                "24h": _window_delta_payload(samples),
             }
         return {
             "now": until,

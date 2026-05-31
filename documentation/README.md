@@ -1,6 +1,6 @@
 # Thread Mesh Detective Platform - Design Documentation
 
-> **Status (2026-05): the add-on is on version 0.11.43, schema v19, with 41 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
+> **Status (2026-05): the add-on is on version 0.11.59, schema v19, with 45 MCP tools.** The documents in this folder capture the original V1 design intent. They are *not* an authoritative API reference - several tool names and field shapes evolved during Phases 1-4 (envelope, catalog reshape, triage entry points, counter time-series).
 >
 > For the current, runtime-accurate tool surface see [06-mcp-tools-reference.md](06-mcp-tools-reference.md). For per-release detail see [`addons/thread-observability/CHANGELOG.md`](../addons/thread-observability/CHANGELOG.md).
 
@@ -53,6 +53,10 @@
 10. **[Backlog Roadmap](09-backlog-roadmap.md)** *(current dependency-ordered execution plan for the remaining GitHub backlog)*
 
 11. **[HA MCP Client Setup](10-ha-mcp-client-setup.md)** *(operator walkthrough for connecting Home Assistant Assist agents to Thread Mesh Detective MCP tools)*
+
+12. **[Network Health Scoring Specification](11-network-health-scoring-spec.md)** *(draft deterministic formulas, thresholds, reason codes, and validation scenarios for backend-owned mesh health scoring)*
+
+13. **[Network Health API Contract](12-network-health-api-contract.md)** *(live read-only HTTP payload shapes and example responses for `network_health` and `placement_candidates`)*
 
 ---
 

@@ -11,6 +11,9 @@ configuration:
   ai:
     name: AI settings
     description: Optional model provider configuration.
+    prompt_compaction_enabled:
+      name: Enable prompt compaction
+      description: When enabled, the direct-chat runtime summarizes and compacts MCP payloads before sending them to the model. Leave this off to preserve raw backend payload structure except for the final message-size cap.
   scheduler:
     name: Internal scheduler
     description: Cadence for platform maintenance jobs.

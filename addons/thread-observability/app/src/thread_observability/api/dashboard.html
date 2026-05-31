@@ -38,6 +38,7 @@
     --graph-highlight-duplicate:#22d3ee;
     --graph-highlight-path:#facc15;
     --graph-highlight-otbr:#22c55e;
+    --graph-highlight-health:#fb7185;
   }
   * { box-sizing: border-box; }
   html, body { background: var(--bg); color: var(--fg); margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -233,6 +234,23 @@
   .history-item, .finding-item {
     padding:10px 12px; border:1px solid var(--border); border-radius:10px; background: var(--panel2);
   }
+  .health-score-row {
+    display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap; margin-bottom:10px;
+  }
+  .health-score-copy { color:var(--muted); font-size:12px; }
+  .health-findings-list, .placement-list { display:flex; flex-direction:column; gap:8px; margin-top:10px; }
+  .health-finding-item, .placement-item {
+    padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--panel2);
+  }
+  .placement-item.active {
+    border-color: var(--graph-highlight-health);
+    box-shadow: inset 0 0 0 1px rgba(251,113,133,0.35);
+    background: linear-gradient(135deg, rgba(127,29,29,0.24), rgba(15,23,42,0.92));
+  }
+  .placement-item { cursor:pointer; }
+  .placement-item:hover { border-color: var(--accent); }
+  .health-components { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  .health-components .pill { text-transform:none; }
   .finding-item.active { border-color:#ef4444; background:#22131f; }
   .item-title { font-size:13px; font-weight:600; margin-bottom:4px; }
   .item-meta { color: var(--muted); font-size:11px; }
@@ -495,10 +513,10 @@
                   <th data-sort="name">Name</th>
                   <th data-sort="area">Area</th>
                   <th data-sort="role">Role</th>
-                  <th data-sort="rssi" title="Received Signal Strength Indicator — higher (less negative) dBm is stronger">RSSI</th>
-                  <th data-sort="lqi" title="Matter LinkQuality — 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
-                  <th data-sort="tx_retry_1h" title="Δ tx_retry_count over the last 1 hour (Phase 4 counter time-series)">TX retry 1h</th>
-                  <th data-sort="parent_changes_24h" title="Δ parent_change_count over the last 24 hours">Parent Δ 24h</th>
+                  <th data-sort="rssi" title="Received Signal Strength Indicator — strongest available neighbor link for this node; higher (less negative) dBm is stronger">RSSI</th>
+                  <th data-sort="lqi" title="Matter LinkQuality — strongest available neighbor link for this node; 0..3 quantized: 3 good, 2 fair, 1 poor, 0 no link">LQI</th>
+                  <th data-sort="tx_retry_1h" title="Δ tx_retry_count over the last 1 hour. The table distinguishes real zero retries during observed traffic from windows with no traffic or too few samples.">TX retry 1h</th>
+                  <th data-sort="parent_changes_24h" title="Δ parent_change_count over the last 24 hours; applicable to end devices, not router-class nodes">Parent Δ 24h</th>
                   <th data-sort="status">Status</th>
                   <th data-sort="last_seen">Last seen</th>
                   <th data-sort="eui64">EUI64</th>
@@ -535,6 +553,17 @@
       </div>
 
       <aside class="network-rail">
+        <div class="card" id="assessment-rail-card">
+          <div class="card" id="network-health-card">
+            <div class="rail-card-head">
+              <h2>Network Health</h2>
+              <span id="network-health-pill" class="pill muted">loading</span>
+            </div>
+            <div id="network-health-body" class="stack muted">loading…</div>
+            <div id="network-health-findings" class="health-findings-list"></div>
+            <div id="network-health-placement" class="placement-list"></div>
+          </div>
+
         <div class="card" id="assessment-rail-card">
           <div class="rail-card-head">
             <h2>Adaptive Monitoring</h2>
@@ -578,6 +607,7 @@
           <label><input type="checkbox" id="graph-overlay-recent-changes"> recent changes</label>
           <label><input type="checkbox" id="graph-overlay-weak-links"> weak links</label>
           <label><input type="checkbox" id="graph-overlay-unstable"> unstable paths</label>
+          <label><input type="checkbox" id="graph-overlay-health-findings" checked> health findings</label>
           <label><input type="checkbox" id="graph-show-phantoms"> show phantoms</label>
         </div>
         <button id="graph-refresh" class="action-btn">Refresh graph</button>
@@ -628,6 +658,14 @@
       </div>
       <div class="legend" style="margin-top:4px;">
         <span><b>Tip:</b> click any node to highlight its forwarding path to the OTBR. Click the empty canvas to clear.</span>
+      </div>
+      <div class="legend" style="margin-top:4px;">
+        <span><b>Overlays:</b></span>
+        <span><span class="sw" style="background:var(--graph-highlight-health)"></span>network-health finding</span>
+        <span><span class="sw" style="background:var(--graph-highlight-weak)"></span>weak link</span>
+        <span><span class="sw" style="background:var(--graph-highlight-unstable)"></span>unstable path</span>
+        <span><span class="sw" style="background:var(--graph-highlight-duplicate)"></span>duplicate hardware</span>
+        <span><span class="sw" style="background:var(--graph-highlight-path)"></span>selected OTBR path</span>
       </div>
     </div>
   </section>
@@ -952,6 +990,8 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
 
 let lastStatus = null;
 let lastDeltas = null;            // { now, windows, nodes: {eui: {1h:{...}, 24h:{...}}} }
+let lastNetworkHealth = null;
+let lastPlacementCandidates = null;
 let lastAssessmentState = null;
 let lastAssessmentFindings = [];
 let lastAssessmentHistory = [];
@@ -971,6 +1011,8 @@ let graphNeedsRefresh = true;
 let graphLastFetchedAt = null;
 let graphSelection = null;
 let graphRefreshInFlight = false;
+let graphHealthOverlay = { nodes: new Set(), edges: new Set(), findings: [] };
+let selectedPlacementCandidateId = null;
 const chatState = { conversationId: null, messages: [] };
 let nodesSort = { key: null, dir: 'asc' };  // null => server "worst first" default
 const SEV_RANK = { critical: 0, error: 0, warning: 1, warn: 1, info: 2, notice: 3 };
@@ -993,9 +1035,9 @@ function nodeHealthRank(n) {
   if (n.status === 'offline') return 0;
   if (n.status === 'phantom') return 1;
   if (n.status === 'sleeping') return 4;
-  const sig = n.signal_strength || {};
-  const rssi = sig.rssi;
-  const lqi = sig.lqi;
+  const link = strongestAvailableLink(n);
+  const rssi = link ? link.rssi : null;
+  const lqi = link ? link.lqi : null;
   if (rssi != null && rssi < -85) return 2;
   if (lqi != null && lqi <= 1) return 2;
   if (rssi != null && rssi < -70) return 3;
@@ -1010,6 +1052,15 @@ function deltaForNode(eui, window, counter) {
   const win = node[window];
   if (!win) return undefined;
   return win[counter];  // number, null (reset), or undefined (missing)
+}
+
+function deltaMetaForNode(eui, window) {
+  if (!lastDeltas || !eui) return null;
+  const node = lastDeltas.nodes && lastDeltas.nodes[eui];
+  if (!node) return null;
+  const win = node[window];
+  if (!win || typeof win !== 'object') return null;
+  return win._meta && typeof win._meta === 'object' ? win._meta : null;
 }
 
 function strongestAvailableLink(node) {
@@ -1484,6 +1535,38 @@ function fmtDeltaNotApplicable() {
   return '<span class="muted" title="Not applicable for router-class nodes. Parent changes are an end-device stability signal.">n/a</span>';
 }
 
+function fmtRetryDelta(eui, window) {
+  const value = deltaForNode(eui, window, 'tx_retry_count');
+  const meta = deltaMetaForNode(eui, window);
+  if (value === null) return '<span class="delta-reset" title="counter reset detected in window">reset</span>';
+  if (value === undefined) {
+    if (meta && meta.sample_count > 0 && !meta.has_window) {
+      return '<span class="muted" title="Only one counter sample in this window, so a delta cannot be computed yet.">warmup</span>';
+    }
+    return '<span class="muted">—</span>';
+  }
+  if (value === 0) {
+    if (meta && meta.has_window && meta.tx_activity_observed) {
+      const total = typeof meta.tx_total_delta === 'number' ? meta.tx_total_delta : null;
+      const title = total != null
+        ? ('Traffic was observed in this window (' + total + ' tx), but tx_retry_count did not increase.')
+        : 'Traffic was observed in this window, but tx_retry_count did not increase.';
+      return '<span class="delta-zero" title="' + title + '">0%</span>';
+    }
+    if (meta && meta.has_window) {
+      return '<span class="muted" title="No transmit activity was observed in this window, so retry deltas are not informative.">quiet</span>';
+    }
+    return '<span class="delta-zero">0</span>';
+  }
+  if (meta && typeof meta.tx_retry_rate_pct === 'number' && typeof meta.tx_total_delta === 'number') {
+    return '<span title="+'
+      + value + ' retries across ' + meta.tx_total_delta + ' transmissions in this window.">' 
+      + meta.tx_retry_rate_pct.toFixed(1) + '%'
+      + '<span class="parent-hint">+' + value + ' / ' + meta.tx_total_delta + ' tx</span></span>';
+  }
+  return String(value);
+}
+
 function deltaClass(v, warnAt, badAt) {
   if (v === undefined || v === null) return '';
   if (v >= badAt) return 'delta-bad';
@@ -1680,6 +1763,235 @@ function renderHotSpots(s) {
   }
 }
 
+function healthBandClass(band) {
+  const normalized = String(band || '').toLowerCase();
+  if (normalized === 'healthy') return 'good';
+  if (normalized === 'watch') return 'warn';
+  if (normalized === 'investigate' || normalized === 'critical') return 'bad';
+  return 'muted';
+}
+
+function fmtScore01(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '—';
+  return Math.round(value * 100) + '%';
+}
+
+function placementCandidates() {
+  return lastPlacementCandidates && Array.isArray(lastPlacementCandidates.candidates)
+    ? lastPlacementCandidates.candidates
+    : [];
+}
+
+function candidateOverlapScore(candidate, ids) {
+  if (!candidate || !Array.isArray(candidate.affected_nodes) || !ids || !ids.size) return 0;
+  let score = 0;
+  for (const affected of candidate.affected_nodes) {
+    if (ids.has(String(affected))) score += 1;
+  }
+  return score;
+}
+
+function bestPlacementCandidateForIds(ids) {
+  let best = null;
+  for (const candidate of placementCandidates()) {
+    const overlap = candidateOverlapScore(candidate, ids);
+    if (!overlap) continue;
+    if (!best || overlap > best.overlap || (overlap === best.overlap && Number(candidate.score_delta || 0) > Number(best.candidate.score_delta || 0))) {
+      best = { candidate, overlap };
+    }
+  }
+  return best ? best.candidate : null;
+}
+
+function focusPlacementCandidate(candidateId, opts = {}) {
+  if (!candidateId) return;
+  selectedPlacementCandidateId = String(candidateId);
+  renderNetworkHealthPanel();
+  if (opts.scroll === false) return;
+  const placementEl = document.querySelector('[data-candidate-id="' + String(candidateId) + '"]');
+  if (placementEl) placementEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function focusPlacementCandidateForGraphSelection(opts = {}) {
+  if (!graphSelection) return;
+  const ids = new Set();
+  if (graphSelection.type === 'node') {
+    ids.add(String(graphSelection.id));
+  } else if (graphSelection.type === 'edge' && cy) {
+    const edge = cy.getElementById(graphSelection.id);
+    if (edge && !edge.empty()) {
+      ids.add(String(edge.data('source') || ''));
+      ids.add(String(edge.data('target') || ''));
+    }
+  }
+  const candidate = bestPlacementCandidateForIds(ids);
+  if (candidate) focusPlacementCandidate(candidate.candidate_id, opts);
+}
+
+function renderNetworkHealthPanel() {
+  const body = $('#network-health-body');
+  const pill = $('#network-health-pill');
+  const findingsHost = $('#network-health-findings');
+  const placementHost = $('#network-health-placement');
+  if (!body || !pill || !findingsHost || !placementHost) return;
+  const health = lastNetworkHealth;
+  const placement = lastPlacementCandidates;
+  findingsHost.innerHTML = '';
+  placementHost.innerHTML = '';
+  if (!health || health.error) {
+    pill.className = 'pill muted';
+    pill.textContent = 'unavailable';
+    body.className = 'stack muted';
+    body.textContent = health && health.error ? ('error: ' + health.error) : 'No network-health snapshot yet.';
+    return;
+  }
+  const band = String(health.band || 'unknown_stale');
+  pill.className = 'pill ' + healthBandClass(band);
+  pill.textContent = band;
+  const summary = health.summary || {};
+  const components = health.component_scores || {};
+  body.className = 'stack';
+  body.innerHTML = '';
+  body.appendChild(el('div', { class: 'health-score-row' },
+    el('div', { class: 'big' }, fmtScore01(health.score)),
+    el('div', { class: 'health-score-copy' },
+      'confidence ' + fmtScore01(health.confidence) + ' · as of ' + fmtAge(health.as_of)
+    )
+  ));
+  body.appendChild(el('div', { class: 'rail-sub' },
+    (summary.router_count || 0) + ' routers · '
+    + (summary.end_device_count || 0) + ' end devices · '
+    + (summary.distinct_partitions || 0) + ' partition' + ((summary.distinct_partitions || 0) === 1 ? '' : 's')
+  ));
+  const componentWrap = el('div', { class: 'health-components' });
+  [
+    ['redundancy', components.router_redundancy],
+    ['path diversity', components.path_diversity],
+    ['link quality', components.link_quality],
+    ['stability', components.stability],
+  ].forEach(([label, value]) => {
+    componentWrap.appendChild(el('span', { class: 'pill muted' }, label + ' ' + fmtScore01(Number(value))));
+  });
+  body.appendChild(componentWrap);
+
+  const findings = Array.isArray(health.findings) ? health.findings : [];
+  if (!findings.length) {
+    findingsHost.appendChild(el('div', { class: 'empty' }, 'No graph-derived health findings right now.'));
+  } else {
+    findings.slice(0, 3).forEach((finding) => {
+      const title = finding.title || finding.reason_code || 'finding';
+      const affected = Array.isArray(finding.affected_nodes) ? finding.affected_nodes.length : 0;
+      findingsHost.appendChild(el('div', { class: 'health-finding-item' },
+        el('div', { class: 'item-title' }, title),
+        el('div', { class: 'item-meta' }, [finding.severity || null, affected ? (affected + ' affected node' + (affected === 1 ? '' : 's')) : null].filter(Boolean).join(' · ')),
+        el('div', { class: 'rail-sub' }, finding.summary || '')
+      ));
+    });
+  }
+
+  const candidates = placement && Array.isArray(placement.candidates) ? placement.candidates : [];
+  if (!candidates.length) {
+    placementHost.appendChild(el('div', { class: 'empty' }, 'No router placement candidates surfaced from the current topology.'));
+  } else {
+    const selectedId = selectedPlacementCandidateId && candidates.some((candidate) => String(candidate.candidate_id || '') === selectedPlacementCandidateId)
+      ? selectedPlacementCandidateId
+      : String(candidates[0].candidate_id || '');
+    selectedPlacementCandidateId = selectedId;
+    candidates.slice(0, 3).forEach((candidate, index) => {
+      const active = String(candidate.candidate_id || '') === selectedId;
+      const card = el('div', {
+        class: 'placement-item' + (active ? ' active' : ''),
+        'data-candidate-id': String(candidate.candidate_id || ''),
+      },
+        el('div', { class: 'item-title' }, (index === 0 ? 'Top placement candidate' : 'Placement candidate #' + (index + 1))),
+        el('div', { class: 'item-meta' }, [candidate.location_label || 'unnamed zone', 'score delta ' + fmtScore01(candidate.score_delta)].join(' · ')),
+        el('div', { class: 'rail-sub' }, (candidate.reason_codes || []).join(', ')),
+        el('div', { class: 'rail-sub' }, 'Affected nodes: ' + ((candidate.affected_nodes || []).length || 0))
+      );
+      card.addEventListener('click', () => {
+        selectedPlacementCandidateId = String(candidate.candidate_id || '');
+        renderNetworkHealthPanel();
+        const first = Array.isArray(candidate.affected_nodes) ? candidate.affected_nodes[0] : null;
+        if (first && cy && !cy.getElementById(String(first)).empty()) {
+          graphSelection = { type: 'node', id: String(first) };
+          applyGraphPresentation();
+          document.getElementById('graph-inspector').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+      placementHost.appendChild(card);
+    });
+  }
+}
+
+function networkHealthOverlayIds() {
+  const nodeIds = new Set();
+  const edgeIds = new Set();
+  const findings = [];
+  const health = lastNetworkHealth;
+  if (!health || !Array.isArray(health.findings)) {
+    return { nodes: nodeIds, edges: edgeIds, findings };
+  }
+  const edgeIndex = new Map();
+  if (cy) {
+    cy.edges().forEach((edge) => {
+      const key = [String(edge.data('source') || '').toLowerCase(), String(edge.data('target') || '').toLowerCase()].sort().join('|');
+      if (key && !edgeIndex.has(key)) edgeIndex.set(key, edge.id());
+    });
+  }
+  for (const finding of health.findings.slice(0, 6)) {
+    if (!finding || typeof finding !== 'object') continue;
+    findings.push(finding);
+    const affected = Array.isArray(finding.affected_nodes) ? finding.affected_nodes : [];
+    affected.forEach((id) => id && nodeIds.add(String(id)));
+    const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
+    evidence.forEach((row) => {
+      if (!row || typeof row !== 'object') return;
+      const source = String(row.source_eui64 || row.from || '').toLowerCase();
+      const target = String(row.target_eui64 || row.to || '').toLowerCase();
+      if (!source || !target) return;
+      const key = [source, target].sort().join('|');
+      const edgeId = edgeIndex.get(key);
+      if (edgeId) edgeIds.add(edgeId);
+    });
+  }
+  return { nodes: nodeIds, edges: edgeIds, findings };
+}
+
+function renderGraphRiskStrip() {
+  const host = $('#graph-risk-strip');
+  if (!host) return;
+  host.innerHTML = '';
+  const overlay = graphHealthOverlay || { findings: [] };
+  const findings = Array.isArray(overlay.findings) ? overlay.findings : [];
+  if (!findings.length) {
+    host.appendChild(el('span', { class: 'warn-chip info' }, 'Graph diagnostics are computed server-side when available.'));
+    return;
+  }
+  findings.slice(0, 3).forEach((finding) => {
+    const rank = assessmentSeverityRank(finding.severity || finding.band || 'watch');
+    const cls = rank <= 1 ? 'bad' : 'warn';
+    const affected = Array.isArray(finding.affected_nodes) ? finding.affected_nodes.length : 0;
+    const chip = el('button', {
+      class: 'warn-chip ' + cls,
+      type: 'button',
+      title: finding.summary || finding.reason_code || 'Network health finding',
+    }, (finding.title || finding.reason_code || 'Health finding') + (affected ? (' · ' + affected + ' node' + (affected === 1 ? '' : 's')) : ''));
+    chip.addEventListener('click', () => {
+      const candidate = bestPlacementCandidateForIds(new Set((finding.affected_nodes || []).map((id) => String(id))));
+      const first = Array.isArray(finding.affected_nodes) ? finding.affected_nodes[0] : null;
+      if (first && cy && !cy.getElementById(String(first)).empty()) {
+        graphSelection = { type: 'node', id: String(first) };
+      }
+      applyGraphPresentation();
+      if (candidate) focusPlacementCandidate(candidate.candidate_id, { scroll: false });
+      const placementHost = document.getElementById('network-health-placement');
+      if (placementHost) placementHost.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      document.getElementById('graph-inspector').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    host.appendChild(chip);
+  });
+}
+
 function scrollToNode(eui) {
   if (!eui) return;
   const tbody = $('#nodes-table tbody');
@@ -1843,6 +2155,7 @@ function renderNetwork(s) {
 
   renderHeadline(s);
   renderHotSpots(s);
+  renderNetworkHealthPanel();
   renderIssues(s);
   renderPartitionsCard(s);
   renderNodesFilterSummary();
@@ -1891,8 +2204,8 @@ function sortNodesForTable(nodes) {
       case 'name': va = (a.display_name||a.friendly_name||'').toLowerCase(); vb = (b.display_name||b.friendly_name||'').toLowerCase(); break;
       case 'area': va = (a.area_name||'').toLowerCase(); vb = (b.area_name||'').toLowerCase(); break;
       case 'role': va = (a.routing_role||'') + (a.device_kind||''); vb = (b.routing_role||'') + (b.device_kind||''); break;
-      case 'rssi': va = (a.signal_strength||{}).rssi; vb = (b.signal_strength||{}).rssi; break;
-      case 'lqi':  va = (a.signal_strength||{}).lqi;  vb = (b.signal_strength||{}).lqi; break;
+      case 'rssi': va = (strongestAvailableLink(a) || {}).rssi; vb = (strongestAvailableLink(b) || {}).rssi; break;
+      case 'lqi':  va = (strongestAvailableLink(a) || {}).lqi;  vb = (strongestAvailableLink(b) || {}).lqi; break;
       case 'tx_retry_1h':       va = deltaForNode(a.eui64, '1h', 'tx_retry_count');       vb = deltaForNode(b.eui64, '1h', 'tx_retry_count'); break;
       case 'parent_changes_24h':va = deltaForNode(a.eui64, '24h', 'parent_change_count'); vb = deltaForNode(b.eui64, '24h', 'parent_change_count'); break;
       case 'status':            va = a.status||''; vb = b.status||''; break;
@@ -1927,8 +2240,10 @@ function renderNodesTable(nodes) {
 
   for (const n of sorted) {
     const sig = n.signal_strength || {};
-    const rssi = sig.rssi;
-    const lqi  = sig.lqi;
+    const link = strongestAvailableLink(n);
+    const rssi = link ? link.rssi : null;
+    const lqi  = link ? link.lqi : null;
+    const linkSource = sig.strongest_available_source || sig.source;
     const tr = el('tr', {'data-eui': n.eui64 || ''});
     const deviceName = n.display_name ? escapeHtml(n.display_name) : '<span class="muted">unnamed</span>';
     const phantomBadge = n.status === 'phantom' ? ' <span class="pill warn">phantom</span>' : '';
@@ -2002,13 +2317,13 @@ function renderNodesTable(nodes) {
       if (best) {
         const repName = best.name || (best.eui64 || '').slice(-4).toUpperCase();
         const tag = best.is_child ? ' (child)' : '';
-        const heardLabel = sig.source === 'reported_links' ? 'best peer ' : 'heard by ';
+        const heardLabel = linkSource === 'reported_links' ? 'best peer ' : 'heard by ';
         rssiHtml += '<div class="parent-hint">' + heardLabel + escapeHtml(repName) + tag + '</div>';
       }
     }
     let rssiTip = '';
     if (allRep.length) {
-      const tipLabel = sig.source === 'reported_links' ? 'Peers (best→worst):\n' : 'Reporters (best→worst):\n';
+      const tipLabel = linkSource === 'reported_links' ? 'Peers (best→worst):\n' : 'Reporters (best→worst):\n';
       const lines = allRep.map(r => {
         const nm = r.name || (r.eui64 || '').slice(-4).toUpperCase();
         const rs = r.rssi != null ? (r.rssi + ' dBm') : '? dBm';
@@ -2027,7 +2342,7 @@ function renderNodesTable(nodes) {
     const parentDelta24h = isRouterClass ? undefined : deltaForNode(n.eui64, '24h', 'parent_change_count');
     const retryCell = el('td', {
       class: deltaClass(txRetry1h, 5, 20),
-      html: fmtDelta(txRetry1h),
+      html: fmtRetryDelta(n.eui64, '1h'),
     });
     const parentCell = el('td', {
       class: deltaClass(parentDelta24h, 1, 3),
@@ -2172,9 +2487,12 @@ async function fetchGraphHistoryDiff() {
     const history = await fetchJSON('v1/topology/history?limit=2');
     const snapshots = (history && history.snapshots) || [];
     if (!Array.isArray(snapshots) || snapshots.length < 2) return null;
+    const olderId = snapshots[1] && (snapshots[1].snapshot_id != null ? snapshots[1].snapshot_id : snapshots[1].id);
+    const newerId = snapshots[0] && (snapshots[0].snapshot_id != null ? snapshots[0].snapshot_id : snapshots[0].id);
+    if (olderId == null || newerId == null) return null;
     return await fetchJSON(
-      'v1/topology/history/diff?snapshot_id_a=' + encodeURIComponent(snapshots[1].snapshot_id)
-      + '&snapshot_id_b=' + encodeURIComponent(snapshots[0].snapshot_id)
+      'v1/topology/history/diff?snapshot_id_a=' + encodeURIComponent(olderId)
+      + '&snapshot_id_b=' + encodeURIComponent(newerId)
     );
   } catch (_) {
     return null;
@@ -2447,6 +2765,9 @@ function renderGraphInspector() {
   }
   if (graphSelection.type === 'node') {
     const node = graphNodeMeta(graphSelection.id) || {};
+    const relatedFindings = ((graphHealthOverlay && graphHealthOverlay.findings) || []).filter((finding) =>
+      Array.isArray(finding.affected_nodes) && finding.affected_nodes.includes(graphSelection.id)
+    );
     const rows = [
       ['Area', graphAreaName(node)],
       ['Partition', node.partition_id != null ? partitionShortId(node.partition_id) : null],
@@ -2460,7 +2781,12 @@ function renderGraphInspector() {
       + '<div class="item-title">' + escapeHtml(nodeDisplayName(node)) + '</div>'
       + '<dl class="identity-grid" style="margin-top:10px;">'
       + rows.map((row) => '<dt>' + escapeHtml(row[0]) + '</dt><dd>' + escapeHtml(row[1]) + '</dd>').join('')
-      + '</dl>';
+      + '</dl>'
+      + (relatedFindings.length
+        ? '<div class="rail-sub" style="margin-top:10px;">Network health: '
+            + relatedFindings.map((finding) => escapeHtml(finding.title || finding.reason_code || 'finding')).join(' · ')
+          + '</div>'
+        : '');
     return;
   }
   if (!cy) return;
@@ -2471,13 +2797,27 @@ function renderGraphInspector() {
   }
   const source = graphNodeMeta(edge.data('source')) || { eui64: edge.data('source') };
   const target = graphNodeMeta(edge.data('target')) || { eui64: edge.data('target') };
+  const relatedFindings = ((graphHealthOverlay && graphHealthOverlay.findings) || []).filter((finding) => {
+    const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
+    return evidence.some((row) => {
+      if (!row || typeof row !== 'object') return false;
+      const src = String(row.source_eui64 || row.from || '').toLowerCase();
+      const dst = String(row.target_eui64 || row.to || '').toLowerCase();
+      return src && dst && [src, dst].sort().join('|') === [String(edge.data('source') || '').toLowerCase(), String(edge.data('target') || '').toLowerCase()].sort().join('|');
+    });
+  });
   host.innerHTML = '<h2>Inspector</h2>'
     + '<div class="item-title">' + escapeHtml(nodeDisplayName(source)) + ' → ' + escapeHtml(nodeDisplayName(target)) + '</div>'
     + '<dl class="identity-grid" style="margin-top:10px;">'
     + '<dt>Type</dt><dd>' + escapeHtml(edge.data('edge_class') || 'other') + '</dd>'
     + '<dt>Signal</dt><dd>' + escapeHtml(edge.data('label') || '—') + '</dd>'
     + '<dt>Tags</dt><dd>' + escapeHtml(edge.data('tags') || 'none') + '</dd>'
-    + '</dl>';
+    + '</dl>'
+    + (relatedFindings.length
+      ? '<div class="rail-sub" style="margin-top:10px;">Network health: '
+          + relatedFindings.map((finding) => escapeHtml(finding.title || finding.reason_code || 'finding')).join(' · ')
+        + '</div>'
+      : '');
 }
 
 function graphHoverHtmlForNode(node) {
@@ -2554,6 +2894,7 @@ function applyGraphPresentation() {
   if (!cy) return;
   cy.elements().removeClass('focus-muted recent-change weak-focus unstable-focus duplicate-focus selected-focus');
   const highlight = new Set();
+  graphHealthOverlay = networkHealthOverlayIds();
   const recentIds = graphRecentNodeIds();
   if ($('#graph-overlay-recent-changes').checked) {
     cy.nodes().forEach((node) => {
@@ -2591,6 +2932,24 @@ function applyGraphPresentation() {
       }
     });
   }
+  if ($('#graph-overlay-health-findings').checked) {
+    graphHealthOverlay.nodes.forEach((id) => {
+      const node = cy.getElementById(String(id));
+      if (node && !node.empty()) {
+        node.addClass('health-focus');
+        highlight.add(node.id());
+      }
+    });
+    graphHealthOverlay.edges.forEach((id) => {
+      const edge = cy.getElementById(String(id));
+      if (edge && !edge.empty()) {
+        edge.addClass('health-focus');
+        highlight.add(edge.id());
+        highlight.add(edge.source().id());
+        highlight.add(edge.target().id());
+      }
+    });
+  }
   if (graphSelection) {
     const element = cy.getElementById(graphSelection.id);
     if (element && !element.empty()) {
@@ -2602,6 +2961,7 @@ function applyGraphPresentation() {
       }
     }
   }
+  focusPlacementCandidateForGraphSelection({ scroll: false });
   if (highlight.size) {
     cy.elements().addClass('focus-muted');
     highlight.forEach((id) => {
@@ -2609,6 +2969,7 @@ function applyGraphPresentation() {
       if (element && !element.empty()) element.removeClass('focus-muted');
     });
   }
+  renderGraphRiskStrip();
   renderGraphInspector();
   renderGraphAreaRecommendations();
   renderGraphHistorySummary();
@@ -2644,6 +3005,7 @@ async function renderGraph(options = {}) {
   const graphDuplicate = cssVar('--graph-highlight-duplicate', '#22d3ee');
   const graphPath = cssVar('--graph-highlight-path', '#facc15');
   const graphOtbr = cssVar('--graph-highlight-otbr', '#22c55e');
+  const graphHealth = cssVar('--graph-highlight-health', '#fb7185');
 
   if (cy) { cy.destroy(); cy = null; }
   cy = cytoscape({
@@ -2703,6 +3065,8 @@ async function renderGraph(options = {}) {
       { selector: 'edge.weak-focus', style: { 'line-color': graphWeak, 'target-arrow-color': graphWeak, 'width': 5, 'opacity': 1 } },
       { selector: 'edge.unstable-focus', style: { 'line-style': 'dashed', 'line-color': graphUnstable, 'target-arrow-color': graphUnstable, 'width': 5, 'opacity': 1 } },
       { selector: 'node.duplicate-focus', style: { 'border-color': graphDuplicate, 'border-width': 4 } },
+      { selector: 'node.health-focus', style: { 'border-color': graphHealth, 'border-width': 5, 'opacity': 1 } },
+      { selector: 'edge.health-focus', style: { 'line-color': graphHealth, 'target-arrow-color': graphHealth, 'width': 6, 'opacity': 1 } },
       { selector: '.selected-focus', style: { 'opacity': 1 } },
       { selector: 'node.path-hit', style: {
         'border-width': 4, 'border-color': graphPath,
@@ -2810,6 +3174,7 @@ $('#graph-group-duplicates').addEventListener('change', () => applyGraphPresenta
 $('#graph-overlay-recent-changes').addEventListener('change', () => applyGraphPresentation());
 $('#graph-overlay-weak-links').addEventListener('change', () => applyGraphPresentation());
 $('#graph-overlay-unstable').addEventListener('change', () => applyGraphPresentation());
+$('#graph-overlay-health-findings').addEventListener('change', () => applyGraphPresentation());
 
 // Nodes-table filter / search / sort handlers re-render only the table.
 function rerenderNodes() {
@@ -2850,9 +3215,15 @@ async function refreshDeltas() {
 async function refresh() {
   try {
     const includeP = $('#show-phantoms').checked || $('#graph-show-phantoms').checked;
-    const s = await fetchJSON('v1/dev/status?include_phantoms=' + (includeP ? '1' : '0'));
+    const [s, networkHealth, placementCandidates] = await Promise.all([
+      fetchJSON('v1/dev/status?include_phantoms=' + (includeP ? '1' : '0')),
+      fetchJSON('v1/network/health').catch(e => ({ error: e.message })),
+      fetchJSON('v1/network/placement-candidates').catch(e => ({ error: e.message, candidates: [] })),
+    ]);
     const previousNodes = (lastStatus && lastStatus.all_nodes) || [];
     lastStatus = s;
+    lastNetworkHealth = networkHealth;
+    lastPlacementCandidates = placementCandidates;
     $('#addon-version').textContent = s.addon_version || '—';
     $('#last-refresh').textContent = new Date().toLocaleTimeString();
     renderPipelinePill(s.pipeline);

@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from thread_observability.api import counter_series
+from thread_observability.api.http_api import create_core_app
 from thread_observability.api import mcp_tools
+from fastapi.testclient import TestClient
 
 
 # --- schema migration --------------------------------------------------------
@@ -201,3 +203,29 @@ def test_phase4_tools_registered():
     names = {t["name"] for t in mcp_tools.TOOL_DEFS}
     assert {"get_counter_series", "compare_node_counters", "get_chat_stats"}.issubset(names)
     assert {"get_counter_series", "compare_node_counters", "get_chat_stats"}.issubset(mcp_tools._READ_TOOLS)
+
+
+def test_counter_deltas_endpoint_exposes_window_metadata(store):
+    base = datetime.now(tz=UTC) - timedelta(minutes=30)
+    store.upsert_node_metadata(eui64="N1")
+    store.record_counter_sample(
+        eui64="N1",
+        counters={"tx_total_count": 100, "tx_retry_count": 5},
+        observed_at=base.isoformat(),
+    )
+    store.record_counter_sample(
+        eui64="N1",
+        counters={"tx_total_count": 120, "tx_retry_count": 5},
+        observed_at=(base + timedelta(minutes=10)).isoformat(),
+    )
+
+    client = TestClient(create_core_app())
+    response = client.get("/v1/counters/deltas")
+
+    assert response.status_code == 200
+    payload = response.json()
+    window = payload["nodes"]["N1"]["24h"]
+    assert window["tx_retry_count"] == 0
+    assert window["_meta"]["sample_count"] == 2
+    assert window["_meta"]["has_window"] is True
+    assert window["_meta"]["tx_activity_observed"] is True

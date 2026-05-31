@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.59 — Deterministic network health surfaces and graph follow-up
+
+This release packages the deterministic network-health scoring work, exposes it
+over the HTTP and MCP surfaces, and finishes the dashboard follow-up needed to
+make those findings actionable in the Graph tab.
+
+**Fixes:**
+- adds backend-owned network-health scoring, graph-derived findings, and router
+  placement candidate generation so mesh health is computed deterministically
+  instead of inferred in the UI
+- exposes the new health and placement payloads through the core HTTP API, MCP
+  read tools, and direct-chat prompt compaction so the same facts are available
+  to the dashboard and model-visible tooling
+- adds dashboard health panels, graph health overlays, topology-history diff
+  compatibility fixes, and placement focus behavior that links graph selection
+  to the best matching placement candidate in the rail
+- expands focused regression coverage for scoring, builder output, HTTP/MCP
+  envelopes, dashboard wiring, and direct-chat/tool-prompt integration
+
 ## 0.11.58 — Tighten direct-chat evidence packing and prompt smoke review
 
 This patch makes the prompt-visible current-state evidence more faithful for

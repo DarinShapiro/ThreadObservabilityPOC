@@ -20,6 +20,13 @@ log = logging.getLogger(__name__)
 OPTIONS_PATH = Path(os.getenv("THREAD_OBS_OPTIONS_PATH", "/data/options.json"))
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return default
+    return raw in {"1", "true", "yes", "on"}
+
+
 class RetentionConfig(BaseModel):
     full_resolution_days: int = Field(default=3, ge=1, le=30)
     sampled_archive_days: int = Field(default=14, ge=1, le=60)
@@ -41,6 +48,9 @@ class AIConfig(BaseModel):
     base_url: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_AI_BASE_URL", ""))
     api_key: str = Field(default_factory=lambda: os.getenv("THREAD_OBS_AI_API_KEY", ""), repr=False)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
+    prompt_compaction_enabled: bool = Field(
+        default_factory=lambda: _env_flag("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED", False)
+    )
 
 
 class AssessmentConfig(BaseModel):

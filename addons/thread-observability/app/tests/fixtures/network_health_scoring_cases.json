@@ -1,0 +1,54 @@
+{
+  "edge_cases": [
+    {
+      "name": "strong_fresh_edge",
+      "input": {"rssi": -62, "lqi": 3, "retry_delta": 1, "age_seconds": 90, "reverse_rssi": -64},
+      "expect": {"band": "strong", "score_min": 0.75, "reason_codes_absent": ["STALE_LINK_DATA", "WEAK_RSSI"]}
+    },
+    {
+      "name": "stale_one_way_edge",
+      "input": {"rssi": -88, "lqi": 1, "retry_delta": 7, "age_seconds": 4000},
+      "expect": {"band": "unknown_stale", "score_max": 0.49, "reason_codes_present": ["STALE_LINK_DATA", "ONE_WAY_LINK_EVIDENCE", "WEAK_RSSI", "POOR_LQI"]}
+    }
+  ],
+  "router_cases": [
+    {
+      "name": "healthy_router",
+      "input": {"strong_neighbor_count": 2, "alternate_path_count": 1, "best_path_quality": 0.88, "retry_delta": 1, "age_seconds": 120, "articulation_risk": false, "bridge_dependency": 0.1, "router_count": 4},
+      "expect": {"band": "healthy", "score_min": 0.8, "reason_codes_absent": ["LOW_ROUTER_REDUNDANCY", "NO_ALTERNATE_PATH"]}
+    },
+    {
+      "name": "articulation_router",
+      "input": {"strong_neighbor_count": 1, "alternate_path_count": 0, "best_path_quality": 0.44, "retry_delta": 8, "age_seconds": 300, "articulation_risk": true, "bridge_dependency": 0.8, "router_count": 5},
+      "expect": {"band": "critical", "score_max": 0.39, "reason_codes_present": ["LOW_ROUTER_REDUNDANCY", "NO_ALTERNATE_PATH", "ARTICULATION_ROUTER", "HIGH_BOTTLENECK_CENTRALITY"]}
+    }
+  ],
+  "end_device_cases": [
+    {
+      "name": "stable_end_device",
+      "input": {"parent_edge_quality": 0.83, "parent_change_delta_24h": 0, "parent_router_health": 0.79, "retry_delta": 0},
+      "expect": {"band": "healthy", "score_min": 0.8, "reason_codes_absent": ["MARGINAL_PARENT_LINK", "PARENT_FLAPPING"]}
+    },
+    {
+      "name": "flapping_end_device",
+      "input": {"parent_edge_quality": 0.34, "parent_change_delta_24h": 4, "parent_router_health": 0.42, "retry_delta": 6},
+      "expect": {"band": "critical", "score_max": 0.39, "reason_codes_present": ["MARGINAL_PARENT_LINK", "PARENT_FLAPPING", "FRAGILE_PARENT_ROUTER"]}
+    }
+  ],
+  "network_cases": [
+    {
+      "name": "healthy_small_mesh",
+      "input": {"router_redundancy": 1.0, "path_diversity": 0.9, "link_quality": 0.88, "stability": 0.84, "bottleneck_penalty": 0.12, "partition_penalty": 0.0, "confidence_avg": 0.95},
+      "expect": {"band": "healthy", "score_min": 0.85, "reason_codes_absent": ["LOW_NETWORK_REDUNDANCY", "LOW_CONFIDENCE_SNAPSHOT"]}
+    },
+    {
+      "name": "low_confidence_partition_risk",
+      "input": {"router_redundancy": 0.45, "path_diversity": 0.35, "link_quality": 0.51, "stability": 0.47, "bottleneck_penalty": 0.71, "partition_penalty": 0.63, "confidence_avg": 0.32},
+      "expect": {"band": "investigate", "score_min": 0.4, "score_max": 0.59, "reason_codes_present": ["LOW_NETWORK_REDUNDANCY", "OVERCONCENTRATED_ROUTING", "PARTITION_RISK", "LOW_CONFIDENCE_SNAPSHOT"]}
+    }
+  ],
+  "placement_case": {
+    "input": {"redundancy_delta": 0.7, "path_diversity_delta": 0.8, "bottleneck_reduction": 0.6, "affected_nodes_norm": 0.5},
+    "expect": {"score_min": 0.65, "score_max": 0.75}
+  }
+}

@@ -22,6 +22,7 @@ from . import signal_series as signal_series_mod
 from . import link_signal_history as link_signal_history_mod
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
+from ..network_health import build_network_health
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import topology as topology_mod
@@ -153,11 +154,30 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "instead, reason from the raw data (topology, partitions, links, nodes)."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
-    },    {
+    },
+    {
         "name": "get_health_snapshot",
         "description": (
             "Return current health snapshot: node counts by status (healthy / stale / offline), "
             "active issue counts, and data freshness age."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_network_health",
+        "description": (
+            "Return the deterministic network-health payload used by the HTTP dashboard health panel. "
+            "Includes overall score/band/confidence, component scores, node and edge health rows, "
+            "and ranked findings. Use this when the question is about overall mesh health or structural risk."
+        ),
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "get_placement_candidates",
+        "description": (
+            "Return deterministic placement recommendations for adding a mains-powered Thread router. "
+            "Includes projected score delta, affected nodes, bottlenecks reduced, and explicit assumptions. "
+            "Use this when the question is where another router would most likely help."
         ),
         "inputSchema": {"type": "object", "properties": {}, "required": []},
     },
@@ -924,6 +944,8 @@ _READ_TOOLS: frozenset[str] = frozenset({
     "get_mesh_state",
     "list_active_issues",
     "get_health_snapshot",
+    "get_network_health",
+    "get_placement_candidates",
     "get_recent_logs",
     "ha_get_addon_state",
     "ha_get_addon_logs",
@@ -1050,6 +1072,35 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
     if name == "get_health_snapshot":
         try:
             return _build_health_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_network_health":
+        try:
+            payload = build_network_health(store=get_store())
+            return {
+                "computed_at": payload.get("computed_at"),
+                "as_of": payload.get("as_of"),
+                "score": payload.get("score"),
+                "band": payload.get("band"),
+                "confidence": payload.get("confidence"),
+                "summary": payload.get("summary") or {},
+                "component_scores": payload.get("component_scores") or {},
+                "reason_codes": payload.get("reason_codes") or [],
+                "nodes": payload.get("nodes") or [],
+                "edges": payload.get("edges") or [],
+                "findings": payload.get("findings") or [],
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {"error": str(exc)}
+    if name == "get_placement_candidates":
+        try:
+            payload = build_network_health(store=get_store())
+            return {
+                "computed_at": payload.get("computed_at"),
+                "as_of": payload.get("as_of"),
+                "confidence": payload.get("confidence"),
+                "candidates": payload.get("placement_candidates") or [],
+            }
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}
     if name == "close_issue":

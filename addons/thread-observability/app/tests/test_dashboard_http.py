@@ -31,7 +31,10 @@ def test_dashboard_serves_assessment_and_chat_shell() -> None:
     assert 'id="graph-history-summary"' in html
     assert 'id="graph-overlay-weak-links"' in html
     assert 'id="graph-overlay-unstable"' in html
+    assert 'id="graph-overlay-health-findings"' in html
     assert 'id="graph-inspector"' in html
+    assert "network-health finding" in html
+    assert "selected OTBR path" in html
     assert 'chat-copy-btn' in html
     assert html.count('id="chat-card"') == 1
     assert html.index('id="tab-diagnostics"') < html.index('id="chat-card"')
@@ -48,6 +51,8 @@ def test_dashboard_wires_expected_dashboard_endpoints() -> None:
     assert "v1/assessment/findings?state=open&limit=10" in html
     assert "v1/assessment/history?limit=" in html
     assert "v1/assessment/run-now" in html
+    assert "v1/network/health" in html
+    assert "v1/network/placement-candidates" in html
 
 
 def test_dashboard_renders_assistant_markdown_safely() -> None:
@@ -58,6 +63,26 @@ def test_dashboard_renders_assistant_markdown_safely() -> None:
     assert "dompurify" in html.lower()
     assert "renderAssistantMarkdown" in html
     assert "DOMPurify.sanitize" in html
+
+
+def test_dashboard_nodes_table_uses_strongest_available_links_and_router_parent_na_copy() -> None:
+    client = TestClient(create_core_app())
+    html = client.get("/").text
+
+    assert "strongest available neighbor link for this node" in html
+    assert "applicable to end devices, not router-class nodes" in html
+    assert "const link = strongestAvailableLink(n);" in html
+    assert "fmtRetryDelta" in html
+    assert "No transmit activity was observed in this window" in html
+    assert "Only one counter sample in this window" in html
+    assert 'id="network-health-card"' in html
+    assert "renderNetworkHealthPanel" in html
+    assert "renderGraphRiskStrip" in html
+    assert "networkHealthOverlayIds" in html
+    assert "focusPlacementCandidateForGraphSelection" in html
+    assert "data-candidate-id" in html
+    assert "snapshots[1].snapshot_id != null ? snapshots[1].snapshot_id : snapshots[1].id" in html
+    assert "snapshots[0].snapshot_id != null ? snapshots[0].snapshot_id : snapshots[0].id" in html
 
 
 def test_dashboard_uses_home_assistant_theme_tokens() -> None:

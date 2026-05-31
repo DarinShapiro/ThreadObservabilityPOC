@@ -273,6 +273,7 @@ def test_direct_chat_turn_prefetches_baseline_evidence_for_generic_question(monk
 
 
 def test_prefetch_evidence_keeps_health_and_mesh_load_bearing_fields(monkeypatch) -> None:
+    monkeypatch.setenv("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED", "true")
     tool_trace: list[dict[str, object]] = []
     transcript_events: list[dict[str, object]] = []
 
@@ -337,6 +338,53 @@ def test_prefetch_evidence_keeps_health_and_mesh_load_bearing_fields(monkeypatch
     assert 'dict with 2 keys' not in system_message
 
 
+def test_prefetch_evidence_uses_raw_tool_payloads_when_prompt_compaction_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED", raising=False)
+    tool_trace: list[dict[str, object]] = []
+    transcript_events: list[dict[str, object]] = []
+
+    async def fake_dispatch(name: str, arguments: dict[str, object], **kwargs) -> dict[str, object]:
+        if name == "get_health_snapshot":
+            return {
+                "data": {
+                    "computed_at": "2026-05-16T05:35:50.338238+00:00",
+                    "summary": {"healthy_nodes": 2, "offline_nodes": 0},
+                    "active_issues": {"count": 2, "by_severity": {"warning": 2}},
+                },
+                "meta": {"tool": name, "as_of": "2026-05-16T05:35:50.339236+00:00"},
+            }
+        if name == "get_mesh_state":
+            return {
+                "data": {
+                    "freshness_minutes": 60,
+                    "nodes": [
+                        {"eui64": "11" * 8, "status": "online"},
+                        {"eui64": "22" * 8, "status": "sleeping"},
+                    ],
+                    "partitions": [{"partition_id": 1234, "leader_eui64": "33" * 8, "member_count": 2}],
+                },
+                "meta": {"tool": name, "as_of": "2026-05-16T05:35:50.339236+00:00"},
+            }
+        raise AssertionError(f"unexpected tool {name}")
+
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    system_message = asyncio.run(
+        direct_chat._prefetch_turn_evidence(
+            message="What is the overall health of my Thread network right now?",
+            tool_trace=tool_trace,
+            transcript_events=transcript_events,
+        )
+    )
+
+    assert system_message is not None
+    assert '"summary":{"healthy_nodes":2,"offline_nodes":0}' in system_message
+    assert '"active_issues":{"count":2,"by_severity":{"warning":2}}' in system_message
+    assert '"partitions":[{"partition_id":1234,"leader_eui64":' in system_message
+    assert '"node_status_counts"' not in system_message
+    assert '"active_issue_count"' not in system_message
+
+
 def test_direct_chat_turn_does_not_prefetch_baseline_evidence_for_history_question(monkeypatch) -> None:
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
@@ -385,6 +433,7 @@ def test_direct_chat_turn_does_not_prefetch_baseline_evidence_for_history_questi
 
 
 def test_direct_chat_turn_compacts_large_tool_results_for_prompt(monkeypatch) -> None:
+    monkeypatch.setenv("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED", "true")
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",
@@ -463,7 +512,89 @@ def test_direct_chat_turn_compacts_large_tool_results_for_prompt(monkeypatch) ->
     assert len(result["tool_calls"][0]["result"]["rows"]) == 80
 
 
+def test_direct_chat_turn_uses_raw_tool_results_when_prompt_compaction_disabled(monkeypatch) -> None:
+    monkeypatch.delenv("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED", raising=False)
+    target = direct_chat.DirectChatTarget(
+        provider="cerebras",
+        model="llama-4-scout",
+        base_url="https://api.cerebras.ai/v1",
+        api_key="secret",
+        temperature=0.2,
+    )
+    calls: list[dict[str, object]] = []
+    large_result = {
+        "rows": [
+            {
+                "eui64": f"node-{index:04d}",
+                "notes": "x" * 400,
+                "metrics": {"rssi": -70, "lqi": 3, "status": "online"},
+            }
+            for index in range(80)
+        ]
+    }
+
+    async def fake_post_chat_completions(target, body):  # noqa: ANN001
+        calls.append(json.loads(json.dumps(body)))
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call-big",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "list_all_nodes",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        tool_message = next(msg for msg in body["messages"] if msg.get("role") == "tool")
+        assert len(tool_message["content"]) <= direct_chat._MAX_TOOL_RESULT_MESSAGE_CHARS
+        assert '"rows":[{"eui64":"node-0000"' in tool_message["content"]
+        assert "_truncated_items" not in tool_message["content"]
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "I reviewed the raw node inventory.",
+                    }
+                }
+            ]
+        }
+
+    async def fake_dispatch(name: str, arguments: dict[str, object]) -> dict[str, object]:
+        assert name == "list_all_nodes"
+        assert arguments == {}
+        return large_result
+
+    monkeypatch.setattr(direct_chat, "_post_chat_completions", fake_post_chat_completions)
+    monkeypatch.setattr(direct_chat, "_dispatch_chat_tool", fake_dispatch)
+
+    result = asyncio.run(
+        direct_chat.direct_chat_turn(
+            target=target,
+            message="List the current nodes.",
+            rendered_message="User message: List the current nodes.",
+            conversation_id=None,
+        )
+    )
+
+    assert result["response"]["text"] == "I reviewed the raw node inventory."
+    assert len(result["tool_calls"]) == 1
+    assert len(result["tool_calls"][0]["result"]["rows"]) == 80
+
+
 def test_direct_chat_turn_preserves_signal_strength_fields_in_node_inventory_prompt(monkeypatch) -> None:
+    monkeypatch.setenv("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED", "true")
     target = direct_chat.DirectChatTarget(
         provider="cerebras",
         model="llama-4-scout",

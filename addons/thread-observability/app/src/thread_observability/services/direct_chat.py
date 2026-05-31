@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from ..config import AIConfig
+from ..config import AIConfig, get_config
 from ..utils.datetime import parse_iso_datetime
 from . import web_search
 
@@ -27,6 +27,23 @@ _MAX_TOOL_ROUNDS = 4
 _MAX_TOOL_CALLS = 8
 _MAX_TOOL_RESULT_MESSAGE_CHARS = 3500
 _MAX_EVIDENCE_MESSAGE_CHARS = 5000
+
+
+def _env_flag(name: str) -> bool | None:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return None
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _prompt_compaction_enabled() -> bool:
+    override = _env_flag("THREAD_OBS_AI_PROMPT_COMPACTION_ENABLED")
+    if override is not None:
+        return override
+    try:
+        return bool(get_config().ai.prompt_compaction_enabled)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 _DEFAULT_SYSTEM_PROMPT = """# Role
@@ -817,7 +834,51 @@ def _compact_current_mesh_state(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_network_health(result: dict[str, Any]) -> dict[str, Any]:
+    data = _tool_result_data(result)
+    if not isinstance(data, dict):
+        return result
+    findings = data.get("findings") if isinstance(data.get("findings"), list) else []
+    candidates = data.get("candidates") if isinstance(data.get("candidates"), list) else []
+    return {
+        "computed_at": data.get("computed_at"),
+        "as_of": data.get("as_of"),
+        "score": data.get("score"),
+        "band": data.get("band"),
+        "confidence": data.get("confidence"),
+        "summary": data.get("summary") if isinstance(data.get("summary"), dict) else {},
+        "component_scores": data.get("component_scores") if isinstance(data.get("component_scores"), dict) else {},
+        "reason_codes": data.get("reason_codes") if isinstance(data.get("reason_codes"), list) else [],
+        "finding_count": len(findings),
+        "top_findings": [
+            {
+                "finding_id": row.get("finding_id"),
+                "severity": row.get("severity"),
+                "reason_code": row.get("reason_code"),
+                "title": row.get("title"),
+                "affected_nodes": row.get("affected_nodes"),
+            }
+            for row in findings[:5]
+            if isinstance(row, dict)
+        ],
+        "candidate_count": len(candidates),
+        "top_candidates": [
+            {
+                "candidate_id": row.get("candidate_id"),
+                "location_label": row.get("location_label"),
+                "score_delta": row.get("score_delta"),
+                "reason_codes": row.get("reason_codes"),
+                "affected_nodes": row.get("affected_nodes"),
+            }
+            for row in candidates[:3]
+            if isinstance(row, dict)
+        ],
+    }
+
+
 def _tool_result_for_prompt(name: str, arguments: dict[str, Any], result: Any) -> Any:
+    if not _prompt_compaction_enabled():
+        return result
     data = _tool_result_data(result)
     if name == "list_all_nodes" and isinstance(data, dict) and isinstance(data.get("nodes"), list):
         return _compact_node_inventory(data)
@@ -825,6 +886,8 @@ def _tool_result_for_prompt(name: str, arguments: dict[str, Any], result: Any) -
         return _compact_health_snapshot(result if isinstance(result, dict) else {"data": data})
     if name == "get_mesh_state" and isinstance(data, dict):
         return _compact_current_mesh_state(result if isinstance(result, dict) else {"data": data})
+    if name in {"get_network_health", "get_placement_candidates"} and isinstance(data, dict):
+        return _compact_network_health(result if isinstance(result, dict) else {"data": data})
     return result
 
 
@@ -1350,6 +1413,9 @@ def _compact_for_prompt(
 
 
 def _serialize_for_prompt(value: Any, *, max_chars: int) -> str:
+    if not _prompt_compaction_enabled():
+        rendered = json.dumps(value, separators=(",", ":"), ensure_ascii=True, default=str)
+        return rendered if len(rendered) <= max_chars else _truncate_prompt_text(rendered, max_chars)
     for max_items, max_keys, max_string_chars, max_depth in (
         (10, 28, 320, 4),
         (6, 18, 220, 3),
@@ -1446,7 +1512,13 @@ async def _gather_backend_node_evidence(message: str, tool_trace: list[dict[str,
                 "result": result,
             }
         )
-        gathered.append({"tool": "analyze_node", "arguments": arguments, "result": _compact_node_history(result)})
+        gathered.append(
+            {
+                "tool": "analyze_node",
+                "arguments": arguments,
+                "result": _compact_node_history(result) if _prompt_compaction_enabled() else result,
+            }
+        )
 
     history_since = (datetime.now(tz=UTC) - _NODE_HISTORY_WINDOW).isoformat()
     history_arguments = {"eui64": eui64, "since": history_since, "limit": 100}
@@ -1484,7 +1556,7 @@ async def _gather_backend_node_evidence(message: str, tool_trace: list[dict[str,
         {
             "tool": "get_mesh_state",
             "arguments": mesh_arguments,
-            "result": _compact_mesh_view(mesh_result, eui64),
+            "result": _compact_mesh_view(mesh_result, eui64) if _prompt_compaction_enabled() else mesh_result,
         }
     )
 
