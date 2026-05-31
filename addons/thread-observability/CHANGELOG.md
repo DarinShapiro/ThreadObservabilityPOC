@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.11.64 — Add new Home Assistant add-on logo assets
+
+This patch adds the new logo artwork for the Home Assistant add-on so the
+supervisor UI and add-on surfaces use the updated branding.
+
+**Fixes:**
+- adds the provided artwork as the add-on `icon.png` and `logo.png` assets
+  used by Home Assistant UI surfaces
+
 ## 0.11.63 — Merge the duplicate Health panel into one primary view
 
 This patch finishes the Health-tab consolidation by removing the leftover
