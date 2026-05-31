@@ -46,7 +46,9 @@ def test_network_health_builder_replays_split_mesh_fixture(store) -> None:
     assert payload["summary"]["distinct_partitions"] == 2
     assert any(code in payload["reason_codes"] for code in {"PARTITION_RISK", "PARTITION_SPLIT"})
     split_mesh = next(finding for finding in payload["findings"] if finding["finding_id"] == "split_mesh")
-    assert "Compare the routers in each partition" in (split_mesh.get("recommended_action") or "")
+    assert split_mesh["title"] == "Orphan Router D is attached to the wrong partition"
+    assert "Orphan Router D is alone on partition 2000" in (split_mesh.get("summary") or "")
+    assert "Recommission Orphan Router D" in (split_mesh.get("recommended_action") or "")
     assert payload["band"] != "healthy"
 
 

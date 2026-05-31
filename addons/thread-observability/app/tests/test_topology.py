@@ -238,10 +238,12 @@ def test_topology_collapses_duplicate_hardware_rows(store: SQLiteStore) -> None:
 
 
 def test_derive_graph_diagnostics_flags_split_weak_links_and_parent_dependency(store: SQLiteStore) -> None:
+    child_f = "ff" * 8
     store.upsert_node_metadata(eui64=A, friendly_name="Leader-A")
     store.upsert_node_metadata(eui64=B, friendly_name="Router-B")
     store.upsert_node_metadata(eui64=C, friendly_name="Leader-C")
     store.upsert_node_metadata(eui64=D, friendly_name="Child-D")
+    store.upsert_node_metadata(eui64=child_f, friendly_name="Child-F")
     store.set_node_diagnostics(A, partition_id=1111, routing_role="leader")
     store.set_node_diagnostics(B, partition_id=1111, routing_role="router")
     store.set_node_diagnostics(C, partition_id=2222, routing_role="leader")
@@ -259,6 +261,10 @@ def test_derive_graph_diagnostics_flags_split_weak_links_and_parent_dependency(s
          "lqi_in": 170, "lqi_out": None, "is_child": 1,
          "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
          "path_cost": None},
+        {"neighbor_eui64": child_f, "rssi_avg": -67, "rssi_last": -67,
+         "lqi_in": 168, "lqi_out": None, "is_child": 1,
+         "age_seconds": 5, "frame_error_rate": 0, "message_error_rate": 0,
+         "path_cost": None},
     ])
     store.replace_links_for_reporter(B, "neighbor_table", [
         {"neighbor_eui64": A, "rssi_avg": -50, "rssi_last": -50,
@@ -270,13 +276,19 @@ def test_derive_graph_diagnostics_flags_split_weak_links_and_parent_dependency(s
     facts = derive_graph_diagnostics(snap)
     kinds = {row["kind"] for row in facts}
     actions = {row["kind"]: row.get("recommended_action") for row in facts}
+    split = next(row for row in facts if row["kind"] == "split_mesh")
+    subtree = next(row for row in facts if row["kind"] == "subtree_dependency")
 
     assert "split_mesh" in kinds
     assert "weak_links" in kinds
     assert "subtree_dependency" in kinds
-    assert actions["split_mesh"] and "Compare the routers in each partition" in actions["split_mesh"]
+    assert split["title"] == "Leader-C is attached to the wrong partition"
+    assert "Leader-C is alone on partition 2222" in split["detail"]
+    assert actions["split_mesh"] and "Recommission Leader-C" in actions["split_mesh"]
     assert actions["weak_links"] and "Inspect the weakest edge in the graph" in actions["weak_links"]
-    assert actions["subtree_dependency"] and "Open parent" in actions["subtree_dependency"]
+    assert "Leader-A currently has 3 child devices attached: Child-D, Child-E, Child-F." in subtree["detail"]
+    assert subtree["child_names"] == ["Child-D", "Child-E", "Child-F"]
+    assert actions["subtree_dependency"] and "Open Leader-A" in actions["subtree_dependency"]
 
 
 def test_derive_graph_diagnostics_flags_low_path_diversity(store: SQLiteStore) -> None:

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.67 — Make topology findings identify the actual devices involved
+
+This patch upgrades the most important Health findings from generic topology
+warnings into device-specific diagnoses that tell the operator exactly which
+node is isolated or overloaded.
+
+**Fixes:**
+- changes lone-device partition findings to name the isolated device and
+  recommend recommissioning it back onto the main partition when the split is
+  clearly asymmetric
+- changes overloaded parent findings to show the parent device name and the
+  affected child device names instead of opaque EUI64 values
+
 ## 0.11.66 — Add concrete next steps to topology problem areas
 
 This patch makes the Health view more prescriptive by attaching operator-facing

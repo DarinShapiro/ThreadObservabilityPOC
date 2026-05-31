@@ -98,6 +98,22 @@ def _find_articulation_points(adjacency: dict[str, set[str]]) -> set[str]:
     return articulation
 
 
+def _node_label(node_by_eui: dict[str, dict[str, Any]], eui64: str) -> str:
+    node = node_by_eui.get(eui64) or {}
+    friendly_name = str(node.get("friendly_name") or "").strip()
+    if friendly_name:
+        return friendly_name
+    return str(eui64 or "")[-6:].upper() or "unknown device"
+
+
+def _partition_member_count(partition: dict[str, Any]) -> int:
+    members = partition.get("members") or []
+    explicit = partition.get("member_count")
+    if isinstance(explicit, int):
+        return explicit
+    return len(members)
+
+
 def build_topology(
     *,
     freshness_minutes: int = FRESHNESS_DEFAULT_MINUTES,
@@ -326,19 +342,53 @@ def derive_graph_diagnostics(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     links = list(snapshot.get("links") or [])
     facts: list[dict[str, Any]] = []
     router_roles = {"leader", "router", "reed"}
+    node_by_eui = {
+        str(node.get("eui64") or ""): node
+        for node in nodes
+        if node.get("eui64")
+    }
 
     if snapshot.get("split") and int(snapshot.get("node_count") or 0) > 0:
-        facts.append({
-            "kind": "split_mesh",
-            "severity": "warn",
-            "title": "The mesh is split across multiple partitions",
-            "detail": f"{len(snapshot.get('partitions') or [])} partitions are currently visible in the topology graph.",
-            "recommended_action": (
-                "Compare the routers in each partition, then inspect the border router or the weakest bridge "
-                "between those groups before moving devices. If the split persists, restart the isolated router "
-                "cluster or reattach it closer to the main partition."
-            ),
-        })
+        partitions = [p for p in (snapshot.get("partitions") or []) if isinstance(p, dict)]
+        lone_partition = next((p for p in partitions if _partition_member_count(p) == 1), None)
+        main_partition = max(partitions, key=_partition_member_count, default=None)
+        if (
+            lone_partition
+            and main_partition
+            and lone_partition is not main_partition
+            and _partition_member_count(main_partition) >= 2
+        ):
+            stray_eui = str(((lone_partition.get("members") or [None])[0]) or "")
+            stray_label = _node_label(node_by_eui, stray_eui)
+            facts.append({
+                "kind": "split_mesh",
+                "severity": "warn",
+                "title": f"{stray_label} is attached to the wrong partition",
+                "detail": (
+                    f"{stray_label} is alone on partition {lone_partition.get('partition_id')}, while "
+                    f"{max(_partition_member_count(main_partition) - 1, 1)} other devices remain on the main partition."
+                ),
+                "recommended_action": (
+                    f"Recommission {stray_label} so it rejoins the main partition. If it recently moved, power-cycle it "
+                    "near the intended router or border router first, then recommission if it does not reattach on its own."
+                ),
+                "stray_eui64": stray_eui,
+                "stray_name": stray_label,
+                "main_partition_id": main_partition.get("partition_id"),
+                "isolated_partition_id": lone_partition.get("partition_id"),
+            })
+        else:
+            facts.append({
+                "kind": "split_mesh",
+                "severity": "warn",
+                "title": "The mesh is split across multiple partitions",
+                "detail": f"{len(partitions)} partitions are currently visible in the topology graph.",
+                "recommended_action": (
+                    "Compare the routers in each partition, then inspect the border router or the weakest bridge "
+                    "between those groups before moving devices. If the split persists, restart the isolated router "
+                    "cluster or reattach it closer to the main partition."
+                ),
+            })
 
     weak_links = [
         link for link in links
@@ -363,24 +413,32 @@ def derive_graph_diagnostics(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
         if parent and eui:
             children_by_parent.setdefault(str(parent), []).append(str(eui))
     dependent_parents = [
-        {"parent_eui64": parent, "child_count": len(children)}
+        {"parent_eui64": parent, "child_count": len(children), "child_eui64s": sorted(children)}
         for parent, children in children_by_parent.items()
         if len(children) >= 2
     ]
     dependent_parents.sort(key=lambda row: row["child_count"], reverse=True)
     if dependent_parents:
         top = dependent_parents[0]
+        parent_label = _node_label(node_by_eui, top["parent_eui64"])
+        child_labels = [_node_label(node_by_eui, child_eui64) for child_eui64 in top["child_eui64s"]]
         facts.append({
             "kind": "subtree_dependency",
             "severity": "warn",
             "title": "A single parent is carrying multiple child devices",
-            "detail": f"Parent {top['parent_eui64']} currently has {top['child_count']} child devices attached, which reduces path diversity for that subtree.",
+            "detail": (
+                f"{parent_label} currently has {top['child_count']} child devices attached: "
+                f"{', '.join(child_labels)}. That reduces path diversity for that subtree."
+            ),
             "recommended_action": (
-                f"Open parent {top['parent_eui64']} in Devices or Graph, review which children depend on it, and add or move "
-                "another router closer to that cluster so some children can attach through a second parent."
+                f"Open {parent_label} in Devices or Graph, review {', '.join(child_labels)}, and add or move another "
+                "router closer to that cluster so some children can attach through a second parent."
             ),
             "parent_eui64": top["parent_eui64"],
+            "parent_name": parent_label,
             "child_count": top["child_count"],
+            "child_eui64s": top["child_eui64s"],
+            "child_names": child_labels,
         })
 
     router_partition_counts: dict[int, int] = {}
