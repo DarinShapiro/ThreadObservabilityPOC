@@ -269,10 +269,14 @@ def test_derive_graph_diagnostics_flags_split_weak_links_and_parent_dependency(s
     snap = build_topology(store=store)
     facts = derive_graph_diagnostics(snap)
     kinds = {row["kind"] for row in facts}
+    actions = {row["kind"]: row.get("recommended_action") for row in facts}
 
     assert "split_mesh" in kinds
     assert "weak_links" in kinds
     assert "subtree_dependency" in kinds
+    assert actions["split_mesh"] and "Compare the routers in each partition" in actions["split_mesh"]
+    assert actions["weak_links"] and "Inspect the weakest edge in the graph" in actions["weak_links"]
+    assert actions["subtree_dependency"] and "Open parent" in actions["subtree_dependency"]
 
 
 def test_derive_graph_diagnostics_flags_low_path_diversity(store: SQLiteStore) -> None:

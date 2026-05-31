@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.11.66 — Add concrete next steps to topology problem areas
+
+This patch makes the Health view more prescriptive by attaching operator-facing
+next-step guidance to the graph-derived findings that previously only described
+the problem state.
+
+**Fixes:**
+- adds concrete recommended actions for split partitions, weak links, and
+  parent/child dependency findings in the server-side topology diagnostics
+- renders those recommendations directly in the Health view's `Problem areas`
+  cards so operators have an immediate next move instead of only an observation
+
 ## 0.11.65 — Make core startup non-blocking for ingress readiness
 
 This patch stops the core API from blocking FastAPI readiness on boot-time

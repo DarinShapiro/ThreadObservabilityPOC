@@ -91,6 +91,7 @@ def _topology_findings(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             "reason_code": str(fact.get("kind") or "").upper(),
             "title": fact.get("title"),
             "summary": fact.get("detail"),
+            "recommended_action": fact.get("recommended_action"),
             "affected_nodes": _finding_affected_nodes(fact),
             "evidence": [fact],
         }

@@ -45,7 +45,8 @@ def test_network_health_builder_replays_split_mesh_fixture(store) -> None:
 
     assert payload["summary"]["distinct_partitions"] == 2
     assert any(code in payload["reason_codes"] for code in {"PARTITION_RISK", "PARTITION_SPLIT"})
-    assert any(finding["finding_id"] == "split_mesh" for finding in payload["findings"])
+    split_mesh = next(finding for finding in payload["findings"] if finding["finding_id"] == "split_mesh")
+    assert "Compare the routers in each partition" in (split_mesh.get("recommended_action") or "")
     assert payload["band"] != "healthy"
 
 

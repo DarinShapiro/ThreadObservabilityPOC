@@ -2326,7 +2326,8 @@ function renderNetworkHealthPanel() {
       findingsHost.appendChild(el('div', { class: 'health-finding-item' },
         el('div', { class: 'item-title' }, title),
         el('div', { class: 'item-meta' }, [finding.severity || null, affected ? (affected + ' affected node' + (affected === 1 ? '' : 's')) : null].filter(Boolean).join(' · ')),
-        el('div', { class: 'rail-sub' }, finding.summary || '')
+        el('div', { class: 'rail-sub' }, finding.summary || ''),
+        finding.recommended_action ? el('div', { class: 'rail-sub' }, 'Next step: ' + finding.recommended_action) : null
       ));
     });
   }

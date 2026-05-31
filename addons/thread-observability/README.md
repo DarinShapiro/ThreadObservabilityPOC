@@ -2,7 +2,7 @@
 
 Ingests Thread/Matter logs, enriches with Home Assistant metadata, and exposes the result over MCP and a small HTTP surface for AI-assisted triage.
 
-**Current version**: 0.11.65 / schema v19 / 45 MCP tools.
+**Current version**: 0.11.66 / schema v19 / 45 MCP tools.
 
 ## Branding and compatibility
 

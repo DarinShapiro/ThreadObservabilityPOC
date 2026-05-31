@@ -333,6 +333,11 @@ def derive_graph_diagnostics(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             "severity": "warn",
             "title": "The mesh is split across multiple partitions",
             "detail": f"{len(snapshot.get('partitions') or [])} partitions are currently visible in the topology graph.",
+            "recommended_action": (
+                "Compare the routers in each partition, then inspect the border router or the weakest bridge "
+                "between those groups before moving devices. If the split persists, restart the isolated router "
+                "cluster or reattach it closer to the main partition."
+            ),
         })
 
     weak_links = [
@@ -345,6 +350,10 @@ def derive_graph_diagnostics(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             "severity": "warn",
             "title": "Weak or error-prone links are present",
             "detail": f"{len(weak_links)} graph edges are tagged weak_link or high_error in the retained topology.",
+            "recommended_action": (
+                "Inspect the weakest edge in the graph, then improve that span first: reduce distance or interference, "
+                "reposition the device, or place an intermediary router near the failing hop."
+            ),
         })
 
     children_by_parent: dict[str, list[str]] = {}
@@ -366,6 +375,10 @@ def derive_graph_diagnostics(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
             "severity": "warn",
             "title": "A single parent is carrying multiple child devices",
             "detail": f"Parent {top['parent_eui64']} currently has {top['child_count']} child devices attached, which reduces path diversity for that subtree.",
+            "recommended_action": (
+                f"Open parent {top['parent_eui64']} in Devices or Graph, review which children depend on it, and add or move "
+                "another router closer to that cluster so some children can attach through a second parent."
+            ),
             "parent_eui64": top["parent_eui64"],
             "child_count": top["child_count"],
         })
