@@ -1,6 +1,20 @@
-ARG BUILD_FROM
+ARG BUILD_ARCH
+ARG BUILD_VERSION
 # hadolint ignore=DL3006
-FROM ${BUILD_FROM}
+FROM ghcr.io/hassio-addons/base:20.1.1
+
+ARG BUILD_ARCH
+ARG BUILD_VERSION
+
+LABEL io.hass.version="${BUILD_VERSION}" \
+    io.hass.arch="${BUILD_ARCH}" \
+    io.hass.type="app" \
+    io.hass.name="Thread Mesh Detective" \
+    io.hass.description="Detect and troubleshoot Thread mesh health in Home Assistant." \
+    io.hass.url="https://github.com/darinshapiro/ThreadObservabilityPOC/tree/main/addons/thread-observability" \
+    org.opencontainers.image.title="Thread Mesh Detective" \
+    org.opencontainers.image.description="Home Assistant add-on for Thread mesh observability and troubleshooting" \
+    org.opencontainers.image.source="https://github.com/darinshapiro/ThreadObservabilityPOC"
 
 ENV LANG=C.UTF-8 \
     PIP_BREAK_SYSTEM_PACKAGES=1

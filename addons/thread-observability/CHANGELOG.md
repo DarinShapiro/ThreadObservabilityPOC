@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.61 — Health tab consolidation and add-on packaging cleanup
+
+This patch tightens the Health view so it tells one coherent story and removes
+the deprecated add-on build metadata path that Supervisor now warns about.
+
+**Fixes:**
+- consolidates the Health tab so `Network Health` is the primary card, folds
+  `Problem areas` into that surface, removes the redundant health-vs-health
+  contradiction in the overview focus copy, and drops `Partitions and topology
+  shape` from the Health tab
+- demotes `Open issues` to a secondary section under the primary health view so
+  live mesh health remains the main operator workflow
+- moves add-on image metadata from the deprecated `build.yaml` path into the
+  Dockerfile directly and removes `build.yaml`
+
 ## 0.11.60 — Deterministic network health surfaces and dashboard workspace polish
 
 This release packages the deterministic network-health scoring work, exposes it

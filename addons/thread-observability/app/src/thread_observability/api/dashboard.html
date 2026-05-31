@@ -646,12 +646,24 @@
               <div class="subsection-card">
                 <div class="subsection-head">
                   <div>
-                    <h3>Problem areas</h3>
-                    <div class="rail-sub">The most actionable degradations first, based on weak links, retries, stale parent links, and server-side issue detection.</div>
+                    <h3>Health summary and next action</h3>
+                    <div class="rail-sub">One place for the current mesh state: overall health, the concrete degradations driving it, and the best next operator move.</div>
                   </div>
                 </div>
-                <div class="card full" id="hotspots-card" style="padding:0; border:0; background:transparent;">
-                  <h2>Hot spots <span class="muted" style="text-transform:none; font-weight:400; font-size:11px;">(worst right now)</span></h2>
+                <div class="card full" id="network-health-card">
+                  <div class="rail-card-head">
+                    <h2>Network Health</h2>
+                    <span id="network-health-pill" class="pill muted">loading</span>
+                  </div>
+                  <div id="network-health-body" class="stack muted">loading…</div>
+                  <div id="network-health-findings" class="health-findings-list"></div>
+                  <div id="network-health-placement" class="placement-list"></div>
+                  <div class="subsection-head" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
+                    <div>
+                      <h3>Problem areas</h3>
+                      <div class="rail-sub">The most actionable degradations first, based on weak links, retries, stale parent links, and server-side issue detection.</div>
+                    </div>
+                  </div>
                   <div id="hotspots-body"><div class="empty">no data</div></div>
                 </div>
               </div>
@@ -660,7 +672,7 @@
                 <div class="subsection-head">
                   <div>
                     <h3>Open issues</h3>
-                    <div class="rail-sub">Server-reported issue inventory, separated from the live mesh health score so placeholder or paused detection is still obvious.</div>
+                    <div class="rail-sub">Background issue inventory and placeholder diagnostics that still matter, but sit behind the primary health view for day-to-day triage.</div>
                   </div>
                   <span id="issues-sev-pills"></span>
                 </div>
@@ -668,30 +680,8 @@
                   <div id="issues-body"><div class="empty">No issues.</div></div>
                 </div>
               </div>
-
-              <div class="subsection-card">
-                <div class="subsection-head">
-                  <div>
-                    <h3>Partitions and topology shape</h3>
-                    <div class="rail-sub">How the mesh is split right now, which partition is selected, and which nodes belong to each Thread network segment.</div>
-                  </div>
-                </div>
-                <div id="partitions-body"><div class="empty">no data</div></div>
-              </div>
             </div>
           </div>
-
-          <aside class="network-rail">
-            <div class="card" id="network-health-card">
-              <div class="rail-card-head">
-                <h2>Network Health</h2>
-                <span id="network-health-pill" class="pill muted">loading</span>
-              </div>
-              <div id="network-health-body" class="stack muted">loading…</div>
-              <div id="network-health-findings" class="health-findings-list"></div>
-              <div id="network-health-placement" class="placement-list"></div>
-            </div>
-          </aside>
         </div>
       </section>
 
@@ -1510,8 +1500,9 @@ function renderHealthOverview() {
   const health = lastNetworkHealth || {};
   const summary = health.summary || {};
   const components = health.component_scores || {};
-  const topFinding = topAssessmentFinding();
-  const candidate = bestPlacementCandidateForIds(new Set(topFinding && topFinding.node_eui64 ? [String(topFinding.node_eui64)] : []))
+  const healthFindings = Array.isArray(health.findings) ? health.findings : [];
+  const topHealthFinding = healthFindings[0] || null;
+  const candidate = bestPlacementCandidateForIds(new Set(topHealthFinding && Array.isArray(topHealthFinding.affected_nodes) ? topHealthFinding.affected_nodes.map((id) => String(id)) : []))
     || (placementCandidates()[0] || null);
   const partCount = (lastStatus && lastStatus.partitions && lastStatus.partitions.partition_count) || (summary.distinct_partitions || 0);
   const issueCount = ((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0;
@@ -1540,12 +1531,19 @@ function renderHealthOverview() {
     {
       cls: 'overview-metric',
       kicker: 'Current focus',
-      value: topFinding ? (topFinding.headline || 'Background finding') : (issueCount ? (String(issueCount) + ' active issue' + (issueCount === 1 ? '' : 's')) : 'No urgent focus'),
-      copy: topFinding
-        ? ((topFinding.finding_type || 'assessment finding') + (topFinding.display_name || topFinding.node_eui64 ? (' · ' + (topFinding.display_name || topFinding.node_eui64)) : ''))
-        : 'No background finding is currently outranking the health view.',
+      value: topHealthFinding
+        ? (topHealthFinding.title || topHealthFinding.reason_code || 'Health finding')
+        : (candidate ? 'Placement opportunity' : 'No current focus'),
+      copy: topHealthFinding
+        ? ((topHealthFinding.summary || topHealthFinding.reason_code || 'Network-health finding')
+            + (Array.isArray(topHealthFinding.affected_nodes) && topHealthFinding.affected_nodes.length
+                ? (' · ' + topHealthFinding.affected_nodes.length + ' affected node' + (topHealthFinding.affected_nodes.length === 1 ? '' : 's'))
+                : ''))
+        : (candidate
+            ? 'Health is stable enough that the main opportunity is proactive placement improvement, not an urgent degradation.'
+            : 'No network-health finding currently outranks the baseline healthy view.'),
       meta: [
-        topFinding && topFinding.severity ? { text: topFinding.severity, cls: 'pill ' + (assessmentSeverityRank(topFinding.severity) <= 1 ? 'bad' : 'warn') } : null,
+        topHealthFinding && topHealthFinding.severity ? { text: topHealthFinding.severity, cls: 'pill ' + (assessmentSeverityRank(topHealthFinding.severity) <= 1 ? 'bad' : 'warn') } : null,
         issueCount ? { text: String(issueCount) + ' issue' + (issueCount === 1 ? '' : 's'), cls: 'pill muted' } : null,
       ].filter(Boolean),
     },
@@ -2487,6 +2485,7 @@ function renderIssues(s) {
 
 function renderPartitionsCard(s) {
   const pBody = $('#partitions-body');
+  if (!pBody) return;
   pBody.innerHTML = '';
   const p = s.partitions || {};
   const parts = p.partitions || [];
