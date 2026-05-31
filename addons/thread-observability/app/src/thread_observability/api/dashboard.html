@@ -605,57 +605,40 @@
       </div>
 
       <section id="network-subtab-health" class="network-subtab-panel active">
-        <div class="card full" id="health-command-deck">
-          <div class="section-label">Health View</div>
-          <div class="section-lead">
-            <div>
-              <h2>Mesh health, risk, and next action</h2>
-              <div class="section-copy">Start here for the current state of the mesh. This view is organized for triage first: what is degraded, what is driving it, and where the next operator move is most likely to help.</div>
-            </div>
-          </div>
-          <div id="health-overview-grid" class="overview-grid"><div class="overview-metric"><div class="overview-copy">Loading mesh summary…</div></div></div>
-        </div>
-
         <div class="network-layout">
           <div class="network-main">
-            <div class="card full" id="headline-card">
-              <div id="headline-body" class="muted">computing…</div>
-              <div id="headline-warnings" class="warnings-row"></div>
-              <div id="assessment-banner" class="assessment-banner hidden">
-                <div class="assessment-banner-head">
-                  <div style="font-size:18px; line-height:1;">💬</div>
-                  <div style="flex:1; min-width:0;">
-                    <div id="assessment-banner-title" class="assessment-banner-title">No active background finding.</div>
-                    <div id="assessment-banner-meta" class="assessment-banner-meta"></div>
-                  </div>
-                  <span id="assessment-banner-count" class="pill warn" style="display:none;"></span>
-                </div>
-                <div id="assessment-banner-copy" class="assessment-banner-copy"></div>
-                <div id="assessment-banner-facts" class="warnings-row assessment-banner-facts"></div>
-                <div id="assessment-actions" class="assessment-actions">
-                  <button id="assessment-investigate-btn" class="action-btn primary">Investigate with me</button>
-                  <button id="assessment-evidence-btn" class="action-btn">Show me what you saw</button>
-                  <button id="assessment-banner-refresh-btn" class="action-btn">Run fresh check</button>
-                  <button id="assessment-hide-btn" class="action-btn warn">Not now</button>
-                  <button id="assessment-dismiss-btn" class="action-btn bad">Dismiss for 24h</button>
-                </div>
-              </div>
-            </div>
-
             <div class="section-stack">
               <div class="subsection-card">
-                <div class="subsection-head">
-                  <div>
-                    <h3>Health summary and next action</h3>
-                    <div class="rail-sub">One place for the current mesh state: overall health, the concrete degradations driving it, and the best next operator move.</div>
-                  </div>
-                </div>
                 <div class="card full" id="network-health-card">
-                  <div class="rail-card-head">
-                    <h2>Network Health</h2>
+                  <div class="section-label">Health View</div>
+                  <div class="section-lead">
+                    <div>
+                      <h2>Mesh health, risk, and next action</h2>
+                      <div class="section-copy">One place for the current state of the mesh: overall health, the concrete degradations driving it, and the best next operator move.</div>
+                    </div>
                     <span id="network-health-pill" class="pill muted">loading</span>
                   </div>
+                  <div id="health-overview-grid" class="overview-grid"><div class="overview-metric"><div class="overview-copy">Loading mesh summary…</div></div></div>
                   <div id="network-health-body" class="stack muted">loading…</div>
+                  <div id="assessment-banner" class="assessment-banner hidden" style="margin-top:14px;">
+                    <div class="assessment-banner-head">
+                      <div style="font-size:18px; line-height:1;">💬</div>
+                      <div style="flex:1; min-width:0;">
+                        <div id="assessment-banner-title" class="assessment-banner-title">No active background finding.</div>
+                        <div id="assessment-banner-meta" class="assessment-banner-meta"></div>
+                      </div>
+                      <span id="assessment-banner-count" class="pill warn" style="display:none;"></span>
+                    </div>
+                    <div id="assessment-banner-copy" class="assessment-banner-copy"></div>
+                    <div id="assessment-banner-facts" class="warnings-row assessment-banner-facts"></div>
+                    <div id="assessment-actions" class="assessment-actions">
+                      <button id="assessment-investigate-btn" class="action-btn primary">Investigate with me</button>
+                      <button id="assessment-evidence-btn" class="action-btn">Show me what you saw</button>
+                      <button id="assessment-banner-refresh-btn" class="action-btn">Run fresh check</button>
+                      <button id="assessment-hide-btn" class="action-btn warn">Not now</button>
+                      <button id="assessment-dismiss-btn" class="action-btn bad">Dismiss for 24h</button>
+                    </div>
+                  </div>
                   <div id="network-health-findings" class="health-findings-list"></div>
                   <div id="network-health-placement" class="placement-list"></div>
                   <div class="subsection-head" style="margin-top:14px; padding-top:14px; border-top:1px solid var(--border);">
@@ -1960,6 +1943,9 @@ function deltaClass(v, warnAt, badAt) {
 }
 
 function renderHeadline(s) {
+  const headlineBody = $('#headline-body');
+  const warnings = $('#headline-warnings');
+  if (!headlineBody || !warnings) return;
   const h = s.health || {};
   const summary = h.summary || {};
   const counts = s.node_counts || {};
@@ -1983,9 +1969,8 @@ function renderHeadline(s) {
   bits.push(`${issuesCount} active issue${issuesCount === 1 ? '' : 's'}`);
   bits.push(`${partCount} partition${partCount === 1 ? '' : 's'}`);
   if (distinctNets > 1) bits.push(`<span class="bad">${distinctNets} distinct Thread networks</span>`);
-  $('#headline-body').innerHTML = bits.join(' · ');
+  headlineBody.innerHTML = bits.join(' · ');
 
-  const warnings = $('#headline-warnings');
   warnings.innerHTML = '';
   const topFinding = topAssessmentFinding();
   if (topFinding) {
@@ -2294,8 +2279,65 @@ function renderNetworkHealthPanel() {
   pill.textContent = band;
   const summary = health.summary || {};
   const components = health.component_scores || {};
+  const status = String((lastStatus && lastStatus.health && lastStatus.health.status) || 'unknown');
+  const counts = (lastStatus && lastStatus.node_counts) || {};
+  const online = Number(counts.online || 0);
+  const sleeping = Number(counts.sleeping || 0);
+  const offline = Number(counts.offline || 0);
+  const total = Number(counts.total || (online + sleeping + offline));
+  const issuesCount = Number(((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0);
+  const distinctNets = Number(summary.distinct_thread_networks || 0);
+  const dupGroups = Number(summary.duplicate_physical_device_groups || 0);
+  const dupRows = Number(summary.duplicate_physical_device_rows || 0);
+  const topFinding = topAssessmentFinding();
   body.className = 'stack';
   body.innerHTML = '';
+  const summaryLine = el('div', { class: 'rail-sub' }, [
+    status,
+    online + ' online / ' + sleeping + ' sleeping / ' + offline + ' offline of ' + total,
+    issuesCount + ' active issue' + (issuesCount === 1 ? '' : 's'),
+    (summary.distinct_partitions || 0) + ' partition' + ((summary.distinct_partitions || 0) === 1 ? '' : 's'),
+    distinctNets > 1 ? (distinctNets + ' distinct Thread networks') : null,
+  ].filter(Boolean).join(' · '));
+  body.appendChild(summaryLine);
+  const warningRow = el('div', { class: 'warnings-row' });
+  if (distinctNets > 1) {
+    warningRow.appendChild(el('span', {
+      class: 'warn-chip bad',
+      title: 'Multiple Thread networks reported by registered devices. Likely split-brain or stale registrations.',
+    }, `SPLIT BRAIN: ${distinctNets} Thread networks`));
+  }
+  if ((summary.distinct_partitions || 0) > 1) {
+    warningRow.appendChild(el('span', {
+      class: 'warn-chip bad',
+      title: 'More than one partition observed. Usually means the mesh has split.',
+    }, `${summary.distinct_partitions || 0} partitions observed`));
+  }
+  if (dupGroups > 0) {
+    warningRow.appendChild(el('span', {
+      class: 'warn-chip warn',
+      title: 'Same physical device commissioned under multiple EUI64s.',
+    }, `Duplicate hardware: ${dupGroups} group${dupGroups === 1 ? '' : 's'} (${dupRows} rows)`));
+  }
+  if (Number(summary.stale_nodes || 0) > 0) {
+    warningRow.appendChild(el('span', {
+      class: 'warn-chip warn',
+      title: 'Nodes not seen in their parent router\'s neighbor table recently.',
+    }, `${summary.stale_nodes} stale node${summary.stale_nodes === 1 ? '' : 's'}`));
+  }
+  if (topFinding) {
+    const findingChip = el('button', {
+      class: 'warn-chip ' + (assessmentSeverityRank(topFinding.severity || topFinding.verdict) <= 1 ? 'bad' : 'warn'),
+      type: 'button',
+      title: 'Background Diagnostics surfaced a finding worth reviewing. Click to jump to the evidence banner.',
+    }, 'Adaptive Monitoring: ' + (topFinding.headline || 'review recommended'));
+    findingChip.addEventListener('click', () => {
+      showAssessmentFinding(topFinding);
+      $('#assessment-banner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    warningRow.appendChild(findingChip);
+  }
+  if (warningRow.childNodes.length) body.appendChild(warningRow);
   const hero = el('div', { class: 'health-hero-panel' });
   hero.appendChild(el('div', { class: 'health-hero-top' },
     el('div', {},

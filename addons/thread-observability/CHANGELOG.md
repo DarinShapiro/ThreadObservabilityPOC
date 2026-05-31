@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.63 — Merge the duplicate Health panel into one primary view
+
+This patch finishes the Health-tab consolidation by removing the leftover
+duplicate status panel and folding its useful summary/warning content into the
+main `Network Health` card.
+
+**Fixes:**
+- removes the separate headline/status panel that was still listing split-brain
+  and duplicate-hardware warnings as a second overlapping surface
+- makes the main `Network Health` card the single primary Health panel by
+  embedding the Health-view heading, overview metrics, warning chips, adaptive
+  monitoring banner, findings, placement guidance, and problem areas together
+- keeps `Open issues` below the primary health surface instead of competing
+  with it higher in the tab
+
 ## 0.11.62 — Align health focus copy with live topology warnings
 
 This patch fixes a remaining contradiction on the Health tab where the overview
