@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.62 — Align health focus copy with live topology warnings
+
+This patch fixes a remaining contradiction on the Health tab where the overview
+could say there was no current focus while the live health banner below was
+calling out split-network or duplicate-hardware warnings.
+
+**Fixes:**
+- makes the `Current focus` card respect summary-level topology warnings such
+  as multiple Thread networks, partition splits, duplicate hardware identity
+  groups, and stale-node evidence when no graph-derived finding is present
+- keeps the Health overview consistent with the warning chips and health banner
+  shown lower in the same tab
+
 ## 0.11.61 — Health tab consolidation and add-on packaging cleanup
 
 This patch tightens the Health view so it tells one coherent story and removes

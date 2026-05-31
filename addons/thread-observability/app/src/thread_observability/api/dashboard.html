@@ -1505,7 +1505,48 @@ function renderHealthOverview() {
   const candidate = bestPlacementCandidateForIds(new Set(topHealthFinding && Array.isArray(topHealthFinding.affected_nodes) ? topHealthFinding.affected_nodes.map((id) => String(id)) : []))
     || (placementCandidates()[0] || null);
   const partCount = (lastStatus && lastStatus.partitions && lastStatus.partitions.partition_count) || (summary.distinct_partitions || 0);
+  const distinctNets = Number(summary.distinct_thread_networks || 0);
+  const duplicateGroups = Number(summary.duplicate_physical_device_groups || 0);
+  const duplicateRows = Number(summary.duplicate_physical_device_rows || 0);
+  const staleNodes = Number(summary.stale_nodes || 0);
   const issueCount = ((lastStatus && lastStatus.issues && lastStatus.issues.issues) || []).length || 0;
+  let summaryFocus = null;
+  if (distinctNets > 1) {
+    summaryFocus = {
+      value: 'Split network signals',
+      copy: 'The mesh reports ' + distinctNets + ' distinct Thread networks even though the current partition view shows ' + partCount + ' partition' + (partCount === 1 ? '' : 's') + '. Review stale registrations or split-brain conditions before calling this healthy.',
+      meta: [
+        { text: distinctNets + ' Thread networks', cls: 'pill bad' },
+        duplicateGroups > 0 ? { text: duplicateGroups + ' duplicate group' + (duplicateGroups === 1 ? '' : 's'), cls: 'pill warn' } : null,
+      ].filter(Boolean),
+    };
+  } else if (partCount > 1) {
+    summaryFocus = {
+      value: 'Partition instability',
+      copy: 'More than one partition is currently visible. Treat the mesh as unstable until the partition split resolves or is explained.',
+      meta: [
+        { text: partCount + ' partitions', cls: 'pill bad' },
+      ],
+    };
+  } else if (duplicateGroups > 0) {
+    summaryFocus = {
+      value: 'Duplicate hardware identity',
+      copy: duplicateRows > 0
+        ? ('The dashboard sees ' + duplicateGroups + ' duplicate hardware group' + (duplicateGroups === 1 ? '' : 's') + ' across ' + duplicateRows + ' rows. That usually means stale or duplicate commissioned identities need review.')
+        : ('The dashboard sees ' + duplicateGroups + ' duplicate hardware group' + (duplicateGroups === 1 ? '' : 's') + ' that should be reviewed before trusting the mesh inventory as clean.'),
+      meta: [
+        { text: duplicateGroups + ' duplicate group' + (duplicateGroups === 1 ? '' : 's'), cls: 'pill warn' },
+      ],
+    };
+  } else if (staleNodes > 0) {
+    summaryFocus = {
+      value: 'Stale node evidence',
+      copy: staleNodes + ' node' + (staleNodes === 1 ? '' : 's') + ' look stale in retained topology evidence even though no graph-derived finding is currently outranking the health view.',
+      meta: [
+        { text: staleNodes + ' stale node' + (staleNodes === 1 ? '' : 's'), cls: 'pill warn' },
+      ],
+    };
+  }
   const cards = [
     {
       cls: 'overview-metric highlight',
@@ -1533,17 +1574,21 @@ function renderHealthOverview() {
       kicker: 'Current focus',
       value: topHealthFinding
         ? (topHealthFinding.title || topHealthFinding.reason_code || 'Health finding')
-        : (candidate ? 'Placement opportunity' : 'No current focus'),
+        : (summaryFocus ? summaryFocus.value : (candidate ? 'Placement opportunity' : 'No current focus')),
       copy: topHealthFinding
         ? ((topHealthFinding.summary || topHealthFinding.reason_code || 'Network-health finding')
             + (Array.isArray(topHealthFinding.affected_nodes) && topHealthFinding.affected_nodes.length
                 ? (' · ' + topHealthFinding.affected_nodes.length + ' affected node' + (topHealthFinding.affected_nodes.length === 1 ? '' : 's'))
                 : ''))
+        : summaryFocus
+            ? summaryFocus.copy
         : (candidate
             ? 'Health is stable enough that the main opportunity is proactive placement improvement, not an urgent degradation.'
             : 'No network-health finding currently outranks the baseline healthy view.'),
       meta: [
         topHealthFinding && topHealthFinding.severity ? { text: topHealthFinding.severity, cls: 'pill ' + (assessmentSeverityRank(topHealthFinding.severity) <= 1 ? 'bad' : 'warn') } : null,
+        !topHealthFinding && summaryFocus && Array.isArray(summaryFocus.meta) ? summaryFocus.meta[0] : null,
+        !topHealthFinding && summaryFocus && Array.isArray(summaryFocus.meta) && summaryFocus.meta.length > 1 ? summaryFocus.meta[1] : null,
         issueCount ? { text: String(issueCount) + ' issue' + (issueCount === 1 ? '' : 's'), cls: 'pill muted' } : null,
       ].filter(Boolean),
     },
