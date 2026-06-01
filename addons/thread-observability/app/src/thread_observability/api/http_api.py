@@ -36,6 +36,7 @@ from ..pipeline import topology_snapshot as topology_snapshot_mod
 from ..utils.datetime import utc_now_iso
 from ..services import chat_memory
 from ..services import direct_chat
+from ..services.assessment.payloads import build_network_ai_assessment_payload
 from . import signal_series as signal_series_mod
 from . import link_signal_history as link_signal_history_mod
 from ..network_health import build_network_health
@@ -156,6 +157,7 @@ def _network_health_response(payload: dict[str, object]) -> dict[str, object]:
         "nodes": payload.get("nodes") or [],
         "edges": payload.get("edges") or [],
         "findings": payload.get("findings") or [],
+        "ai_assessment": build_network_ai_assessment_payload(network_health_payload=payload, store=get_store()),
     }
 
 

@@ -2,9 +2,33 @@
 
 ## Vision
 
-**Goal**: Enable Home Assistant users to quickly diagnose and troubleshoot Thread network connectivity issues by visualizing topology, correlating logs with device metadata, and surfacing actionable anomalies.
+**Goal**: Enable Home Assistant users to quickly diagnose and troubleshoot Thread network connectivity issues by visualizing topology, correlating logs with device metadata, and pairing deterministic evidence with AI-generated recommendations.
 
-**Success**: A user can identify why a Thread device is unreachable in <2 minutes without reading raw logs.
+**Success**: A user can identify why a Thread device is unreachable in <2 minutes without reading raw logs because the product shows grounded evidence and an AI explanation tied to that evidence.
+
+---
+
+## Reasoning Philosophy
+
+This product is not aiming for a UI full of handcrafted remediation text. The backend and the AI each have a distinct responsibility:
+
+1. **Backend responsibility**
+- normalize and correlate raw Thread/Matter evidence
+- compute topology, health scores, anomalies, and freshness
+- emit stable, machine-readable findings with provenance and confidence
+
+2. **AI responsibility**
+- interpret the evidence in context
+- rank competing hypotheses
+- recommend next actions in operator language
+- explain uncertainty and cite the underlying evidence
+
+The important constraint is that the AI should reason over a curated backend payload, not raw logs or client-derived heuristics. The dashboard should therefore present two clearly separated layers:
+
+- **What the system knows**: deterministic findings, scores, reason codes, affected devices, freshness
+- **What the system recommends**: AI-authored assessment, suggested action, confidence, and rationale
+
+If the AI endpoint is unavailable, the product may still show the evidence layer, but that is a degraded mode, not the full intended user experience.
 
 ---
 
@@ -20,7 +44,7 @@
 3. Clicks kitchen light node → drills into details
 4. Sees: parent node, RSSI trend (dropping over 2 hours), last attach time, recent parent changes
 5. Sees related events: 3 attach failures in last hour, parent switched twice
-6. Recommendation: "Parent link unstable; try moving kitchen router closer or check interference"
+6. AI assessment says: "Parent link instability is the most likely cause. Evidence shows 3 attach failures and 2 parent changes in the last hour; try moving a router closer or checking interference near the kitchen light."
 
 **Outcome**: User identifies root cause without HA logs.
 
@@ -49,7 +73,7 @@
 1. User has Claude Desktop connected to HA via MCP
 2. User asks: "Is my Thread network healthy?"
 3. Claude uses MCP tools: `start_triage`, `get_mesh_state`, `list_active_issues`, `get_counter_series`
-4. Claude generates natural language summary: "Your Thread network has 28 healthy devices. The bathroom sensor has been offline for 1 hour with repeated attach failures; parent link quality is marginal."
+4. Claude generates natural language summary grounded in the MCP evidence payload: "Your Thread network has 28 healthy devices. The bathroom sensor has been offline for 1 hour with repeated attach failures; parent link quality is marginal."
 5. User can ask follow-up: "What changed 1 hour ago in my home?" (cross-domain reasoning, future work)
 
 **Outcome**: LLM becomes a natural interface for network diagnostics.
@@ -150,7 +174,7 @@ thread:
   - **Link quality drop**: RSSI drops >X dB in Y minutes (default 20dB in 10min)
   - **Sleepy timeout**: Sleepy device didn't check in (expected periodic checkin)
 
-**Output**: Anomaly event with severity (info/warning/error), entity, and evidence
+**Output**: Anomaly event with severity (info/warning/error), entity, evidence, and enough structured context for an AI layer to interpret it without recomputing the anomaly from scratch.
 
 **Storage**: Written to InfluxDB anomalies table
 
@@ -159,10 +183,15 @@ thread:
 ### 7. Issues Dashboard
 
 **What**:
-- Real-time list of active anomalies, sorted by severity
-- Top 5 format: device name, issue type, severity, time detected
+- Real-time list of active deterministic findings, sorted by severity
+- AI assessment panel that interprets the top findings and recommends next actions
+- Top 5 format: device name, issue type, severity, time detected, linked evidence
 - Filterable by area, severity, issue type
 - Click to view full incident record with evidence
+
+**Rule**:
+- The deterministic list is the source of truth for evidence.
+- The AI guidance layer must cite and build on those findings rather than inventing standalone issue text.
 
 ---
 
@@ -430,7 +459,8 @@ These move to v1.5 or v2.
 | Signal quality | False positive rate for critical issues < 10%; missed critical incidents < 5% in labeled validation windows | Comparison against manually labeled incident windows meets both targets |
 | Platform reliability | Ingestion uptime >= 99.9%; no data loss on service restart | Uptime monitor and restart replay checks pass |
 | Resource guardrails (HA Yellow) | CPU avg < 15% (P95 < 25%); RAM avg < 250 MB; no OOM restarts | 7-day resource telemetry run within limits |
-| Deterministic baseline | 0 model calls required for core health/anomaly features | All v1 workflows pass with `ai.enabled=false` |
+| Evidence-backed AI guidance | Operator-facing recommendation surfaces are produced from AI reasoning over backend evidence | Health workflows show deterministic evidence plus AI assessment when `ai.enabled=true` |
+| Evidence-only degraded mode | If AI is unavailable, the product still exposes deterministic health facts without fabricating guidance | With `ai.enabled=false`, evidence APIs and UI still work and explicitly mark recommendation surfaces unavailable |
 
 ### Validation Plan
 

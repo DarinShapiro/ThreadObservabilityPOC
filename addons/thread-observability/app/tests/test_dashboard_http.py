@@ -100,6 +100,11 @@ def test_dashboard_nodes_table_uses_strongest_available_links_and_router_parent_
     assert "renderGraphWorkspaceSummary" in html
     assert "networkHealthOverlayIds" in html
     assert "focusPlacementCandidateForGraphSelection" in html
+    assert "const aiAssessment = (health && typeof health.ai_assessment === 'object' && health.ai_assessment) ? health.ai_assessment : null;" in html
+    assert "AI assessment" in html
+    assert "Suggested ask:" in html
+    assert "Ask AI to investigate" in html
+    assert "AI-guided" in html
     assert "data-candidate-id" in html
     assert "setNetworkSubtab('devices')" in html
     assert 'data-sort="health"' in html

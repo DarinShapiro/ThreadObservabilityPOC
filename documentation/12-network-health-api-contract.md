@@ -1,6 +1,6 @@
 # Network Health API Contract
 
-> This contract is now implemented for read-only HTTP routes under [#123](https://github.com/DarinShapiro/ThreadObservabilityPOC/issues/123). The frontend should render these facts. The AI should explain them.
+> This contract is now implemented for read-only HTTP routes under [#123](https://github.com/DarinShapiro/ThreadObservabilityPOC/issues/123). The frontend should render these facts. The AI should interpret them and generate operator guidance from them.
 
 ## Purpose
 
@@ -16,6 +16,24 @@ The contract is designed to support:
 - AI explanations and remediation suggestions
 - replay fixtures and acceptance tests
 - future floorplan-aware extensions without breaking field names
+
+## Design philosophy
+
+This contract defines the **deterministic evidence layer**, not the final
+operator recommendation layer.
+
+That distinction is intentional:
+
+1. the backend owns graph analysis, scoring, freshness, confidence, and
+  machine-readable findings
+2. the AI layer owns diagnosis, prioritization, remediation advice, and
+  explanation written for the operator
+3. the UI should be able to render evidence directly and optionally pair it
+  with a separate AI assessment payload
+
+In other words, `network_health` should answer "what is true right now?"
+An AI assessment payload should answer "what does that likely mean and what
+should the operator do next?"
 
 ## Live routes
 
@@ -36,6 +54,7 @@ The internal builder currently computes both payloads together. The HTTP layer p
 3. Reason codes must be machine-readable and carry structured evidence.
 4. Backend owns transformation and scoring logic; the UI should not derive health metrics.
 5. Field names should be stable enough for direct prompt consumption.
+6. AI-authored recommendations should reference these fields rather than replacing them.
 
 ## `network_health` shape
 
@@ -205,6 +224,41 @@ Each important edge in `edges` should follow this shape.
 ```
 
 `title` and `summary` are deterministic backend prose, not LLM-generated text.
+
+They may be concise and operator-readable, but they should still be treated as
+evidence-backed fact summaries. Rich remediation guidance belongs in a separate
+AI assessment layer.
+
+## Companion `ai_assessment` shape (planned)
+
+The intended implementation model is for the deterministic `network_health`
+payload to remain stable while a companion AI layer consumes it and returns
+an assessment envelope such as:
+
+```json
+{
+  "computed_at": "2026-05-30T22:15:02Z",
+  "based_on": {
+    "network_health_computed_at": "2026-05-30T22:15:00Z",
+    "as_of": "2026-05-30T22:14:42Z"
+  },
+  "headline": "One router appears isolated on the wrong partition",
+  "assessment": "The split is asymmetric rather than mesh-wide. One router is alone on a second partition while the rest of the network remains stable.",
+  "recommended_action": "Recommission the isolated router near the intended border router so it rejoins the main partition.",
+  "confidence": 0.83,
+  "cited_findings": [
+    "split_mesh"
+  ],
+  "cited_reason_codes": [
+    "PARTITION_RISK"
+  ]
+}
+```
+
+This companion shape is documented here before implementation so the contract
+boundary stays clear: deterministic evidence remains reusable across UI, MCP,
+tests, and replay fixtures, while AI guidance can evolve without destabilizing
+the evidence schema.
 
 ## `placement_candidates` shape
 

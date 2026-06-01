@@ -1481,6 +1481,7 @@ function renderHealthOverview() {
   const host = $('#health-overview-grid');
   if (!host) return;
   const health = lastNetworkHealth || {};
+  const aiAssessment = (health && typeof health.ai_assessment === 'object' && health.ai_assessment) ? health.ai_assessment : null;
   const summary = health.summary || {};
   const components = health.component_scores || {};
   const healthFindings = Array.isArray(health.findings) ? health.findings : [];
@@ -1555,10 +1556,18 @@ function renderHealthOverview() {
     {
       cls: 'overview-metric',
       kicker: 'Current focus',
-      value: topHealthFinding
+      value: aiAssessment && aiAssessment.headline
+        ? aiAssessment.headline
+        : topHealthFinding
         ? (topHealthFinding.title || topHealthFinding.reason_code || 'Health finding')
         : (summaryFocus ? summaryFocus.value : (candidate ? 'Placement opportunity' : 'No current focus')),
-      copy: topHealthFinding
+      copy: aiAssessment
+        ? [
+            aiAssessment.finding_type ? ('AI assessment type: ' + aiAssessment.finding_type) : null,
+            aiAssessment.assessed_at ? ('Assessed ' + fmtAge(aiAssessment.assessed_at)) : null,
+            aiAssessment.node_eui64 ? ('Focus node ' + aiAssessment.node_eui64) : null,
+          ].filter(Boolean).join(' · ')
+        : topHealthFinding
         ? ((topHealthFinding.summary || topHealthFinding.reason_code || 'Network-health finding')
             + (Array.isArray(topHealthFinding.affected_nodes) && topHealthFinding.affected_nodes.length
                 ? (' · ' + topHealthFinding.affected_nodes.length + ' affected node' + (topHealthFinding.affected_nodes.length === 1 ? '' : 's'))
@@ -1569,6 +1578,8 @@ function renderHealthOverview() {
             ? 'Health is stable enough that the main opportunity is proactive placement improvement, not an urgent degradation.'
             : 'No network-health finding currently outranks the baseline healthy view.'),
       meta: [
+        aiAssessment && aiAssessment.severity ? { text: aiAssessment.severity, cls: 'pill ' + (assessmentSeverityRank(aiAssessment.severity) <= 1 ? 'bad' : 'warn') } : null,
+        aiAssessment && aiAssessment.confidence != null ? { text: 'confidence ' + Math.round(Number(aiAssessment.confidence) * 100) + '%', cls: 'pill muted' } : null,
         topHealthFinding && topHealthFinding.severity ? { text: topHealthFinding.severity, cls: 'pill ' + (assessmentSeverityRank(topHealthFinding.severity) <= 1 ? 'bad' : 'warn') } : null,
         !topHealthFinding && summaryFocus && Array.isArray(summaryFocus.meta) ? summaryFocus.meta[0] : null,
         !topHealthFinding && summaryFocus && Array.isArray(summaryFocus.meta) && summaryFocus.meta.length > 1 ? summaryFocus.meta[1] : null,
@@ -1578,11 +1589,16 @@ function renderHealthOverview() {
     {
       cls: 'overview-metric',
       kicker: 'Best next move',
-      value: candidate ? (candidate.location_label || 'Review placement candidate') : 'Observe current topology',
-      copy: candidate
+      value: aiAssessment && aiAssessment.suggested_starter_prompt
+        ? 'Ask AI to investigate'
+        : candidate ? (candidate.location_label || 'Review placement candidate') : 'Observe current topology',
+      copy: aiAssessment && aiAssessment.suggested_starter_prompt
+        ? aiAssessment.suggested_starter_prompt
+        : candidate
         ? ('Placement candidate with score delta ' + fmtScore01(Number(candidate.score_delta)) + '.')
         : 'No additional router placement candidate is currently stronger than continued observation.',
       meta: [
+        aiAssessment ? { text: 'AI-guided', cls: 'pill running' } : null,
         candidate ? { text: 'placement', cls: 'pill running' } : null,
         candidate && Array.isArray(candidate.reason_codes) && candidate.reason_codes.length
           ? { text: candidate.reason_codes[0], cls: 'pill muted' }
@@ -2263,6 +2279,7 @@ function renderNetworkHealthPanel() {
   const placementHost = $('#network-health-placement');
   if (!body || !pill || !findingsHost || !placementHost) return;
   const health = lastNetworkHealth;
+  const aiAssessment = (health && typeof health.ai_assessment === 'object' && health.ai_assessment) ? health.ai_assessment : null;
   const placement = lastPlacementCandidates;
   findingsHost.innerHTML = '';
   placementHost.innerHTML = '';
@@ -2316,6 +2333,19 @@ function renderNetworkHealthPanel() {
   }
   body.appendChild(hero);
 
+  if (aiAssessment) {
+    body.appendChild(el('div', { class: 'health-finding-item' },
+      el('div', { class: 'item-title' }, 'AI assessment'),
+      el('div', { class: 'item-meta' }, [
+        aiAssessment.severity || aiAssessment.verdict || null,
+        aiAssessment.confidence != null ? ('confidence ' + Math.round(Number(aiAssessment.confidence) * 100) + '%') : null,
+        aiAssessment.assessed_at ? ('assessed ' + fmtAge(aiAssessment.assessed_at)) : null,
+      ].filter(Boolean).join(' · ')),
+      el('div', { class: 'rail-sub' }, aiAssessment.headline || 'AI assessment is available for this health snapshot.'),
+      aiAssessment.suggested_starter_prompt ? el('div', { class: 'rail-sub' }, 'Suggested ask: ' + aiAssessment.suggested_starter_prompt) : null
+    ));
+  }
+
   const findings = Array.isArray(health.findings) ? health.findings : [];
   if (!findings.length) {
     findingsHost.appendChild(el('div', { class: 'empty' }, 'No graph-derived health findings right now.'));
@@ -2326,8 +2356,7 @@ function renderNetworkHealthPanel() {
       findingsHost.appendChild(el('div', { class: 'health-finding-item' },
         el('div', { class: 'item-title' }, title),
         el('div', { class: 'item-meta' }, [finding.severity || null, affected ? (affected + ' affected node' + (affected === 1 ? '' : 's')) : null].filter(Boolean).join(' · ')),
-        el('div', { class: 'rail-sub' }, finding.summary || ''),
-        finding.recommended_action ? el('div', { class: 'rail-sub' }, 'Next step: ' + finding.recommended_action) : null
+        el('div', { class: 'rail-sub' }, finding.summary || '')
       ));
     });
   }

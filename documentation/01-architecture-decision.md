@@ -4,17 +4,43 @@
 
 This document describes the architecture for a general-purpose Home Assistant reasoning platform, with Thread network observability as the v1 module.
 
-**Goal**: Build an extensible platform for continuous monitoring, anomaly detection, and AI-assisted reasoning over HA data, designed to run on constrained hardware (HA Yellow) with optional sidecar/external compute for heavy reasoning tasks.
+**Goal**: Build an extensible platform for continuous monitoring, anomaly detection, and AI-guided reasoning over HA data, designed to run on constrained hardware (HA Yellow) with optional sidecar/external compute for heavy reasoning tasks.
 
 ---
 
 ## Design Principles
 
 1. **Local-first, privacy-preserving**: All raw data stays local by default; model inference is opt-in and configurable.
-2. **Deterministic baseline**: Core functionality works without any AI; models enhance, not replace.
-3. **Extensible for new domains**: Thread v1 proves the platform; energy, climate, security follow.
-4. **Resource-aware**: Designed for HA Yellow constraints; self-aware about capacity.
-5. **Fault-tolerant**: Graceful degradation when any component is unavailable.
+2. **Evidence first, AI second**: The backend must compute and expose structured facts, scores, freshness, and provenance before any model is asked to reason.
+3. **AI is the recommendation layer**: Operator-facing diagnosis, prioritization, and remediation guidance should come from an AI endpoint reasoning over backend evidence, not from UI-side heuristics.
+4. **Deterministic modules are evidence builders**: Graph analysis, anomaly detection, scoring, and correlation remain backend-owned because the AI should interpret machine-shaped evidence rather than rediscover it from raw logs.
+5. **Explicit degraded mode**: If the AI endpoint is unavailable, the platform still serves evidence and health facts, but recommendation surfaces must clearly degrade to evidence-only mode instead of pretending to provide full diagnosis.
+6. **Extensible for new domains**: Thread v1 proves the platform; energy, climate, security follow.
+7. **Resource-aware**: Designed for HA Yellow constraints; self-aware about capacity.
+8. **Fault-tolerant**: Graceful degradation when any component is unavailable.
+
+---
+
+## Reasoning Philosophy
+
+The product should be designed as a two-layer reasoning system:
+
+1. **Deterministic evidence layer**
+  - Normalizes raw telemetry into stable domain facts.
+  - Computes topology, health scores, anomalies, freshness, and confidence.
+  - Preserves provenance so every conclusion can be traced back to concrete evidence.
+
+2. **AI interpretation layer**
+  - Consumes the structured evidence layer, not raw logs as its primary input.
+  - Produces operator guidance, hypothesis ranking, tradeoffs, and next actions.
+  - Explains why a recommended action follows from the evidence and where uncertainty remains.
+
+This split is deliberate. Deterministic logic should answer: "what facts are true right now?" The AI layer should answer: "what do those facts most likely mean, what should the operator do, and how confident is that recommendation?"
+
+The UI should surface both layers separately:
+
+- **Evidence**: deterministic facts, reason codes, scores, freshness, and affected devices.
+- **Assessment**: AI-authored interpretation, recommended actions, confidence, and rationale tied back to evidence.
 
 ---
 
@@ -49,8 +75,8 @@ This document describes the architecture for a general-purpose Home Assistant re
 - **Communication**: Localhost HTTP/IPC and shared storage contracts; no external dependency required.
 
 ### Tier 2: Reasoner Modules (Yellow or sidecar)
-- **Deterministic**: Always run on Yellow (topology analysis, anomaly detection)
-- **Model-assisted**: Optional sidecar/external (LLM root cause, cross-domain reasoning)
+- **Deterministic evidence builders**: Always run on Yellow (topology analysis, anomaly detection, scoring, evidence packaging)
+- **AI interpretation**: Preferred operator-facing recommendation path (LLM diagnosis, remediation advice, cross-domain reasoning)
 
 ### Tier 3: Action Executors (external, optional)
 - HA automation triggers
@@ -108,9 +134,10 @@ This document describes the architecture for a general-purpose Home Assistant re
 2. **Normalization**: Convert to canonical event schema (timestamp, source, entity_ref, metric, value, context).
 3. **Enrichment**: Add HA metadata (device name, area, type, automations).
 4. **Storage**: Write normalized events to InfluxDB; aggregate anomaly scores.
-5. **Reasoning**: Deterministic modules query storage, compute topology/anomalies, emit findings.
-6. **API**: MCP process exposes findings for external reasoning (LLM, HA automations) and queries core data through localhost/IPC contracts.
-7. **Feedback**: Optional loop: executor applies HA automation recommendations.
+5. **Evidence building**: Deterministic modules query storage, compute topology/anomalies/scores, and emit machine-readable findings with provenance.
+6. **AI assessment**: AI reasoners consume those findings plus selected raw context to produce explanation, prioritization, and remediation guidance.
+7. **API**: MCP process exposes both evidence and AI-ready context for HA agents, dashboard chat, and automation consumers through localhost/IPC contracts.
+8. **Feedback**: Optional loop: executor applies HA automation recommendations.
 
 ---
 

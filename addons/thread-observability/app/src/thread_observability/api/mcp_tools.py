@@ -23,6 +23,7 @@ from . import link_signal_history as link_signal_history_mod
 from ..config import get_config
 from ..health import build_health_snapshot as _build_health_snapshot
 from ..network_health import build_network_health
+from ..services.assessment.payloads import build_network_ai_assessment_payload
 from ..pipeline import nodes as nodes_mod
 from ..pipeline import otbr_adapter
 from ..pipeline import topology as topology_mod
@@ -1089,6 +1090,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]
                 "nodes": payload.get("nodes") or [],
                 "edges": payload.get("edges") or [],
                 "findings": payload.get("findings") or [],
+                "ai_assessment": build_network_ai_assessment_payload(network_health_payload=payload, store=get_store()),
             }
         except Exception as exc:  # noqa: BLE001
             return {"error": str(exc)}

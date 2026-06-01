@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.68 — Pair health evidence with an AI assessment companion
+
+This patch starts the code-level shift to the new health-analysis model by
+publishing a companion AI assessment alongside deterministic network-health
+evidence and teaching the Health view to treat those as separate layers.
+
+**Fixes:**
+- adds an `ai_assessment` companion object to the `network_health` HTTP and
+  MCP payloads, sourced from the existing assessment engine/store
+- updates the Health overview to prefer AI-authored focus and next-step
+  guidance when an assessment is available
+- separates deterministic findings from AI guidance in the main Health panel
+  so graph-derived facts remain evidence and the AI assessment is shown as a
+  distinct interpretation layer
+- aligns the architecture, product, sprint, and API-contract docs with the
+  backend-evidence plus AI-recommendation design philosophy
+
 ## 0.11.67 — Make topology findings identify the actual devices involved
 
 This patch upgrades the most important Health findings from generic topology

@@ -13,6 +13,10 @@ with an AI agent about their Thread network** — using their existing Home
 Assistant conversation agent as the LLM, and our MCP server as the tool
 source. No API keys live in this add-on, ever.
 
+This sprint is not only about chat transport. It is the first implementation
+of the product's core reasoning philosophy: the backend computes the evidence,
+and the AI endpoint turns that evidence into diagnosis and next-step guidance.
+
 The same MCP tools should remain available from *every* HA AI surface
 (Assist voice, mobile app, HA dashboard chat) — so a power user gets a
 single, consistent agent that knows their Thread network whether they're
@@ -68,6 +72,30 @@ That gives us a clean split:
 Assist voice both end up calling the *same* HA conversation agent, which
 in turn calls the *same* MCP tools. There is exactly one place that
 makes LLM choices: HA's integration page.
+
+### 3.1 Reasoning contract
+
+This sprint assumes a strict split between evidence and interpretation:
+
+1. **Backend evidence contract**
+- topology snapshots
+- health scores
+- deterministic findings and reason codes
+- freshness, confidence, and provenance
+- ranked candidate interventions and supporting assumptions
+
+2. **AI interpretation contract**
+- summarize what matters now
+- explain which evidence drove the conclusion
+- recommend next actions and tradeoffs
+- decide when evidence is insufficient and ask for more context or tools
+
+The AI should not be treated as a replacement for backend graph analysis,
+scoring, or correlation. Those remain server responsibilities because they
+must be stable, testable, and reusable by UI, automations, and the model
+itself. Conversely, operator-facing remediation guidance should not be
+hardcoded into dashboard-only heuristics when the AI endpoint is available;
+that is precisely the layer where the model should add value.
 
 ## 4. Integration paths offered to users
 
@@ -183,6 +211,10 @@ The backend renders this into a short system / user pre-amble so the
 agent never has to call tools just to learn what page the user is on.
 Token cost is bounded: only IDs and counts go in, not full payloads.
 
+The page-context block complements, but does not replace, the deterministic
+evidence payloads. The agent should treat page context as session framing and
+use MCP tools to retrieve the canonical evidence objects it reasons over.
+
 ## 8. Privacy & safety posture
 
 - **Opt-in.** Chat is disabled by default. Users enable it in add-on
@@ -258,6 +290,11 @@ quietly checks the network on an adaptive cadence and only surfaces
 when there's something worth a conversation. Internally this
 feature is called **Background Diagnostics**; the on-page indicator
 label is **Adaptive Monitoring**.
+
+Background Diagnostics should follow the same philosophy as the chat surface:
+deterministic backend analysis decides what evidence package to hand to the
+assessment engine; the AI endpoint decides how to interpret that package,
+which hypothesis is strongest, and what the operator should do next.
 
 ### 11.1 Adaptive cadence (state machine with budget cap)
 
